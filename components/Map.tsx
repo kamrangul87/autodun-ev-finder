@@ -42,7 +42,9 @@ export default function Map({ center, stations }: Props) {
               <p className="font-semibold">{m.title}</p>
               <p className="text-gray-600">{m.addr}</p>
               <ul className="mt-1">
-                {m.connections.map((c, i) => <li key={i}>{c.name}{c.power ? ` • ${c.power}kW` : ''}</li>)}
+               {m.connections.map((c: { name: string; power?: number | null }, i: number) => (
+  <li key={i}>{c.name}{c.power ? ` • ${c.power}kW` : ''}</li>
+))}
               </ul>
             </div>
           </Popup>
