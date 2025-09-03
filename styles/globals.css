@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; background: #fff; color: #111; }
+.container { @apply mx-auto px-4; max-width: 1200px; }
+.card { @apply rounded-2xl shadow-soft bg-white p-6; }
+.badge { @apply inline-flex items-center gap-2 rounded-full bg-autodun-green/10 text-autodun-green px-3 py-1 text-sm font-medium; }
+.btn { @apply px-5 py-3 rounded-2xl font-semibold shadow-soft; }
