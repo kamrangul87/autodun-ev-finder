@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-
+import { Footer } from '@/components/Footer';
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
 type Station = any;
@@ -51,6 +51,7 @@ export default function EVFinder() {
   const center: [number, number] | null = useMemo(() => (lat != null && lon != null ? [lat, lon] as [number, number] : null), [lat, lon]);
 
   return (
+    <>
     <div className="container py-10">
       <h1 className="text-3xl font-extrabold mb-1">EV Charging Finder</h1>
      <p className="text-sm text-gray-500">
@@ -109,5 +110,7 @@ export default function EVFinder() {
         </div>
       </div>
     </div>
+          <Footer />
+  </>
   );
 }
