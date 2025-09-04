@@ -1,3 +1,4 @@
+'use client';
 // components/Footer.tsx
 export function Footer() {
   return (
