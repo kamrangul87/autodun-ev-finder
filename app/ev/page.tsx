@@ -53,8 +53,8 @@ export default function EVFinder() {
   return (
     <div className="container py-10">
       <h1 className="text-3xl font-extrabold mb-1">EV Charging Finder</h1>
-      <p className="text-gray-600 mb-6">Search by UK postcode or use your location. Data via OpenChargeMap.</p>
-
+     <p className="text-sm text-gray-500">
+  Search by UK postcode or use your location.</p>
       <div className="grid md:grid-cols-[2fr_1fr_1fr_1fr] gap-3">
         <input className="card" placeholder="Enter UK postcode (e.g., SW1A 1AA)" value={postcode} onChange={e => setPostcode(e.target.value)} />
         <button className="btn bg-black text-white" onClick={() => geocode(postcode)}>Search</button>
