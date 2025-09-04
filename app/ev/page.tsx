@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
-import { Footer } from '@/components/Footer';
 const Map = dynamic(() => import('@/components/Map'), { ssr: false });
 
 type Station = any;
@@ -110,7 +109,6 @@ export default function EVFinder() {
         </div>
       </div>
     </div>
-          <Footer />
   </>
   );
 }
