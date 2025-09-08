@@ -1,96 +1,94 @@
 // app/api/stations/route.ts
-import type { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 
-function normalize(s: unknown): string {
-  return String(s ?? "").toLowerCase();
+type Any = any;
+
+function normalizeConnName(name: string) {
+  const n = (name || "").toLowerCase();
+
+  // CCS
+  if (/\bccs\b|combo|combined/.test(n)) return "ccs";
+
+  // CHAdeMO (allow misspellings)
+  if (/cha?de?mo/.test(n)) return "chademo";
+
+  // Type 2 (Mennekes / IEC 62196-2 Type 2)
+  if (/type\s*2|mennekes|62196-2/.test(n)) return "type2";
+
+  // Type 1 (J1772)
+  if (/type\s*1|j1772|62196-1/.test(n)) return "type1";
+
+  return n;
 }
 
-// very tolerant connector matcher
-function matchesConnector(connections: any[], q: string): boolean {
-  const want = normalize(q);
-  if (!want) return true; // "Any"
+function matchesConnector(reqConn: string, connTitle: string) {
+  if (!reqConn) return true;
+  const want = normalizeConnName(reqConn);
+  const have = normalizeConnName(connTitle);
+  return want === have;
+}
 
-  // Build a single searchable string from all connection fields we care about
-  const hay = normalize(
-    connections
-      .map((c) => [
-        c?.ConnectionType?.Title,
-        c?.ConnectionType?.FormalName,
-        c?.Comments,
-        c?.CurrentType?.Title,      // present on some records
-        c?.CurrentType?.Description // present on some records
-      ].filter(Boolean).join(" "))
-      .join(" ")
-  );
+function meetsPower(minPower: number, connTitle: string, powerKW: number | null | undefined) {
+  const p = typeof powerKW === "number" ? powerKW : NaN;
 
-  // Groups of synonyms used in OCM data
-  const isCHAdeMO = /chademo/.test(hay);
+  if (!minPower || minPower <= 0) return true;
 
-  // CCS often appears as CCS, Combo, Combo 2, IEC 62196-3 etc.
-  const isCCS = /(ccs|combo|iec\s*62196-3)/.test(hay);
+  // If power is present, compare numerically.
+  if (!Number.isNaN(p) && p > 0) return p >= minPower;
 
-  // Type 2 appears as Type 2, Type-2, Mennekes, IEC 62196 Type 2, etc.
-  const isType2 = /(type[\s-]?2|mennekes|iec\s*62196[^0-9]*2)/.test(hay);
+  // Many Type 2 points don’t specify PowerKW.
+  // Be permissive for normal AC if the user’s minPower is small (≤ 7 kW).
+  if (minPower <= 7 && normalizeConnName(connTitle) === "type2") return true;
 
-  if (/(^|[^a-z])chademo([^a-z]|$)/.test(want)) return isCHAdeMO;
-  if (/ccs/.test(want)) return isCCS;
-  if (/type\s*2/.test(want)) return isType2;
-
-  // fallback: substring include
-  return hay.includes(want);
+  return false;
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
+  try {
+    const url = new URL(req.url);
+    const lat = parseFloat(url.searchParams.get("lat") || "");
+    const lon = parseFloat(url.searchParams.get("lon") || "");
+    const dist = Math.min(60, Math.max(1, parseFloat(url.searchParams.get("dist") || "10"))); // clamp 1–60 km
+    const minPower = parseFloat(url.searchParams.get("minPower") || "0");
+    const connQuery = (url.searchParams.get("conn") || "").trim();
 
-  const lat = Number(searchParams.get("lat"));
-  const lon = Number(searchParams.get("lon"));
-  const dist = Number(searchParams.get("dist") ?? 10);
-  const minPower = Number(searchParams.get("minPower") ?? 0);
-  const connQuery = normalize(searchParams.get("conn") ?? "");
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return new Response(JSON.stringify({ error: "Missing lat/lon" }), { status: 400 });
+    }
 
-  if (Number.isNaN(lat) || Number.isNaN(lon)) {
-    return new Response(JSON.stringify({ error: "missing lat/lon" }), { status: 400 });
-  }
+    // Fetch from OpenChargeMap
+    const ocmURL =
+      `https://api.openchargemap.io/v3/poi/?output=json` +
+      `&latitude=${lat}&longitude=${lon}` +
+      `&distance=${dist}&distanceunit=KM` +
+      `&maxresults=300&compact=true&verbose=false` +
+      `&key=${process.env.OCM_KEY ?? ""}`;
 
-  const ocm = new URLSearchParams({
-    output: "json",
-    countrycode: "GB",
-    latitude: String(lat),
-    longitude: String(lon),
-    distance: String(Math.min(dist, 60)), // clamp distance
-    distanceunit: "KM",
-    maxresults: "250",
-    compact: "true",
-    verbose: "false",
-  });
+    const res = await fetch(ocmURL, {
+      headers: {
+        "User-Agent": "Autodun-EV-Finder/1.0 (contact: info@autodun.com)",
+      },
+      cache: "no-store",
+    });
 
-  if (process.env.OCM_API_KEY) {
-    ocm.set("key", process.env.OCM_API_KEY);
-  }
+    if (!res.ok) {
+      return new Response(JSON.stringify({ error: "Upstream error", status: res.status }), { status: 502 });
+    }
 
-  const res = await fetch(`https://api.openchargemap.io/v3/poi/?${ocm.toString()}`, {
-    headers: process.env.OCM_API_KEY ? { "X-API-Key": process.env.OCM_API_KEY } : undefined,
-    next: { revalidate: 60 },
-  });
+    const raw: Any[] = await res.json();
 
-  const raw = await res.json();
-  let stations = (Array.isArray(raw) ? raw : [])
-    .filter((s: any) => {
-      const conns = s?.Connections ?? [];
+    // Filter + trim
+    const filtered = raw.filter((s) => {
+      const conns: Any[] = s.Connections ?? [];
+      if (!conns.length) return false;
 
-      // power filter (accepts missing PowerKW when minPower=0)
-      const okPower =
-        minPower <= 0
-          ? conns.length > 0
-          : conns.some((c: any) => (Number(c?.PowerKW) || 0) >= minPower);
+      return conns.some((c) => {
+        const title = c.ConnectionType?.Title || "";
+        return matchesConnector(connQuery, title) && meetsPower(minPower, title, c.PowerKW);
+      });
+    });
 
-      if (!okPower) return false;
-
-      // connector filter (tolerant)
-      return matchesConnector(conns, connQuery);
-    })
-    .map((s: any) => ({
+    const out = filtered.map((s) => ({
       ID: s.ID,
       AddressInfo: {
         Title: s.AddressInfo?.Title,
@@ -102,20 +100,23 @@ export async function GET(req: NextRequest) {
         Latitude: s.AddressInfo?.Latitude,
         Longitude: s.AddressInfo?.Longitude,
       },
-      Connections: (s.Connections ?? []).map((c: any) => ({
+      Connections: (s.Connections ?? []).map((c: Any) => ({
         ConnectionType: {
           Title: c.ConnectionType?.Title,
           FormalName: c.ConnectionType?.FormalName,
         },
-        PowerKW: c.PowerKW,
-        Amps: c.Amps,
+        PowerKW: c.PowerKW ?? null,
+        Amps: c.Amps ?? null,
+        Voltage: c.Voltage ?? null,
       })),
     }));
 
-  // cap the payload for safety
-  stations = stations.slice(0, 400);
-
-  return new Response(JSON.stringify(stations), {
-    headers: { "content-type": "application/json" },
-  });
+    return new Response(JSON.stringify(out), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  } catch (e) {
+    console.error(e);
+    return new Response(JSON.stringify({ error: "Server error" }), { status: 500 });
+  }
 }
