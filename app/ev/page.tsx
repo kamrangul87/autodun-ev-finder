@@ -29,6 +29,7 @@ export default function EVFinder() {
 
 async function loadStations() {
   if (lat == null || lon == null) return;
+
   setLoading(true);
   try {
     const params = new URLSearchParams({
@@ -36,15 +37,18 @@ async function loadStations() {
       lon: String(lon),
       dist: String(dist),
       minPower: String(minPower),
-      conn: conn ?? '', // '' means Any
     });
+    if (conn) params.set("conn", conn); // omit ?conn= when it's “Any”
 
-    const r = await fetch(`/api/stations?${params.toString()}`);
-    const j = await r.json();
-    setStations(j || []);
+    const r = await fetch(`/api/stations?${params.toString()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error(`API ${r.status}`);
+
+    // Be safe if the body isn’t valid JSON
+    const j = await r.json().catch(() => []);
+    setStations(Array.isArray(j) ? j : []);
   } catch (e) {
     console.error(e);
-    setStations([]);
+    setStations([]); // never crash the UI
   } finally {
     setLoading(false);
   }
