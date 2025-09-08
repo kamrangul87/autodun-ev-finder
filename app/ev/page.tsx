@@ -27,16 +27,28 @@ export default function EVFinder() {
     }
   }
 
-  async function loadStations() {
-    if (lat == null || lon == null) return;
-    setLoading(true);
-    const url = `/api/stations?lat=${lat}&lon=${lon}&dist=${dist}&minPower=${minPower}${conn ? `&conn=${encodeURIComponent(conn)}` : ''}`;
-    const r = await fetch(url);
+async function loadStations() {
+  if (lat == null || lon == null) return;
+  setLoading(true);
+  try {
+    const params = new URLSearchParams({
+      lat: String(lat),
+      lon: String(lon),
+      dist: String(dist),
+      minPower: String(minPower),
+      conn: conn ?? '', // '' means Any
+    });
+
+    const r = await fetch(`/api/stations?${params.toString()}`);
     const j = await r.json();
     setStations(j || []);
+  } catch (e) {
+    console.error(e);
+    setStations([]);
+  } finally {
     setLoading(false);
   }
-
+}
   useEffect(() => { loadStations(); }, [lat, lon, dist, minPower, conn]);
 
   function useMyLocation() {
