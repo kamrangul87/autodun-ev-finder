@@ -1,5 +1,5 @@
 // app/api/stations/route.ts
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -8,68 +8,59 @@ export async function GET(req: NextRequest) {
   const lon = Number(searchParams.get("lon"));
   const dist = Number(searchParams.get("dist") ?? 10);
   const minPower = Number(searchParams.get("minPower") ?? 0);
-  const connQuery = (searchParams.get("conn") ?? "").trim().toLowerCase(); // "" means Any
+  const connQuery = (searchParams.get("conn") ?? "").toLowerCase().trim();
 
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return new Response(JSON.stringify({ error: "Missing lat/lon" }), { status: 400 });
+  if (Number.isNaN(lat) || Number.isNaN(lon)) {
+    return new Response(JSON.stringify({ error: "missing lat/lon" }), { status: 400 });
   }
 
-  // Call OpenChargeMap
-  const url = new URL("https://api.openchargemap.io/v3/poi/");
-  url.searchParams.set("output", "json");
-  url.searchParams.set("latitude", String(lat));
-  url.searchParams.set("longitude", String(lon));
-  url.searchParams.set("distance", String(Math.min(Math.max(dist, 1), 200)));
-  url.searchParams.set("distanceunit", "KM");
-  url.searchParams.set("compact", "true");
-  url.searchParams.set("verbose", "false");
-  url.searchParams.set("maxresults", "150");
-
-  // API key (env name can be whatever you used in Vercel)
-  const apiKey = process.env.OCM_API_KEY ?? process.env.NEXT_PUBLIC_OCM_KEY ?? "";
-  if (apiKey) url.searchParams.set("key", apiKey);
-
-  const r = await fetch(url.toString(), {
-    headers: { Accept: "application/json" },
-    cache: "no-store",
+  // Ask OpenChargeMap for a bounded set
+  const ocmParams = new URLSearchParams({
+    output: "json",
+    countrycode: "GB",
+    latitude: String(lat),
+    longitude: String(lon),
+    distance: String(Math.min(dist, 60)), // safety clamp
+    distanceunit: "KM",
+    maxresults: "250",                    // <-- important: don't fetch thousands
+    compact: "true",
+    verbose: "false",
   });
 
-  if (!r.ok) {
-    return new Response(JSON.stringify({ error: "OCM request failed" }), { status: 502 });
+  if (process.env.OCM_API_KEY) {
+    ocmParams.set("key", process.env.OCM_API_KEY);
   }
 
-  let stations: any[] = await r.json();
+  const r = await fetch(`https://api.openchargemap.io/v3/poi/?${ocmParams.toString()}`, {
+    headers: process.env.OCM_API_KEY
+      ? { "X-API-Key": process.env.OCM_API_KEY }
+      : undefined,
+    next: { revalidate: 60 },
+  });
 
-  // ---- Filters ----
+  const raw = await r.json();
 
-  // Min power (kW)
-  if (minPower > 0) {
-    stations = stations.filter((s) =>
-      (s.Connections ?? []).some((c: any) => (c.PowerKW ?? 0) >= minPower)
+  // Filter by power + connector (fuzzy matching)
+  let stations = (Array.isArray(raw) ? raw : []).filter((s: any) => {
+    const okPower = (s?.Connections ?? []).some((c: any) => (c?.PowerKW ?? 0) >= minPower);
+    if (!okPower) return false;
+    if (!connQuery) return true;
+
+    const cStr = (s?.Connections ?? [])
+      .map((c: any) =>
+        `${c?.ConnectionType?.Title ?? ""} ${c?.ConnectionType?.FormalName ?? ""}`.toLowerCase()
+      )
+      .join(" ");
+
+    return (
+      cStr.includes(connQuery) ||
+      (connQuery.includes("type 2") &&
+        (cStr.includes("type 2") || cStr.includes("type-2") || cStr.includes("mennekes"))) ||
+      (connQuery.includes("ccs") && cStr.includes("ccs")) ||
+      (connQuery.includes("chademo") && cStr.includes("chademo"))
     );
-  }
-
-  // Fuzzy connector filter (CCS / Type 2 / CHAdeMO etc.)
-  if (connQuery) {
-    stations = stations.filter((s) =>
-      (s.Connections ?? []).some((c: any) => {
-        const t = `${c.ConnectionType?.Title ?? ""} ${c.ConnectionType?.FormalName ?? ""}`
-          .toLowerCase();
-
-        if (t.includes(connQuery)) return true;              // generic contains
-
-        // Synonyms / variants
-        if (connQuery === "ccs") return /ccs|combo/.test(t); // CCS (Combo) etc.
-        if (connQuery.replace(/\s+/g, "") === "type2") return /type ?2|mennekes/.test(t);
-        if (connQuery === "chademo") return /chademo/.test(t);
-
-        return false;
-      })
-    );
-  }
-
-  // Trim the payload to what the UI needs
-  const out = stations.map((s) => ({
+  })
+  .map((s: any) => ({
     ID: s.ID,
     AddressInfo: {
       Title: s.AddressInfo?.Title,
@@ -88,13 +79,16 @@ export async function GET(req: NextRequest) {
       },
       PowerKW: c.PowerKW,
       Amps: c.Amps,
-      Voltage: c.Voltage,
     })),
   }));
 
-  return new Response(JSON.stringify(out), {
-    status: 200,
+  // Hard cap to keep the client safe
+  const MAX_TO_SEND = 400;
+  stations = stations.slice(0, MAX_TO_SEND);
+
+  return new Response(JSON.stringify(stations), {
     headers: { "content-type": "application/json" },
   });
 }
+
 
