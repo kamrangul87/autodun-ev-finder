@@ -1,173 +1,78 @@
 // app/api/stations/route.ts
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-type OCConnection = {
-  ConnectionType?: { Title?: string; FormalName?: string };
+type OCMConnection = {
+  ConnectionTypeID?: number;
+  ConnectionType?: { Title?: string; FormalName?: string } | null;
   PowerKW?: number | null;
-  Amps?: number | null;
-  Voltage?: number | null;
 };
-type OCStation = {
+
+type OCMPOI = {
   ID: number;
   AddressInfo?: {
     Title?: string;
     AddressLine1?: string;
     Town?: string;
     Postcode?: string;
-    RelatedURL?: string;
     ContactTelephone1?: string;
+    RelatedURL?: string;
     Latitude?: number;
     Longitude?: number;
   };
-  Connections?: OCConnection[] | null;
+  Connections?: OCMConnection[] | null;
 };
 
-const KEY_VARS = ['OCM_API_KEY', 'OPENCHARGEMAP_API_KEY', 'NEXT_PUBLIC_OPENCHARGEMAP_API_KEY'] as const;
-function getOCMKey(): string {
-  for (const k of KEY_VARS) {
-    const v = process.env[k];
-    if (v) return v;
-  }
-  return '';
-}
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
-}
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, Number.isFinite(n) ? n : min));
-}
-function norm(s: unknown): string {
-  return String(s ?? '')
-    .toLowerCase()
-    .replace(/[\s\-_/().]+/g, '');
-}
-
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
+  try {
+    const url = new URL(req.url);
+    const lat = parseFloat(url.searchParams.get('lat') ?? '');
+    const lon = parseFloat(url.searchParams.get('lon') ?? '');
+    const dist = parseFloat(url.searchParams.get('dist') ?? '10');
+    const minPower = parseFloat(url.searchParams.get('minPower') ?? '0');
+    const connRaw = (url.searchParams.get('conn') ?? '').trim();
 
-  const lat = Number(searchParams.get('lat'));
-  const lon = Number(searchParams.get('lon'));
-  const dist = clamp(Number(searchParams.get('dist') || 10), 1, 100);
-  const minPower = Math.max(0, Number(searchParams.get('minPower') || 0));
-  const connRaw = (searchParams.get('conn') || '').trim();
-  const connQuery = connRaw.toLowerCase();
-  const debug = searchParams.get('debug') === '1';
-
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-    return json([]); // never crash client
-  }
-
-  const key = getOCMKey();
-
-  // Build OCM request
-  const url = new URL('https://api.openchargemap.io/v3/poi/');
-  url.searchParams.set('output', 'json');
-  url.searchParams.set('countrycode', 'GB');
-  url.searchParams.set('latitude', String(lat));
-  url.searchParams.set('longitude', String(lon));
-  url.searchParams.set('distance', String(dist));
-  url.searchParams.set('distanceunit', 'KM'); // uppercase as per docs
-  url.searchParams.set('maxresults', '200');
-  url.searchParams.set('compact', 'true');
-  url.searchParams.set('verbose', 'false');
-  if (key) url.searchParams.set('key', key); // query param form
-
-  const headers: Record<string, string> = {
-    'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
-  };
-  if (key) headers['X-API-Key'] = key; // header form
-
-  const res = await fetch(url.toString(), {
-    headers,
-    cache: 'no-store',
-  });
-
-  // If OCM rejected us (rate limit / unauthorized), expose that in debug
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    if (debug) {
-      return json({ error: true, status: res.status, bodySnippet: text.slice(0, 500), usedKey: !!key }, res.status);
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return NextResponse.json([]);
     }
-    // Return empty array to keep UI alive
-    return json([]);
+
+    const params = new URLSearchParams();
+    params.set('latitude', String(lat));
+    params.set('longitude', String(lon));
+    params.set('distance', String(Number.isFinite(dist) ? dist : 10));
+    params.set('distanceunit', 'KM');
+    params.set('countrycode', 'GB');
+    params.set('maxresults', '100');
+    params.set('minpowerkw', String(Number.isFinite(minPower) ? minPower : 0));
+    // Return full data so UI can show connector names:
+    params.set('compact', 'false');
+    params.set('verbose', 'true');
+    if (process.env.OCM_API_KEY) params.set('key', process.env.OCM_API_KEY);
+
+    // Map connector names to OpenChargeMap ConnectionType IDs
+    // Type 2 (Socket Only)=25, Type 2 (Tethered)=1036, CCS (Type 2)=33, CCS (Type 1)=32, CHAdeMO=2
+    const connToIds = (q: string): number[] => {
+      const c = q.toLowerCase();
+      if (!c) return [];
+      if (c === 'type 2' || c === 'type2' || c.includes('mennekes')) return [25, 1036];
+      if (c === 'ccs' || c.includes('combo') || c === 'ccs2') return [33, 32];
+      if (c === 'chademo' || c.includes('cha')) return [2];
+      return [];
+    };
+
+    const ids = connToIds(connRaw);
+    if (ids.length > 0) {
+      params.set('connectiontypeid', ids.join(','));
+    }
+
+    const ocmUrl = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
+    const r = await fetch(ocmUrl, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    if (!r.ok) return NextResponse.json([]);
+
+    const data = (await r.json()) as OCMPOI[] | null;
+    const list = Array.isArray(data) ? data : [];
+    return NextResponse.json(list);
+  } catch (err) {
+    console.error(err);
+    return NextResponse.json([]);
   }
-
-  const raw: unknown = await res.json().catch(() => []);
-  const list: OCStation[] = Array.isArray(raw) ? (raw as OCStation[]) : [];
-
-  // ---- filtering helpers ----
-  const isType2 = (t: string) => t.includes('type2') || t.includes('mennekes') || t.includes('iec621962');
-  const isCCS = (t: string) => t.includes('ccs') || t.includes('combo') || t.includes('combinedchargingsystem') || t.includes('iec621963');
-  const isCHAdeMO = (t: string) => t.includes('chademo');
-
-  const matchesConnector = (s: OCStation) => {
-    if (!connQuery) return true; // “Any”
-    const labels: string[] = (Array.isArray(s.Connections) ? s.Connections : []).map((c) =>
-      norm(c?.ConnectionType?.FormalName || c?.ConnectionType?.Title)
-    );
-
-    if (connQuery === 'type 2' || connQuery === 'type2') return labels.some(isType2);
-    if (connQuery === 'ccs') return labels.some(isCCS);
-    if (connQuery === 'chademo') return labels.some(isCHAdeMO);
-
-    const qn = norm(connQuery);
-    return labels.some((t) => t.includes(qn));
-  };
-
-  const matchesPower = (s: OCStation) => {
-    if (!minPower) return true;
-    const conns = Array.isArray(s.Connections) ? s.Connections : [];
-    return conns.some((c) => (Number(c?.PowerKW) || 0) >= minPower);
-  };
-
-  let kept = list.filter((s) => matchesConnector(s) && matchesPower(s));
-
-  // Trim payload for map safety
-  kept = kept.slice(0, 400);
-
-  // Minimal fields to client
-  const out = kept.map((s) => ({
-    ID: s.ID,
-    AddressInfo: {
-      Title: s.AddressInfo?.Title,
-      AddressLine1: s.AddressInfo?.AddressLine1,
-      Town: s.AddressInfo?.Town,
-      Postcode: s.AddressInfo?.Postcode,
-      RelatedURL: s.AddressInfo?.RelatedURL,
-      ContactTelephone1: s.AddressInfo?.ContactTelephone1,
-      Latitude: s.AddressInfo?.Latitude,
-      Longitude: s.AddressInfo?.Longitude,
-    },
-    Connections: (Array.isArray(s.Connections) ? s.Connections : []).map((c) => ({
-      ConnectionType: {
-        Title: c?.ConnectionType?.Title,
-        FormalName: c?.ConnectionType?.FormalName,
-      },
-      PowerKW: c?.PowerKW ?? null,
-      Amps: c?.Amps ?? null,
-      Voltage: c?.Voltage ?? null,
-    })),
-  }));
-
-  if (debug) {
-    const sampleLabels = list
-      .flatMap((s) => (Array.isArray(s.Connections) ? s.Connections : []))
-      .map((c) => c?.ConnectionType?.FormalName || c?.ConnectionType?.Title || '?')
-      .slice(0, 80);
-
-    return json(
-      {
-        query: { lat, lon, dist, minPower, conn: connRaw, usedKey: !!key },
-        counts: { raw: list.length, kept: out.length },
-        sampleLabels,
-        note: 'Add &debug=1 to see this payload.',
-      },
-      200
-    );
-  }
-
-  return json(out, 200);
 }
