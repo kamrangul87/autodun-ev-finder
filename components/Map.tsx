@@ -5,24 +5,29 @@ import 'leaflet.markercluster/dist/MarkerCluster.css';
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css';
 
 import L from 'leaflet';
-import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  useMap,
+  useMapEvents,
+} from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import { useEffect, useMemo } from 'react';
-// Add near the top (after existing imports)
-import { useEffect } from "react";
-import { useMap } from "react-leaflet";
 
+// --- Heat layer wrapper (loads leaflet.heat dynamically) ---
 function HeatLayer({ points }: { points: Array<[number, number, number?]> }) {
   const map = useMap();
 
   useEffect(() => {
     let layer: any;
+
     (async () => {
-      // Ensure Leaflet is loaded, then load the heat plugin
-      const L = await import("leaflet");
-      await import("leaflet.heat");
-      // @ts-ignore
-      layer = (L as any).heatLayer(points, {
+      const Lmod = await import('leaflet');
+      await import('leaflet.heat');
+      // @ts-ignore - plugin augments Leaflet at runtime
+      layer = (Lmod as any).heatLayer(points, {
         radius: 25,
         blur: 15,
         maxZoom: 17,
@@ -31,15 +36,12 @@ function HeatLayer({ points }: { points: Array<[number, number, number?]> }) {
     })();
 
     return () => {
-      if (layer) {
-        map.removeLayer(layer);
-      }
+      if (layer) map.removeLayer(layer);
     };
   }, [map, points]);
 
   return null;
 }
-
 
 type Station = any;
 
@@ -91,16 +93,40 @@ function BoundsReporter({
   return null;
 }
 
+type MapProps = {
+  center: [number, number];
+  stations: Station[];
+  onBoundsChange?: (b: { north: number; south: number; east: number; west: number }) => void;
+  /** 'markers' (default) shows clusters; 'heat' shows a heatmap */
+  mode?: 'markers' | 'heat';
+};
+
 export default function Map({
   center,
   stations,
   onBoundsChange,
-}: {
-  center: [number, number];
-  stations: Station[];
-  onBoundsChange?: (b: { north: number; south: number; east: number; west: number }) => void;
-}) {
+  mode = 'markers',
+}: MapProps) {
   const items = useMemo(() => (Array.isArray(stations) ? stations : []), [stations]);
+
+  // Prepare heat points: [lat, lon, weight]
+  const heatPoints: Array<[number, number, number]> = useMemo(() => {
+    return items
+      .map((s: any) => {
+        const lat = s?.AddressInfo?.Latitude;
+        const lon = s?.AddressInfo?.Longitude;
+        if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+
+        // Use max PowerKW as intensity, normalized to 0..1 (tweak as you like)
+        const maxKw = Math.max(
+          0,
+          ...(s?.Connections || []).map((c: any) => Number(c?.PowerKW) || 0)
+        );
+        const weight = Math.min(1, maxKw / 150); // simple normalization
+        return [lat, lon, weight] as [number, number, number];
+      })
+      .filter(Boolean) as Array<[number, number, number]>;
+  }, [items]);
 
   return (
     <MapContainer center={center} zoom={13} style={{ height: 520, width: '100%' }}>
@@ -108,44 +134,51 @@ export default function Map({
         attribution='&copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> & contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+
       <FitToCenter center={center} />
       <BoundsReporter onBoundsChange={onBoundsChange} />
 
-      <MarkerClusterGroup chunkedLoading>
-        {items.map((s: any) => (
-          <Marker
-            key={s.ID}
-            position={[s.AddressInfo?.Latitude, s.AddressInfo?.Longitude]}
-            icon={icon}
-          >
-            <Popup>
-              <div className="space-y-1">
-                <div className="font-semibold">{s.AddressInfo?.Title}</div>
-                <div className="text-sm text-gray-600">
-                  {s.AddressInfo?.AddressLine1}, {s.AddressInfo?.Town} {s.AddressInfo?.Postcode}
-                </div>
-                <ul className="text-sm">
-                  {(s.Connections ?? []).map((c: any, i: number) => (
-                    <li key={i}>
-                      {c.ConnectionType?.Title || c.ConnectionType?.FormalName || 'Connector'}
-                      {c.PowerKW ? ` • ${c.PowerKW}kW` : ''}
-                    </li>
-                  ))}
-                </ul>
-                {s.AddressInfo?.RelatedURL ? (
-                  <a
-                    className="text-sm text-blue-600 underline"
-                    href={s.AddressInfo.RelatedURL}
-                    target="_blank"
-                  >
-                    More info
-                  </a>
-                ) : null}
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MarkerClusterGroup>
+      {mode === 'heat' ? (
+        <HeatLayer points={heatPoints} />
+      ) : (
+        <MarkerClusterGroup chunkedLoading>
+          {items
+            .filter((s: any) => typeof s?.AddressInfo?.Latitude === 'number' && typeof s?.AddressInfo?.Longitude === 'number')
+            .map((s: any) => (
+              <Marker
+                key={s.ID}
+                position={[s.AddressInfo.Latitude, s.AddressInfo.Longitude]}
+                icon={icon}
+              >
+                <Popup>
+                  <div className="space-y-1">
+                    <div className="font-semibold">{s.AddressInfo?.Title}</div>
+                    <div className="text-sm text-gray-600">
+                      {s.AddressInfo?.AddressLine1}, {s.AddressInfo?.Town} {s.AddressInfo?.Postcode}
+                    </div>
+                    <ul className="text-sm">
+                      {(s.Connections ?? []).map((c: any, i: number) => (
+                        <li key={i}>
+                          {c.ConnectionType?.Title || c.ConnectionType?.FormalName || 'Connector'}
+                          {c.PowerKW ? ` • ${c.PowerKW}kW` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                    {s.AddressInfo?.RelatedURL ? (
+                      <a
+                        className="text-sm text-blue-600 underline"
+                        href={s.AddressInfo.RelatedURL}
+                        target="_blank"
+                      >
+                        More info
+                      </a>
+                    ) : null}
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+        </MarkerClusterGroup>
+      )}
     </MapContainer>
   );
 }
