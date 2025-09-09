@@ -8,6 +8,38 @@ import L from 'leaflet';
 import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import { useEffect, useMemo } from 'react';
+// Add near the top (after existing imports)
+import { useEffect } from "react";
+import { useMap } from "react-leaflet";
+
+function HeatLayer({ points }: { points: Array<[number, number, number?]> }) {
+  const map = useMap();
+
+  useEffect(() => {
+    let layer: any;
+    (async () => {
+      // Ensure Leaflet is loaded, then load the heat plugin
+      const L = await import("leaflet");
+      await import("leaflet.heat");
+      // @ts-ignore
+      layer = (L as any).heatLayer(points, {
+        radius: 25,
+        blur: 15,
+        maxZoom: 17,
+      });
+      layer.addTo(map);
+    })();
+
+    return () => {
+      if (layer) {
+        map.removeLayer(layer);
+      }
+    };
+  }, [map, points]);
+
+  return null;
+}
+
 
 type Station = any;
 
