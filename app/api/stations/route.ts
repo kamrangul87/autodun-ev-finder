@@ -57,7 +57,8 @@ function matchesConnector(station: any, connQuery: string): boolean {
 function hasMinPower(station: any, minPower: number): boolean {
   if (!minPower) return true;
   const powers = (station?.Connections ?? []).map((c: any) => toNum(c?.PowerKW, 0));
-  return powers.some((p) => p >= minPower);
+ return powers.some((p: number) => p >= minPower);
+
 }
 
 export async function GET(req: NextRequest) {
