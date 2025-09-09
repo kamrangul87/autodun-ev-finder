@@ -15,7 +15,8 @@
     "next": "14.2.5",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "react-leaflet": "4.2.1"
+    "react-leaflet": "4.2.1",
+    "leaflet.heat": "^0.2.0"
   },
   "devDependencies": {
     "@types/leaflet": "^1.9.8",
