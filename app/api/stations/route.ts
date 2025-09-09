@@ -1,123 +1,118 @@
-import { NextRequest, NextResponse } from 'next/server';
+// app/api/stations/route.ts
+import { NextRequest } from "next/server";
+import {
+  type OCMStation,
+  featuresFor,
+  scoreFor,
+  distanceKm,
+  matchesConn,
+  hasAtLeastPower,
+} from "@/lib/model1";
 
-type OCMConnection = {
-  ConnectionTypeID?: number;
-  ConnectionType?: { Title?: string; FormalName?: string } | null;
-  PowerKW?: number | null;
-};
-type OCMPOI = {
+type TrimmedStation = {
   ID: number;
+  _score: number;
+  _distanceKm: number;
   AddressInfo?: {
-    Title?: string;
-    AddressLine1?: string;
-    Town?: string;
-    Postcode?: string;
-    ContactTelephone1?: string;
-    RelatedURL?: string;
-    Latitude?: number;
-    Longitude?: number;
-  };
-  Connections?: OCMConnection[] | null;
+    Title?: string | null;
+    AddressLine1?: string | null;
+    Town?: string | null;
+    Postcode?: string | null;
+    Latitude?: number | null;
+    Longitude?: number | null;
+    ContactTelephone1?: string | null;
+    RelatedURL?: string | null;
+  } | null;
+  Connections?: Array<{
+    PowerKW?: number | null;
+    ConnectionType?: { Title?: string | null; FormalName?: string | null } | null;
+  }> | null;
 };
-
-const KEY_VARS = ['OCM_API_KEY', 'OPENCHARGEMAP_API_KEY', 'NEXT_PUBLIC_OPENCHARGEMAP_API_KEY'] as const;
-function getOCMKey(): string {
-  for (const k of KEY_VARS) {
-    const v = process.env[k];
-    if (v) return v;
-  }
-  return '';
-}
-
-// Map connector names to OCM ConnectionType IDs (covers common variants)
-function connToIds(q: string): number[] {
-  const c = q.toLowerCase().trim();
-  if (!c) return [];
-  if (c === 'type 2' || c === 'type2' || c.includes('mennekes')) return [25, 1036]; // socket & tethered
-  if (c === 'ccs' || c.includes('combo') || c === 'ccs2') return [33, 32];        // CCS2 & CCS1
-  if (c === 'chademo' || c.includes('cha')) return [2];
-  return [];
-}
 
 export async function GET(req: NextRequest) {
   try {
-    const url = new URL(req.url);
-    const lat = parseFloat(url.searchParams.get('lat') ?? '');
-    const lon = parseFloat(url.searchParams.get('lon') ?? '');
-    const dist = Math.max(1, Math.min(100, parseFloat(url.searchParams.get('dist') ?? '10')));
-    const minPower = Math.max(0, parseFloat(url.searchParams.get('minPower') ?? '0'));
-    const connRaw = (url.searchParams.get('conn') ?? '').trim();
+    const { searchParams } = new URL(req.url);
 
-    // Viewport bbox (preferred)
-    const north = parseFloat(url.searchParams.get('north') ?? '');
-    const south = parseFloat(url.searchParams.get('south') ?? '');
-    const east = parseFloat(url.searchParams.get('east') ?? '');
-    const west = parseFloat(url.searchParams.get('west') ?? '');
-    const hasBbox = [north, south, east, west].every((n) => Number.isFinite(n));
+    const lat = Number(searchParams.get("lat"));
+    const lon = Number(searchParams.get("lon"));
+    const dist = Math.max(1, Number(searchParams.get("dist") || 10)); // km
+    const minPower = Number(searchParams.get("minPower") || 0);
+    const conn = (searchParams.get("conn") || "").trim();
 
-    const params = new URLSearchParams();
-    params.set('countrycode', 'GB'); // you can drop this if you want cross-border results
-    params.set('maxresults', '200');
-    params.set('compact', 'false');
-    params.set('verbose', 'true');
-
-    // Power filter (server-side and hint to OCM)
-    if (Number.isFinite(minPower) && minPower > 0) {
-      params.set('minpowerkw', String(minPower));
+    if (Number.isNaN(lat) || Number.isNaN(lon)) {
+      return Response.json({ error: "Missing or invalid lat/lon" }, { status: 400 });
     }
 
-    // Connector filter via IDs (much more reliable)
-    const ids = connToIds(connRaw);
-    if (ids.length) params.set('connectiontypeid', ids.join(','));
+    // Fetch from OpenChargeMap (GB-focused, adjust country if you expand later)
+    // Add X-API-Key if you have one in env; otherwise OCM still works with lower rate limits.
+    const headers: Record<string, string> = {};
+    if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
-    // Use bounding box if given, else radius
-    if (hasBbox) {
-      // OCM expects: boundingbox=(lat,lng),(lat2,lng2)  → top-left, bottom-right
-      params.set('boundingbox', `(${north},${west}),(${south},${east})`);
-    } else if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      params.set('latitude', String(lat));
-      params.set('longitude', String(lon));
-      params.set('distance', String(dist));
-      params.set('distanceunit', 'KM');
-    } else {
-      return NextResponse.json([]); // not enough to query
+    const url =
+      `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB` +
+      `&latitude=${lat}&longitude=${lon}&distance=${dist}&distanceunit=KM` +
+      `&compact=true&verbose=false&maxresults=200`;
+
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok) {
+      return Response.json({ error: `OCM ${res.status}` }, { status: 502 });
     }
 
-    const key = getOCMKey();
-    if (key) params.set('key', key);
+    const raw: OCMStation[] = await res.json();
 
-    const ocmUrl = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
-    const r = await fetch(ocmUrl, { headers: { Accept: 'application/json' }, cache: 'no-store' });
-    if (!r.ok) return NextResponse.json([]);
+    // Filter and score
+    const filtered = (raw || [])
+      .filter((s) => !!s?.AddressInfo?.Latitude && !!s?.AddressInfo?.Longitude)
+      .map((s) => {
+        const f = featuresFor(s);
+        const sc = scoreFor(f);
+        const d = distanceKm(
+          lat,
+          lon,
+          Number(s.AddressInfo?.Latitude) || 0,
+          Number(s.AddressInfo?.Longitude) || 0
+        );
+        return { station: s, _score: sc, _distanceKm: d };
+      })
+      // distance & filters
+      .filter(({ station, _distanceKm }) => {
+        if (_distanceKm > dist + 0.5) return false; // guard if API over-includes
+        if (!matchesConn(station, conn)) return false;
+        if (!hasAtLeastPower(station, minPower)) return false;
+        return true;
+      })
+      // sort: closest first, then score desc
+      .sort((a, b) => a._distanceKm - b._distanceKm || b._score - a._score);
 
-    const data = (await r.json()) as OCMPOI[] | null;
-    const list = Array.isArray(data) ? data : [];
+    // Trim payload we send to the client
+    const payload: TrimmedStation[] = filtered.map(({ station, _score, _distanceKm }) => ({
+      ID: station.ID,
+      _score: Number(_score.toFixed(3)),
+      _distanceKm: Math.round(_distanceKm * 10) / 10,
+      AddressInfo: {
+        Title: station.AddressInfo?.Title ?? null,
+        AddressLine1: station.AddressInfo?.AddressLine1 ?? null,
+        Town: station.AddressInfo?.Town ?? null,
+        Postcode: station.AddressInfo?.Postcode ?? null,
+        Latitude: station.AddressInfo?.Latitude ?? null,
+        Longitude: station.AddressInfo?.Longitude ?? null,
+        ContactTelephone1: station.AddressInfo?.ContactTelephone1 ?? null,
+        RelatedURL: station.AddressInfo?.RelatedURL ?? null,
+      },
+      Connections: (station.Connections ?? [])?.map((c) => ({
+        PowerKW: c?.PowerKW ?? null,
+        ConnectionType: c?.ConnectionType
+          ? {
+              Title: c.ConnectionType?.Title ?? null,
+              FormalName: c.ConnectionType?.FormalName ?? null,
+            }
+          : null,
+      })),
+    }));
 
-    // Trim to essential fields (client is hardened anyway)
-    return NextResponse.json(
-      list.map((s) => ({
-        ID: s.ID,
-        AddressInfo: {
-          Title: s.AddressInfo?.Title,
-          AddressLine1: s.AddressInfo?.AddressLine1,
-          Town: s.AddressInfo?.Town,
-          Postcode: s.AddressInfo?.Postcode,
-          RelatedURL: s.AddressInfo?.RelatedURL,
-          ContactTelephone1: s.AddressInfo?.ContactTelephone1,
-          Latitude: s.AddressInfo?.Latitude,
-          Longitude: s.AddressInfo?.Longitude,
-        },
-        Connections: (Array.isArray(s.Connections) ? s.Connections : []).map((c) => ({
-          ConnectionType: {
-            Title: c?.ConnectionType?.Title,
-            FormalName: c?.ConnectionType?.FormalName,
-          },
-          PowerKW: c?.PowerKW ?? null,
-        })),
-      }))
-    );
-  } catch (err) {
-    console.error(err);
-    return NextResponse.json([]);
+    return Response.json(payload, { status: 200 });
+  } catch (e) {
+    console.error(e);
+    return Response.json({ error: "Server error" }, { status: 500 });
   }
 }
