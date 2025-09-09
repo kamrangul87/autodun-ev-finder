@@ -75,7 +75,10 @@ export async function GET(req: NextRequest) {
     }
 
     // Fetch from OpenChargeMap (no key, open endpoint)
-    const url = `https://api.openchargemap.io/v3/poi/?output=json&latitude=${lat}&longitude=${lon}&distance=${dist}&distanceunit=KM&maxresults=200&compact=true&verbose=false&opendata=true`;
+   const url =
+  `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB` +
+  `&latitude=${lat}&longitude=${lon}&distance=${dist}&distanceunit=KM` +
+  `&maxresults=200&compact=false&verbose=true&includecomments=false`;
     const res = await fetch(url, {
       headers: {
         'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
