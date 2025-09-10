@@ -4,18 +4,15 @@ import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip } from "react-leaflet";
 import L from "leaflet";
 
-// ---------- Types ----------
 export type Breakdown = { reports: number; downtime: number; connectors: number };
 export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number };
 type Meta = { halfReports: number; halfDown: number };
 type Filters = { operator?: string; dcOnly?: boolean; minKW?: number };
 type UI = { scale: ScaleMethod; radius: number; blur: number };
 
-// ---------- Constants ----------
 const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
-
-// ---------- Helpers ----------
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
 function quantile(arr: number[], q: number) {
   if (arr.length === 0) return 0;
   const a = [...arr].sort((x, y) => x - y);
@@ -104,7 +101,7 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   return null;
 }
 
-// ---------- Report viewport up ----------
+// ---------- Viewport reporter ----------
 function ViewportReporter({ onChange }: { onChange: (center: [number, number], zoom: number) => void }) {
   const map = useMap();
   useEffect(() => {
@@ -248,17 +245,20 @@ function HotspotsOverlay({
 type Props = {
   points: Point[];
   defaultScale?: ScaleMethod;
-  palette?: GradientName;
+  palette?: "viridis"|"turbo"|"fire"|"blueRed";
   meta?: Meta;
   filters?: Filters;
   initialUI?: UI;
   onUIChange?: (ui: UI) => void;
   onViewportChange?: (center: [number, number], zoom: number) => void;
+  selectedInit?: { lat: number; lng: number } | null;
+  onSelectChange?: (p: Point | null) => void;
 };
 
 export default function HeatmapWithScaling({
   points, defaultScale = "robust", palette = "fire", meta,
-  filters, initialUI, onUIChange, onViewportChange
+  filters, initialUI, onUIChange, onViewportChange,
+  selectedInit, onSelectChange
 }: Props) {
   const isSmall = useIsSmall();
 
@@ -267,6 +267,14 @@ export default function HeatmapWithScaling({
   const [blur, setBlur] = useState<number>(initialUI?.blur ?? 35);
   const [selected, setSelected] = useState<Point | null>(null);
   const [topHotspots, setTopHotspots] = useState<Point[]>([]);
+
+  // try to preselect a hotspot by coords from URL
+  useEffect(() => {
+    if (!selectedInit) return;
+    const p = points.find(pt => Math.abs(pt.lat - selectedInit.lat) < 1e-6 && Math.abs(pt.lng - selectedInit.lng) < 1e-6) || null;
+    setSelected(p || null);
+    onSelectChange?.(p || null);
+  }, [selectedInit, points, onSelectChange]);
 
   // apply filters
   const filtered = useMemo(() => {
@@ -302,10 +310,8 @@ export default function HeatmapWithScaling({
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
-  // notify parent on UI change (for shareable URL)
-  useEffect(() => {
-    onUIChange?.({ scale: scaleMethod, radius, blur });
-  }, [scaleMethod, radius, blur, onUIChange]);
+  // bubble ui changes up
+  useEffect(() => { onUIChange?.({ scale: scaleMethod, radius, blur }); }, [scaleMethod, radius, blur, onUIChange]);
 
   // Export CSV (top in view after filters)
   const exportCSV = React.useCallback(() => {
@@ -335,7 +341,7 @@ export default function HeatmapWithScaling({
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }, [topHotspots, meta?.halfDown, meta?.halfReports, scaleMethod, radius, blur, filters?.operator, filters?.dcOnly, filters?.minKW]);
 
-  // UI boxes (responsive)
+  const isSmall = useIsSmall();
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 13 : 14;
@@ -348,7 +354,12 @@ export default function HeatmapWithScaling({
         <DynamicRadius setRadius={setRadius} />
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
-        <HotspotsOverlay points={filtered} onSelect={setSelected} selected={selected} onTopChange={setTopHotspots} />
+        <HotspotsOverlay
+          points={filtered}
+          onSelect={(p) => { setSelected(p); onSelectChange?.(p); }}
+          selected={selected}
+          onTopChange={setTopHotspots}
+        />
       </MapContainer>
 
       {/* Controls */}
@@ -378,7 +389,7 @@ export default function HeatmapWithScaling({
       </div>
 
       {/* Legend + Export */}
-      <Legend domain={domain} palette={palette} compact={isSmall} />
+      <Legend domain={domain} palette="fire" compact={isSmall} />
       <div style={{ position: "absolute", right: 12, bottom: 12, zIndex: 1000, display: "flex", gap: 8, alignItems: "center" }}>
         <button
           onClick={exportCSV}
@@ -393,7 +404,7 @@ export default function HeatmapWithScaling({
 }
 
 // ---------- Legend ----------
-function Legend({ domain, palette, compact }: { domain: [number, number]; palette: GradientName; compact?: boolean }) {
+function Legend({ domain, palette, compact }: { domain: [number, number]; palette: "viridis"|"turbo"|"fire"|"blueRed"; compact?: boolean }) {
   const grad = gradientStops(palette);
   const gradientCSS = `linear-gradient(to right, ${Object.entries(grad).map(([k, color]) => `${color} ${Number(k) * 100}%`).join(", ")})`;
   const pad = compact ? 8 : 12;
@@ -421,7 +432,4 @@ function Legend({ domain, palette, compact }: { domain: [number, number]; palett
 function formatNumber(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   if (n >= 100) return n.toFixed(0);
-  if (n >= 10) return n.toFixed(1);
-  if (n > 0) return n.toFixed(2);
-  return "0";
-}
+  if
