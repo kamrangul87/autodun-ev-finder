@@ -1,39 +1,58 @@
-import { useEffect, useState } from "react";
+// pages/ev.tsx
+import React from "react";
 import dynamic from "next/dynamic";
-import fallbackPoints from "../data/evPoints";
+import type { Point } from "../components/HeatmapWithScaling";
 
 const HeatmapWithScaling = dynamic(() => import("../components/HeatmapWithScaling"), { ssr: false });
 
-export default function EvPage() {
-  const [points, setPoints] = useState(fallbackPoints);
-  const [isLive, setIsLive] = useState(false);
+export default function EVPage() {
+  const [points, setPoints] = React.useState<Point[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
 
-  useEffect(() => {
-    let mounted = true;
+  React.useEffect(() => {
+    const url = "/api/ev-points"; // tweak query params here if you like
     (async () => {
       try {
-        const r = await fetch("/api/ev-points");
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`API ${r.status}`);
         const data = await r.json();
-        if (mounted && Array.isArray(data) && data.length > 0) {
-          setPoints(data);
-          setIsLive(true);
-        }
-      } catch { /* keep fallback */ }
+        setPoints(data);
+      } catch (e: any) {
+        setError(e?.message ?? "Failed to load data");
+      } finally {
+        setLoading(false);
+      }
     })();
-    return () => { mounted = false; };
   }, []);
 
   return (
-    <main style={{ padding: 16, position: "relative" }}>
+    <div style={{ position: "relative" }}>
+      {/* top-right badge */}
       <div style={{
-        position: "absolute", right: 16, top: 16, zIndex: 1100,
-        background: "rgba(255,255,255,0.9)", padding: "6px 10px",
-        borderRadius: 10, boxShadow: "0 2px 10px rgba(0,0,0,0.1)", fontSize: 12
+        position: "absolute", right: 16, top: 12, zIndex: 1100,
+        background: "rgba(255,255,255,0.95)", padding: "6px 10px",
+        borderRadius: 999, boxShadow: "0 2px 10px rgba(0,0,0,0.08)", fontSize: 12
       }}>
-        {isLive ? "Live OCM data" : "Fallback sample"} • {points.length} points
+        Live OCM data • {points.length.toLocaleString()} points
       </div>
 
-      <HeatmapWithScaling points={points} defaultScale="robust" />
-    </main>
+      {loading && (
+        <div style={{ height: "80vh", display: "grid", placeItems: "center" }}>
+          <span>Loading live EV data…</span>
+        </div>
+      )}
+
+      {error && (
+        <div style={{ height: "80vh", display: "grid", placeItems: "center", color: "#b91c1c" }}>
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Failed to load</div>
+            <code>{error}</code>
+          </div>
+        </div>
+      )}
+
+      {!loading && !error && <HeatmapWithScaling points={points} />}
+    </div>
   );
 }
