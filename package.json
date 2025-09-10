@@ -17,7 +17,7 @@
     "react-dom": "18.2.0",
     "react-leaflet": "4.2.1",
     "leaflet.heat": "^0.2.0",
-"react-leaflet-heatmap-layer-v3": "^2.0.0"
+"react-leaflet-heatmap-layer-v3": "3.0.3-beta-1"
 
   },
   "devDependencies": {
