@@ -2,8 +2,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 type OCMComment = {
-  Rating?: number | null;               // 0..5 (lower often = problems)
-  DateCreated?: string | null;          // ISO
+  Rating?: number | null;        // 0..5 (lower often = problems)
+  DateCreated?: string | null;   // ISO
 };
 
 type OCM = {
@@ -12,18 +12,31 @@ type OCM = {
   NumberOfPoints?: number | null;       // sometimes present
   StatusType?: { IsOperational?: boolean } | null;
   UserComments?: OCMComment[] | null;   // only if includecomments=true
+  DateLastStatusUpdate?: string | null; // when site status last changed
 };
 
 const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
-
-// clamp helper
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
+function daysSince(iso?: string | null): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : Math.max(0, (Date.now() - t) / (24 * 3600 * 1000));
+}
+function expDecay(ageDays: number, halfLifeDays: number) {
+  // 1 at age=0, 0.5 at age=halfLife, smoothly decays toward 0
+  const LN2 = Math.log(2);
+  return Math.exp(-LN2 * (ageDays / Math.max(1e-6, halfLifeDays)));
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Optional params: /api/ev-points?lat=52.5&lon=-1.5&radius=400
+  // Optional params: /api/ev-points?lat=52.5&lon=-1.5&radius=400&halfReports=90&halfDown=60
   const lat = Number(req.query.lat) || 52.5;
   const lon = Number(req.query.lon) || -1.5;
   const distKm = Math.min(Number(req.query.radius) || 400, 800);
+
+  const halfReports = Math.max(1, Number(req.query.halfReports) || 90); // days
+  const halfDown = Math.max(1, Number(req.query.halfDown) || 60);       // days
 
   // Ask OCM for GB points + include comments so we can score "reports"
   const url =
@@ -37,73 +50,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const r = await fetch(url, { headers } as any);
-    if (r.status === 429) {
-      return res.status(429).json({ error: "OpenChargeMap rate limit (429). Try again shortly." });
-    }
+    if (r.status === 429) return res.status(429).json({ error: "OpenChargeMap rate limit (429). Try again shortly." });
     if (!r.ok) throw new Error(`OCM ${r.status}`);
 
     const raw: OCM[] = await r.json();
 
-    // 1) precompute global max connectors for normalization
+    // Normalize connectors by global max
     let maxConnectors = 1;
     for (const s of raw) {
-      const connectors = s.Connections?.length ?? s.NumberOfPoints ?? 1;
-      if (connectors > maxConnectors) maxConnectors = connectors;
+      const c = s.Connections?.length ?? s.NumberOfPoints ?? 1;
+      if (c > maxConnectors) maxConnectors = c;
     }
 
-    // helper: recent (last 90 days)?
-    const isRecent = (iso?: string | null) => {
-      if (!iso) return false;
-      const d = new Date(iso).getTime();
-      if (Number.isNaN(d)) return false;
-      const ninetyDays = 90 * 24 * 60 * 60 * 1000;
-      return Date.now() - d <= ninetyDays;
-    };
-
-    // 2) map to points with weighted score
+    // Build points with time-decayed scoring
     const points = raw
       .map((site) => {
         const la = site.AddressInfo?.Latitude;
         const ln = site.AddressInfo?.Longitude;
         if (typeof la !== "number" || typeof ln !== "number") return null;
 
-        // connectors (normalized)
+        // CONNECTORS (normalized 0..1)
         const connectors = site.Connections?.length ?? site.NumberOfPoints ?? 1;
         const connectorsScore = clamp01(connectors / maxConnectors);
 
-        // reports: count low-rated or unrated comments (cap at 8)
+        // REPORTS (time-decayed)
+        // Treat comments with Rating <=3 (or missing rating) as issues.
+        // Each issue contributes expDecay(ageDays, halfReports); cap overall at reference sum.
         const comments = site.UserComments ?? [];
-        const issueCount = comments.reduce((acc, c) => {
-          const rating = c?.Rating ?? 0;                 // treat missing rating as issue
-          return acc + (rating <= 3 ? 1 : 0);
-        }, 0);
-        // small boost if any recent issue reported
-        const recentBoost = comments.some(c => isRecent(c.DateCreated)) ? 0.15 : 0;
-        const reportsScore = clamp01(issueCount / 8 + recentBoost);
+        const refSum = 5; // ~ five recent issues saturate the score
+        let sum = 0;
+        for (const c of comments) {
+          const rating = c?.Rating ?? 0;
+          if (rating <= 3) {
+            const age = daysSince(c?.DateCreated) ?? 3650; // if unknown → very old
+            sum += expDecay(age, halfReports);
+          }
+        }
+        const reportsScore = clamp01(sum / refSum);
 
-        // downtime: non-operational ⇒ high, operational ⇒ low
+        // DOWNTIME (time-decayed from last status update if non-operational)
         const isUp = site.StatusType?.IsOperational === true;
-        const downtimeScore = isUp ? 0.1 : 1.0;
+        let downtimeScore = 0.05; // tiny baseline when operational
+        if (!isUp) {
+          const age = daysSince(site.DateLastStatusUpdate);
+          // if we know it was recently non-operational → close to 1; if long ago → fades
+          downtimeScore = age == null ? 0.8 : clamp01(expDecay(age, halfDown));
+          // never let a known-down site drop below a small floor
+          downtimeScore = Math.max(downtimeScore, 0.25);
+        }
 
-        // final weighted score (0..1)
+        // FINAL 0..1
         const value01 =
           WEIGHTS.reports    * reportsScore +
           WEIGHTS.downtime   * downtimeScore +
           WEIGHTS.connectors * connectorsScore;
 
-        // keep a little floor so markers are plottable
         const value = clamp01(value01) || 0.01;
 
-        // round a bit to shrink payload
-        const round = (n: number, dp = 5) => Math.round(n * 10 ** dp) / 10 ** dp;
-        return { lat: round(la), lng: round(ln), value: Number(value.toFixed(3)) };
-      })
-      .filter(Boolean) as Array<{ lat: number; lng: number; value: number }>;
-
-    // Cache at the edge for 1 hour; allow stale for a day
-    res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
-    return res.status(200).json(points);
-  } catch (e: any) {
-    return res.status(500).json({ error: e?.message ?? "Failed to fetch OCM" });
-  }
-}
+        // round to trim payload
+        const round = (n: number, dp = 5) => Math.round(n * 10 ** dp) / 10 ** dp*
