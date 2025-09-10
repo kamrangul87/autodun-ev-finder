@@ -137,10 +137,13 @@ export default function HeatmapWithScaling({
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
-  const heatData = useMemo(
-    () => points.map((p, i) => [p.lat, p.lng, scaled[i] ?? 0] as [number, number, number]),
-    [points, scaled]
-  );
+  const heatData = useMemo(() => {
+  const gamma = 0.65; // < 1 brightens; > 1 darkens
+  return points.map((p, i) => {
+    const w = Math.pow(scaled[i] ?? 0, gamma);
+    return [p.lat, p.lng, w] as [number, number, number];
+  });
+}, [points, scaled]);
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
