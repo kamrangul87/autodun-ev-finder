@@ -2,12 +2,13 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
-import L from "leaflet"; // NOTE: no direct import of "leaflet.heat" here
+import L from "leaflet"; // do not import 'leaflet.heat' here; we load it dynamically
 
 type Point = { lat: number; lng: number; value: number };
 
-// -----  A. SCALING HELPERS  -----
+// ---------------- A) SCALING HELPERS ----------------
 function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+
 function quantile(arr: number[], q: number) {
   if (arr.length === 0) return 0;
   const a = [...arr].sort((x, y) => x - y);
@@ -17,23 +18,31 @@ function quantile(arr: number[], q: number) {
   if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
   return a[base];
 }
+
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
-  if (values.length === 0) return { scaled: [], domain: [0, 1] as [number, number] };
+  if (values.length === 0) return { scaled: [] as number[], domain: [0, 1] as [number, number] };
+
   if (method === "robust") {
-    const p10 = quantile(values, 0.10); const p90 = quantile(values, 0.90);
+    const p10 = quantile(values, 0.10);
+    const p90 = quantile(values, 0.90);
     const denom = p90 - p10 || 1;
     return { scaled: values.map(v => clamp01((v - p10) / denom)), domain: [p10, p90] as [number, number] };
   }
+
   if (method === "log") {
-    const max = Math.max(...values); const denom = Math.log1p(max) || 1;
+    const max = Math.max(...values, 0);
+    const denom = Math.log1p(max) || 1;
     return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / denom)), domain: [0, max] as [number, number] };
   }
-  const min = Math.min(...values); const max = Math.max(...values); const denom = max - min || 1;
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const denom = max - min || 1;
   return { scaled: values.map(v => clamp01((v - min) / denom)), domain: [min, max] as [number, number] };
 }
 
-// -----  B. GRADIENTS  -----
+// ---------------- B) GRADIENTS ----------------
 type GradientName = "viridis" | "turbo" | "fire" | "blueRed";
 function gradientStops(name: GradientName) {
   switch (name) {
@@ -44,26 +53,31 @@ function gradientStops(name: GradientName) {
   }
 }
 
-// -----  C. Dynamic radius by zoom  -----
+// ---------------- C) Dynamic radius by zoom ----------------
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      setRadius(Math.max(8, 60 - (z - 7) * 6));
+      const r = Math.max(8, 60 - (z - 7) * 6);
+      setRadius(r);
     };
-    map.on("zoomend", update); update();
+    map.on("zoomend", update);
+    update();
     return () => { map.off("zoomend", update); };
   }, [map, setRadius]);
   return null;
 }
 
-// -----  D. Leaflet Heat layer wrapper (loads plugin after mount) -----
+// ---------------- D) Heat layer wrapper (dynamic plugin) ----------------
 function HeatLayer({
   heatPoints, radius, blur, gradient, max
 }: {
-  heatPoints: [number, number, number][], radius: number, blur: number,
-  gradient: Record<number, string>, max: number
+  heatPoints: [number, number, number][],
+  radius: number,
+  blur: number,
+  gradient: Record<number, string>,
+  max: number
 }) {
   const map = useMap();
 
@@ -73,25 +87,34 @@ function HeatLayer({
 
     (async () => {
       try {
-        // Dynamically load the plugin in the browser
-        await import("leaflet.heat");
-        // @ts-ignore plugin attaches to L
-        if (mounted) {
-          layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
-          layer.addTo(map);
-        }
+        await import("leaflet.heat"); // attach plugin
+        if (!mounted) return;
+        layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
+        layer.addTo(map);
       } catch (e) {
         console.error("Failed to load leaflet.heat", e);
       }
     })();
 
     return () => { mounted = false; if (layer) map.removeLayer(layer); };
+  }, [map]);
+
+  // Update layer options/data on prop changes
+  useEffect(() => {
+    // Find the first heat layer on map and update it
+    // (Assumes only one heat layer in this component)
+    map.eachLayer((lyr: any) => {
+      if (lyr && typeof (lyr as any)._heat === "object") {
+        (lyr as any).setOptions({ radius, blur, max, gradient });
+        (lyr as any).setLatLngs(heatPoints.map(p => [p[0], p[1], p[2]]));
+      }
+    });
   }, [map, heatPoints, radius, blur, max, gradient]);
 
   return null;
 }
 
-// -----  E. MAIN  -----
+// ---------------- E) MAIN ----------------
 export default function HeatmapWithScaling({
   points,
   defaultScale = "robust",
@@ -102,12 +125,12 @@ export default function HeatmapWithScaling({
   palette?: GradientName;
 }) {
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(30);
-  const [blur, setBlur] = useState<number>(20);
+  const [radius, setRadius] = useState<number>(48); // stronger defaults so you see heat fast
+  const [blur, setBlur] = useState<number>(30);
 
   const center = points.length
     ? { lat: points[0].lat, lng: points[0].lng }
-    : { lat: 51.5074, lng: -0.1278 };
+    : { lat: 51.5074, lng: -0.1278 }; // London fallback
 
   const { scaled, domain } = useMemo(() => {
     const vals = points.map(p => p.value ?? 0);
@@ -121,9 +144,26 @@ export default function HeatmapWithScaling({
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
+  const controlsBox: React.CSSProperties = {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    background: "rgba(255,255,255,0.9)",
+    padding: 12,
+    borderRadius: 12,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+    fontSize: 14,
+    zIndex: 1000,
+  };
+
   return (
-    <div className="relative w-full h-[80vh]">
-      <MapContainer center={[center.lat, center.lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
+    <div className="relative w-full" style={{ height: "80vh", position: "relative" }}>
+      <MapContainer
+        center={[center.lat, center.lng]}
+        zoom={7}
+        scrollWheelZoom
+        style={{ height: "100%", width: "100%" }}
+      >
         <TileLayer
           attribution='&copy; OpenStreetMap'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -132,10 +172,10 @@ export default function HeatmapWithScaling({
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} max={1} gradient={gradient} />
       </MapContainer>
 
-      {/* Controls */}
-      <div className="absolute top-3 left-3 space-y-2 rounded-xl bg-white/90 shadow p-3 text-sm">
-        <div className="font-medium">Heatmap Settings</div>
-        <div className="flex items-center gap-2">
+      {/* Controls (always visible) */}
+      <div style={controlsBox}>
+        <div style={{ fontWeight: 600, marginBottom: 6 }}>Heatmap Settings</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label>Scale:</label>
           <select value={scaleMethod} onChange={e => setScaleMethod(e.target.value as ScaleMethod)}>
             <option value="robust">Robust (p10–p90)</option>
@@ -143,12 +183,12 @@ export default function HeatmapWithScaling({
             <option value="log">Log</option>
           </select>
         </div>
-        <div className="flex items-center gap-2">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
           <label>Radius:</label>
           <input type="range" min={8} max={60} value={radius} onChange={e => setRadius(+e.target.value)} />
           <span>{radius}px</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
           <label>Blur:</label>
           <input type="range" min={5} max={40} value={blur} onChange={e => setBlur(+e.target.value)} />
           <span>{blur}px</span>
@@ -161,18 +201,31 @@ export default function HeatmapWithScaling({
   );
 }
 
-// -----  F. LEGEND  -----
+// ---------------- F) LEGEND ----------------
 function Legend({ domain, palette }: { domain: [number, number]; palette: GradientName }) {
   const grad = gradientStops(palette);
   const gradientCSS = `linear-gradient(to right, ${Object.entries(grad)
     .map(([k, color]) => `${color} ${Number(k) * 100}%`)
     .join(", ")})`;
 
+  const legendBox: React.CSSProperties = {
+    position: "absolute",
+    bottom: 12,
+    left: 12,
+    background: "rgba(255,255,255,0.9)",
+    padding: 12,
+    borderRadius: 12,
+    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+    fontSize: 12,
+    zIndex: 1000,
+    width: 240,
+  };
+
   return (
-    <div className="absolute bottom-3 left-3 bg-white/90 rounded-xl shadow p-3 text-xs">
-      <div className="font-medium mb-1">Intensity</div>
-      <div style={{ width: 220, height: 10, background: gradientCSS, borderRadius: 6 }} />
-      <div className="flex justify-between mt-1">
+    <div style={legendBox}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>Intensity</div>
+      <div style={{ width: "100%", height: 10, background: gradientCSS, borderRadius: 6 }} />
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
         <span>{formatNumber(domain[0])}</span>
         <span>{formatNumber(domain[1])}</span>
       </div>
