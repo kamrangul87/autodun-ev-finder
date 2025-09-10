@@ -2,13 +2,13 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip } from "react-leaflet";
-import L from "leaflet"; // plugin is loaded dynamically
+import L from "leaflet";
 
-type Point = { lat: number; lng: number; value: number };
+type Breakdown = { reports: number; downtime: number; connectors: number };
+export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown };
 
-// ---------------- A) SCALING HELPERS ----------------
-function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-
+// ----- helpers -----
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 function quantile(arr: number[], q: number) {
   if (arr.length === 0) return 0;
   const a = [...arr].sort((x, y) => x - y);
@@ -22,27 +22,21 @@ function quantile(arr: number[], q: number) {
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [] as number[], domain: [0, 1] as [number, number] };
-
   if (method === "robust") {
-    const p10 = quantile(values, 0.10);
-    const p90 = quantile(values, 0.90);
-    const denom = p90 - p10 || 1;
-    return { scaled: values.map(v => clamp01((v - p10) / denom)), domain: [p10, p90] as [number, number] };
+    const p10 = quantile(values, 0.10), p90 = quantile(values, 0.90);
+    const d = p90 - p10 || 1;
+    return { scaled: values.map(v => clamp01((v - p10) / d)), domain: [p10, p90] as [number, number] };
   }
-
   if (method === "log") {
     const max = Math.max(...values, 0);
-    const denom = Math.log1p(max) || 1;
-    return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / denom)), domain: [0, max] as [number, number] };
+    const d = Math.log1p(max) || 1;
+    return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / d)), domain: [0, max] as [number, number] };
   }
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const denom = max - min || 1;
-  return { scaled: values.map(v => clamp01((v - min) / denom)), domain: [min, max] as [number, number] };
+  const min = Math.min(...values), max = Math.max(...values), d = max - min || 1;
+  return { scaled: values.map(v => clamp01((v - min) / d)), domain: [min, max] as [number, number] };
 }
 
-// ---------------- B) GRADIENTS ----------------
+// ----- gradients -----
 type GradientName = "viridis" | "turbo" | "fire" | "blueRed";
 function gradientStops(name: GradientName) {
   switch (name) {
@@ -53,91 +47,64 @@ function gradientStops(name: GradientName) {
   }
 }
 
-// ---------------- C) Dynamic radius by zoom (stable when zooming) ----------------
+// ----- dynamic radius -----
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      // keep a decent minimum so zoomed-in heat doesn’t vanish
-      const r = Math.max(20, 40 - (z - 7) * 4);
+      const r = Math.max(20, 40 - (z - 7) * 4); // stable when zooming
       setRadius(r);
     };
-    map.on("zoomend", update);
-    update();
+    map.on("zoomend", update); update();
     return () => { map.off("zoomend", update); };
   }, [map, setRadius]);
   return null;
 }
 
-// ---- Fit the map to the loaded points (run only once) ----
+// ---- fit bounds once ----
 function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] }) {
   const map = useMap();
   const didFit = React.useRef(false);
-
   useEffect(() => {
     if (didFit.current || !heatPoints || heatPoints.length === 0) return;
-    const latLngs = heatPoints.map(([lat, lng]) => L.latLng(lat, lng));
-    const bounds = L.latLngBounds(latLngs);
+    const bounds = L.latLngBounds(heatPoints.map(([la, ln]) => L.latLng(la, ln)));
     map.fitBounds(bounds, { padding: [40, 40] });
     didFit.current = true;
   }, [map, heatPoints]);
-
   return null;
 }
 
-// ---------------- D) Heat layer wrapper (no viewport filtering) ----------------
+// ----- heat layer -----
 function HeatLayer({
   heatPoints, radius, blur, gradient
 }: {
   heatPoints: [number, number, number][],
-  radius: number,
-  blur: number,
-  gradient: Record<number, string>,
+  radius: number, blur: number, gradient: Record<number, string>,
 }) {
   const map = useMap();
   const layerRef = React.useRef<any>(null);
 
-  // mount once
   useEffect(() => {
     let mounted = true;
-
     (async () => {
       try {
-        await import("leaflet.heat");
+        await import("leaflet.heat"); // plugin
         if (!mounted) return;
         layerRef.current = (L as any).heatLayer(heatPoints, {
-          radius,
-          blur,
-          max: 1.0,          // allow strong peaks
-          gradient,
-          minOpacity: 0.20   // keep visible at zoom
+          radius, blur, max: 1.0, gradient, minOpacity: 0.20
         });
         layerRef.current.addTo(map).bringToFront();
       } catch (e) {
         console.error("Failed to load leaflet.heat", e);
       }
     })();
-
-    return () => {
-      mounted = false;
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
-      }
-    };
+    return () => { mounted = false; if (layerRef.current) map.removeLayer(layerRef.current); };
   }, [map]);
 
-  // update on changes (always use all points)
   useEffect(() => {
     if (!layerRef.current) return;
-    layerRef.current.setOptions({
-      radius,
-      blur,
-      max: 1.0,
-      gradient,
-      minOpacity: 0.20
-    });
+    layerRef.current.setOptions({ radius, blur, max: 1.0, gradient, minOpacity: 0.20 });
     layerRef.current.setLatLngs(heatPoints);
     layerRef.current.redraw();
   }, [heatPoints, radius, blur, gradient]);
@@ -145,35 +112,26 @@ function HeatLayer({
   return null;
 }
 
-// ---------------- E) HOTSPOTS OVERLAY (top ~3% in view) ----------------
+// ----- hotspots overlay (top ~3% in view; sized by score; breakdown tooltip) -----
 function HotspotsOverlay({ points }: { points: Point[] }) {
   const map = useMap();
   const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
 
-  // track current map view
   useEffect(() => {
     const update = () => setBounds(map.getBounds());
-    update();
-    map.on("moveend", update);
-    map.on("zoomend", update);
-    return () => {
-      map.off("moveend", update);
-      map.off("zoomend", update);
-    };
+    update(); map.on("moveend", update); map.on("zoomend", update);
+    return () => { map.off("moveend", update); map.off("zoomend", update); };
   }, [map]);
 
   const topPoints = useMemo(() => {
-    const inView = bounds
-      ? points.filter(p => bounds.contains(L.latLng(p.lat, p.lng)))
-      : points;
-
+    const inView = bounds ? points.filter(p => bounds.contains(L.latLng(p.lat, p.lng))) : points;
     if (inView.length === 0) return [];
-
     const values = inView.map(p => p.value);
     const threshold = quantile(values, 0.97); // top 3%
-    // cap to avoid too many markers
     return inView.filter(p => p.value >= threshold).slice(0, 60);
   }, [bounds, points]);
+
+  const dotSize = (v: number) => 6 + Math.round(v * 10); // 6..16px
 
   return (
     <>
@@ -181,13 +139,20 @@ function HotspotsOverlay({ points }: { points: Point[] }) {
         <CircleMarker
           key={`${p.lat}-${p.lng}-${i}`}
           center={[p.lat, p.lng]}
-          radius={8}
-          pathOptions={{ color: "#ff3b3b", weight: 2, fillOpacity: 0.6 }}
+          radius={dotSize(p.value)}
+          pathOptions={{ color: "#ff3b3b", weight: 2, fillOpacity: 0.65 }}
         >
           <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
-            <div style={{ fontSize: 12 }}>
+            <div style={{ fontSize: 12, lineHeight: 1.2 }}>
               <div><b>Hotspot</b></div>
               <div>Score: {p.value.toFixed(2)}</div>
+              {p.breakdown && (
+                <div style={{ marginTop: 4, opacity: 0.9 }}>
+                  <div>Reports: {(p.breakdown.reports * 100).toFixed(0)}%</div>
+                  <div>Downtime: {(p.breakdown.downtime * 100).toFixed(0)}%</div>
+                  <div>Connectors: {(p.breakdown.connectors * 100).toFixed(0)}%</div>
+                </div>
+              )}
             </div>
           </Tooltip>
         </CircleMarker>
@@ -196,75 +161,47 @@ function HotspotsOverlay({ points }: { points: Point[] }) {
   );
 }
 
-// ---------------- F) MAIN ----------------
+// ----- main -----
 export default function HeatmapWithScaling({
-  points,
-  defaultScale = "robust",
-  palette = "fire",
-}: {
-  points: Point[];
-  defaultScale?: ScaleMethod;
-  palette?: GradientName;
-}) {
+  points, defaultScale = "robust", palette = "fire",
+}: { points: Point[]; defaultScale?: ScaleMethod; palette?: GradientName }) {
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(60); // initial; DynamicRadius will adjust
+  const [radius, setRadius] = useState<number>(60);
   const [blur, setBlur] = useState<number>(35);
 
-  const center = points.length
-    ? { lat: points[0].lat, lng: points[0].lng }
-    : { lat: 51.5074, lng: -0.1278 };
+  const center = points.length ? { lat: points[0].lat, lng: points[0].lng } : { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
     const vals = points.map(p => p.value ?? 0);
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
-  // Bright peaks + low baseline to avoid blanket
   const heatData = useMemo(() => {
-    const gamma = 0.55;     // < 1 = brighter highlights
-    const baseline = 0.05;  // lower floor so weak areas fade out
+    const gamma = 0.55, baseline = 0.05; // bright peaks, low blanket
     return points.map((p, i) => {
       const s = scaled[i] ?? 0;
-      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.05..1
+      const w = baseline + (1 - baseline) * Math.pow(s, gamma);
       return [p.lat, p.lng, w] as [number, number, number];
     });
   }, [points, scaled]);
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
-  const controlsBox: React.CSSProperties = {
-    position: "absolute",
-    top: 12,
-    left: 12,
-    background: "rgba(255,255,255,0.9)",
-    padding: 12,
-    borderRadius: 12,
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-    fontSize: 14,
-    zIndex: 1000,
-  };
-
   return (
     <div className="relative w-full" style={{ height: "80vh", position: "relative" }}>
-      <MapContainer
-        center={[center.lat, center.lng]}
-        zoom={7}
-        scrollWheelZoom
-        style={{ height: "100%", width: "100%" }}
-      >
-        <TileLayer
-          attribution='&copy; OpenStreetMap'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+      <MapContainer center={[center.lat, center.lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
+        <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <DynamicRadius setRadius={setRadius} />
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
-        {/* Hotspots on top of the heat */}
         <HotspotsOverlay points={points} />
       </MapContainer>
 
       {/* Controls */}
-      <div style={controlsBox}>
+      <div style={{
+        position: "absolute", top: 12, left: 12, background: "rgba(255,255,255,0.9)",
+        padding: 12, borderRadius: 12, boxShadow: "0 2px 10px rgba(0,0,0,0.1)", fontSize: 14, zIndex: 1000,
+      }}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Heatmap Settings</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label>Scale:</label>
@@ -292,28 +229,17 @@ export default function HeatmapWithScaling({
   );
 }
 
-// ---------------- G) LEGEND ----------------
+// ----- legend -----
 function Legend({ domain, palette }: { domain: [number, number]; palette: GradientName }) {
   const grad = gradientStops(palette);
   const gradientCSS = `linear-gradient(to right, ${Object.entries(grad)
-    .map(([k, color]) => `${color} ${Number(k) * 100}%`)
-    .join(", ")})`;
-
-  const legendBox: React.CSSProperties = {
-    position: "absolute",
-    bottom: 12,
-    left: 12,
-    background: "rgba(255,255,255,0.9)",
-    padding: 12,
-    borderRadius: 12,
-    boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-    fontSize: 12,
-    zIndex: 1000,
-    width: 240,
-  };
+    .map(([k, color]) => `${color} ${Number(k) * 100}%`).join(", ")})`;
 
   return (
-    <div style={legendBox}>
+    <div style={{
+      position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.9)",
+      padding: 12, borderRadius: 12, boxShadow: "0 2px 10px rgba(0,0,0,0.1)", fontSize: 12, zIndex: 1000, width: 240,
+    }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Intensity</div>
       <div style={{ width: "100%", height: 10, background: gradientCSS, borderRadius: 6 }} />
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
@@ -326,7 +252,6 @@ function Legend({ domain, palette }: { domain: [number, number]; palette: Gradie
     </div>
   );
 }
-
 function formatNumber(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   if (n >= 100) return n.toFixed(0);
