@@ -108,4 +108,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const value = clamp01(value01) || 0.01;
 
         // round to trim payload
-        const round = (n: number, dp = 5) => Math.round(n * 10 ** dp) / 10 ** dp*
+        const round = (n: number, dp = 5) => Math.round(n * 10 ** dp) / 10 ** dp;
+        return { lat: round(la), lng: round(ln), value: Number(value.toFixed(3)) };
+      })
+      .filter(Boolean) as Array<{ lat: number; lng: number; value: number }>;
+
+    // Cache at the edge for 1 hour; allow stale for a day
+    res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
+    return res.status(200).json(points);
+  } catch (e: any) {
+    return res.status(500).json({ error: e?.message ?? "Failed to fetch OCM" });
+  }
+}
