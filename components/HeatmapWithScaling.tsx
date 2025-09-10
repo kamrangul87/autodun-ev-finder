@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useEffect } from "react";
-import { MapContainer, TileLayer, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip } from "react-leaflet";
 import L from "leaflet"; // plugin is loaded dynamically
 
 type Point = { lat: number; lng: number; value: number };
@@ -53,13 +53,13 @@ function gradientStops(name: GradientName) {
   }
 }
 
-// ---------------- C) Dynamic radius by zoom (keep a bigger minimum) ----------------
+// ---------------- C) Dynamic radius by zoom (stable when zooming) ----------------
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      // smaller than before, but never below 20px so zoomed-in heat stays visible
+      // keep a decent minimum so zoomed-in heat doesn’t vanish
       const r = Math.max(20, 40 - (z - 7) * 4);
       setRadius(r);
     };
@@ -111,7 +111,7 @@ function HeatLayer({
           blur,
           max: 1.0,          // allow strong peaks
           gradient,
-          minOpacity: 0.20   // a bit higher so zoomed-in areas don’t vanish
+          minOpacity: 0.20   // keep visible at zoom
         });
         layerRef.current.addTo(map).bringToFront();
       } catch (e) {
@@ -128,7 +128,7 @@ function HeatLayer({
     };
   }, [map]);
 
-  // update on changes (always use all points — no viewport filtering)
+  // update on changes (always use all points)
   useEffect(() => {
     if (!layerRef.current) return;
     layerRef.current.setOptions({
@@ -145,7 +145,58 @@ function HeatLayer({
   return null;
 }
 
-// ---------------- E) MAIN ----------------
+// ---------------- E) HOTSPOTS OVERLAY (top ~3% in view) ----------------
+function HotspotsOverlay({ points }: { points: Point[] }) {
+  const map = useMap();
+  const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
+
+  // track current map view
+  useEffect(() => {
+    const update = () => setBounds(map.getBounds());
+    update();
+    map.on("moveend", update);
+    map.on("zoomend", update);
+    return () => {
+      map.off("moveend", update);
+      map.off("zoomend", update);
+    };
+  }, [map]);
+
+  const topPoints = useMemo(() => {
+    const inView = bounds
+      ? points.filter(p => bounds.contains(L.latLng(p.lat, p.lng)))
+      : points;
+
+    if (inView.length === 0) return [];
+
+    const values = inView.map(p => p.value);
+    const threshold = quantile(values, 0.97); // top 3%
+    // cap to avoid too many markers
+    return inView.filter(p => p.value >= threshold).slice(0, 60);
+  }, [bounds, points]);
+
+  return (
+    <>
+      {topPoints.map((p, i) => (
+        <CircleMarker
+          key={`${p.lat}-${p.lng}-${i}`}
+          center={[p.lat, p.lng]}
+          radius={8}
+          pathOptions={{ color: "#ff3b3b", weight: 2, fillOpacity: 0.6 }}
+        >
+          <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
+            <div style={{ fontSize: 12 }}>
+              <div><b>Hotspot</b></div>
+              <div>Score: {p.value.toFixed(2)}</div>
+            </div>
+          </Tooltip>
+        </CircleMarker>
+      ))}
+    </>
+  );
+}
+
+// ---------------- F) MAIN ----------------
 export default function HeatmapWithScaling({
   points,
   defaultScale = "robust",
@@ -168,7 +219,7 @@ export default function HeatmapWithScaling({
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
-  // Brighter peaks + low baseline to avoid blanket
+  // Bright peaks + low baseline to avoid blanket
   const heatData = useMemo(() => {
     const gamma = 0.55;     // < 1 = brighter highlights
     const baseline = 0.05;  // lower floor so weak areas fade out
@@ -208,6 +259,8 @@ export default function HeatmapWithScaling({
         <DynamicRadius setRadius={setRadius} />
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
+        {/* Hotspots on top of the heat */}
+        <HotspotsOverlay points={points} />
       </MapContainer>
 
       {/* Controls */}
@@ -239,7 +292,7 @@ export default function HeatmapWithScaling({
   );
 }
 
-// ---------------- F) LEGEND ----------------
+// ---------------- G) LEGEND ----------------
 function Legend({ domain, palette }: { domain: [number, number]; palette: GradientName }) {
   const grad = gradientStops(palette);
   const gradientCSS = `linear-gradient(to right, ${Object.entries(grad)
@@ -266,6 +319,9 @@ function Legend({ domain, palette }: { domain: [number, number]; palette: Gradie
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 6 }}>
         <span>{formatNumber(domain[0])}</span>
         <span>{formatNumber(domain[1])}</span>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 11, opacity: 0.8 }}>
+        Red circles = top ~3% hotspots in view
       </div>
     </div>
   );
