@@ -53,13 +53,13 @@ function gradientStops(name: GradientName) {
   }
 }
 
-// ---------------- C) Dynamic radius by zoom ----------------
+// ---------------- C) Dynamic radius by zoom (tighter) ----------------
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      const r = Math.max(8, 60 - (z - 7) * 6);
+      const r = Math.max(6, 44 - (z - 7) * 5); // smaller kernel → crisper blobs
       setRadius(r);
     };
     map.on("zoomend", update);
@@ -108,9 +108,9 @@ function HeatLayer({
         layerRef.current = (L as any).heatLayer(heatPoints, {
           radius,
           blur,
-          max: 0.6,          // lower max = hotter look
+          max: 1.0,          // allow strong peaks without blanket
           gradient,
-          minOpacity: 0.35   // make faint areas visible
+          minOpacity: 0.15   // faint areas much lighter
         });
         layerRef.current.addTo(map).bringToFront();
       } catch (e) {
@@ -127,20 +127,36 @@ function HeatLayer({
     };
   }, [map]);
 
-  // update on changes
+  // helper to (re)apply data/options, filtered to current view
+  const applyUpdate = React.useCallback(() => {
+    if (!layerRef.current) return;
+    const bounds = map.getBounds();
+    const visible = heatPoints.filter(([lat, lng]) => bounds.contains(L.latLng(lat, lng)));
+
+    layerRef.current.setOptions({
+      radius,
+      blur,
+      max: 1.0,
+      gradient,
+      minOpacity: 0.15
+    });
+    layerRef.current.setLatLngs((visible.length ? visible : heatPoints).map(p => [p[0], p[1], p[2]]));
+    layerRef.current.redraw();
+  }, [map, heatPoints, radius, blur, gradient]);
+
+  // update when props change
+  useEffect(() => { applyUpdate(); }, [applyUpdate]);
+
+  // update when map moves/zooms
   useEffect(() => {
-    if (layerRef.current) {
-      layerRef.current.setOptions({
-        radius,
-        blur,
-        max: 0.6,
-        gradient,
-        minOpacity: 0.35
-      });
-      layerRef.current.setLatLngs(heatPoints.map(p => [p[0], p[1], p[2]]));
-      layerRef.current.redraw();
-    }
-  }, [heatPoints, radius, blur, gradient]);
+    const handler = () => applyUpdate();
+    map.on("moveend", handler);
+    map.on("zoomend", handler);
+    return () => {
+      map.off("moveend", handler);
+      map.off("zoomend", handler);
+    };
+  }, [map, applyUpdate]);
 
   return null;
 }
@@ -156,8 +172,8 @@ export default function HeatmapWithScaling({
   palette?: GradientName;
 }) {
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(60); // stronger defaults
-  const [blur, setBlur] = useState<number>(35);     // stronger defaults
+  const [radius, setRadius] = useState<number>(60); // initial; DynamicRadius will adjust
+  const [blur, setBlur] = useState<number>(35);
 
   const center = points.length
     ? { lat: points[0].lat, lng: points[0].lng }
@@ -168,13 +184,13 @@ export default function HeatmapWithScaling({
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
-  // brighten intensities a bit and ensure a visible baseline
+  // Brighter peaks + low baseline to avoid blanket
   const heatData = useMemo(() => {
-    const gamma = 0.6;      // < 1 = brighter
-    const baseline = 0.25;  // ensures a visible minimum
+    const gamma = 0.55;     // < 1 = brighter highlights
+    const baseline = 0.08;  // lower floor so weak areas fade out
     return points.map((p, i) => {
       const s = scaled[i] ?? 0;
-      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.25..1
+      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.08..1
       return [p.lat, p.lng, w] as [number, number, number];
     });
   }, [points, scaled]);
@@ -223,7 +239,7 @@ export default function HeatmapWithScaling({
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
           <label>Radius:</label>
-          <input type="range" min={8} max={60} value={radius} onChange={e => setRadius(+e.target.value)} />
+          <input type="range" min={6} max={60} value={radius} onChange={e => setRadius(+e.target.value)} />
           <span>{radius}px</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
