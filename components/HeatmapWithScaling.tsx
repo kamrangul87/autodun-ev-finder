@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
-import L from "leaflet"; // do not import 'leaflet.heat' here; we load it dynamically
+import L from "leaflet"; // plugin is loaded dynamically
 
 type Point = { lat: number; lng: number; value: number };
 
@@ -69,15 +69,30 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   return null;
 }
 
+// ---- Fit the map to the loaded points (run only once) ----
+function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] }) {
+  const map = useMap();
+  const didFit = React.useRef(false);
+
+  useEffect(() => {
+    if (didFit.current || !heatPoints || heatPoints.length === 0) return;
+    const latLngs = heatPoints.map(([lat, lng]) => L.latLng(lat, lng));
+    const bounds = L.latLngBounds(latLngs);
+    map.fitBounds(bounds, { padding: [40, 40] });
+    didFit.current = true; // don’t fight user after first fit
+  }, [map, heatPoints]);
+
+  return null;
+}
+
 // ---------------- D) Heat layer wrapper (dynamic plugin) ----------------
 function HeatLayer({
-  heatPoints, radius, blur, gradient, max
+  heatPoints, radius, blur, gradient
 }: {
   heatPoints: [number, number, number][],
   radius: number,
   blur: number,
   gradient: Record<number, string>,
-  max: number
 }) {
   const map = useMap();
   const layerRef = React.useRef<any>(null);
@@ -93,9 +108,9 @@ function HeatLayer({
         layerRef.current = (L as any).heatLayer(heatPoints, {
           radius,
           blur,
-          max: 0.6,            // ← lower max = hotter look
+          max: 0.6,          // lower max = hotter look
           gradient,
-          minOpacity: 0.35     // ← make faint areas visible
+          minOpacity: 0.35   // make faint areas visible
         });
         layerRef.current.addTo(map).bringToFront();
       } catch (e) {
@@ -118,7 +133,7 @@ function HeatLayer({
       layerRef.current.setOptions({
         radius,
         blur,
-        max: 0.6,            // keep in sync with above
+        max: 0.6,
         gradient,
         minOpacity: 0.35
       });
@@ -126,20 +141,6 @@ function HeatLayer({
       layerRef.current.redraw();
     }
   }, [heatPoints, radius, blur, gradient]);
-
-  return null;
-}
-function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] }) {
-  const map = useMap();
-  const didFit = React.useRef(false);
-
-  useEffect(() => {
-    if (didFit.current || heatPoints.length === 0) return;
-    const latLngs = heatPoints.map(([lat, lng]) => L.latLng(lat, lng));
-    const bounds = L.latLngBounds(latLngs);
-    map.fitBounds(bounds, { padding: [40, 40] });
-    didFit.current = true;
-  }, [map, heatPoints]);
 
   return null;
 }
@@ -155,8 +156,8 @@ export default function HeatmapWithScaling({
   palette?: GradientName;
 }) {
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(60); // stronger defaults;
-  const [blur, setBlur] = useState<number>(35);     // stronger defaults;
+  const [radius, setRadius] = useState<number>(60); // stronger defaults
+  const [blur, setBlur] = useState<number>(35);     // stronger defaults
 
   const center = points.length
     ? { lat: points[0].lat, lng: points[0].lng }
@@ -167,13 +168,16 @@ export default function HeatmapWithScaling({
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
+  // brighten intensities a bit and ensure a visible baseline
   const heatData = useMemo(() => {
-  const gamma = 0.65; // < 1 brightens; > 1 darkens
-  return points.map((p, i) => {
-    const w = Math.pow(scaled[i] ?? 0, gamma);
-    return [p.lat, p.lng, w] as [number, number, number];
-  });
-}, [points, scaled]);
+    const gamma = 0.6;      // < 1 = brighter
+    const baseline = 0.25;  // ensures a visible minimum
+    return points.map((p, i) => {
+      const s = scaled[i] ?? 0;
+      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.25..1
+      return [p.lat, p.lng, w] as [number, number, number];
+    });
+  }, [points, scaled]);
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
@@ -202,7 +206,8 @@ export default function HeatmapWithScaling({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <DynamicRadius setRadius={setRadius} />
-        <HeatLayer heatPoints={heatData} radius={radius} blur={blur} max={1} gradient={gradient} />
+        <FitBoundsOnce heatPoints={heatData} />
+        <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
       </MapContainer>
 
       {/* Controls (always visible) */}
