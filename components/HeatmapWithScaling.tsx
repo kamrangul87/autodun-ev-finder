@@ -80,36 +80,52 @@ function HeatLayer({
   max: number
 }) {
   const map = useMap();
+  const layerRef = React.useRef<any>(null);
 
+  // mount once
   useEffect(() => {
-    let layer: any;
     let mounted = true;
 
     (async () => {
       try {
-        await import("leaflet.heat"); // attach plugin
+        await import("leaflet.heat");
         if (!mounted) return;
-        layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
-        layer.addTo(map);
+        layerRef.current = (L as any).heatLayer(heatPoints, {
+          radius,
+          blur,
+          max: 0.6,            // ← lower max = hotter look
+          gradient,
+          minOpacity: 0.35     // ← make faint areas visible
+        });
+        layerRef.current.addTo(map).bringToFront();
       } catch (e) {
         console.error("Failed to load leaflet.heat", e);
       }
     })();
 
-    return () => { mounted = false; if (layer) map.removeLayer(layer); };
+    return () => {
+      mounted = false;
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+    };
   }, [map]);
 
-  // Update layer options/data on prop changes
+  // update on changes
   useEffect(() => {
-    // Find the first heat layer on map and update it
-    // (Assumes only one heat layer in this component)
-    map.eachLayer((lyr: any) => {
-      if (lyr && typeof (lyr as any)._heat === "object") {
-        (lyr as any).setOptions({ radius, blur, max, gradient });
-        (lyr as any).setLatLngs(heatPoints.map(p => [p[0], p[1], p[2]]));
-      }
-    });
-  }, [map, heatPoints, radius, blur, max, gradient]);
+    if (layerRef.current) {
+      layerRef.current.setOptions({
+        radius,
+        blur,
+        max: 0.6,            // keep in sync with above
+        gradient,
+        minOpacity: 0.35
+      });
+      layerRef.current.setLatLngs(heatPoints.map(p => [p[0], p[1], p[2]]));
+      layerRef.current.redraw();
+    }
+  }, [heatPoints, radius, blur, gradient]);
 
   return null;
 }
