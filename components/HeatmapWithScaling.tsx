@@ -6,15 +6,16 @@ import L from "leaflet";
 
 // ---------- Types ----------
 export type Breakdown = { reports: number; downtime: number; connectors: number };
-export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown };
+export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number };
 type Meta = { halfReports: number; halfDown: number };
+type Filters = { operator?: string; dcOnly?: boolean; minKW?: number };
+type UI = { scale: ScaleMethod; radius: number; blur: number };
 
 // ---------- Constants ----------
-const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 }; // must match API
+const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
 
-// ---------- Small helpers ----------
+// ---------- Helpers ----------
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
-
 function quantile(arr: number[], q: number) {
   if (arr.length === 0) return 0;
   const a = [...arr].sort((x, y) => x - y);
@@ -24,15 +25,12 @@ function quantile(arr: number[], q: number) {
   if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
   return a[base];
 }
-
-// Weighted shares that sum to 100 using largest-remainder method
 function weightedShares(b?: Breakdown) {
   if (!b) return { reports: 0, downtime: 0, connectors: 0 };
   const cRep = b.reports * WEIGHTS.reports;
   const cDown = b.downtime * WEIGHTS.downtime;
   const cConn = b.connectors * WEIGHTS.connectors;
   const total = cRep + cDown + cConn;
-
   if (total <= 1e-9) return { reports: 0, downtime: 0, connectors: 0 };
 
   const raw = [
@@ -40,12 +38,10 @@ function weightedShares(b?: Breakdown) {
     { k: "downtime", v: (cDown / total) * 100 },
     { k: "connectors", v: (cConn / total) * 100 },
   ];
-
   const floored = raw.map(r => ({ ...r, f: Math.floor(r.v), frac: r.v - Math.floor(r.v) }));
   let rem = 100 - floored.reduce((s, r) => s + r.f, 0);
   floored.sort((a, b) => b.frac - a.frac);
   for (let i = 0; i < floored.length && rem > 0; i++, rem--) floored[i].f += 1;
-
   const m: Record<string, number> = Object.create(null);
   floored.forEach(r => (m[r.k] = r.f));
   return { reports: m.reports, downtime: m.downtime, connectors: m.connectors };
@@ -55,19 +51,16 @@ function weightedShares(b?: Breakdown) {
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [] as number[], domain: [0, 1] as [number, number] };
-
   if (method === "robust") {
     const p10 = quantile(values, 0.10), p90 = quantile(values, 0.90);
     const d = p90 - p10 || 1;
     return { scaled: values.map(v => clamp01((v - p10) / d)), domain: [p10, p90] as [number, number] };
   }
-
   if (method === "log") {
     const max = Math.max(...values, 0);
     const d = Math.log1p(max) || 1;
     return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / d)), domain: [0, max] as [number, number] };
   }
-
   const min = Math.min(...values), max = Math.max(...values), d = max - min || 1;
   return { scaled: values.map(v => clamp01((v - min) / d)), domain: [min, max] as [number, number] };
 }
@@ -96,7 +89,7 @@ function useIsSmall() {
   return small;
 }
 
-// ---------- Dynamic radius (stable when zooming) ----------
+// ---------- Dynamic radius ----------
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
@@ -108,6 +101,19 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
     map.on("zoomend", update); update();
     return () => { map.off("zoomend", update); };
   }, [map, setRadius]);
+  return null;
+}
+
+// ---------- Report viewport up ----------
+function ViewportReporter({ onChange }: { onChange: (center: [number, number], zoom: number) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    const send = () => {
+      const c = map.getCenter(); onChange([c.lat, c.lng], map.getZoom());
+    };
+    send(); map.on("moveend", send); map.on("zoomend", send);
+    return () => { map.off("moveend", send); map.off("zoomend", send); };
+  }, [map, onChange]);
   return null;
 }
 
@@ -124,7 +130,7 @@ function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] 
   return null;
 }
 
-// ---------- Heat layer (leaflet.heat) ----------
+// ---------- Heat layer ----------
 function HeatLayer({
   heatPoints, radius, blur, gradient
 }: {
@@ -161,7 +167,7 @@ function HeatLayer({
   return null;
 }
 
-// ---------- Hotspots (top ~3% in view, sized by score, clickable highlight) ----------
+// ---------- Hotspots ----------
 function HotspotsOverlay({
   points, onSelect, selected, onTopChange
 }: {
@@ -187,11 +193,9 @@ function HotspotsOverlay({
     return inView.filter(p => p.value >= threshold).slice(0, 60);
   }, [bounds, points]);
 
-  useEffect(() => {
-    onTopChange(topPoints);
-  }, [topPoints, onTopChange]);
+  useEffect(() => { onTopChange(topPoints); }, [topPoints, onTopChange]);
 
-  const dotSize = (v: number) => 6 + Math.round(v * 10); // 6..16px
+  const dotSize = (v: number) => 6 + Math.round(v * 10);
 
   return (
     <>
@@ -241,43 +245,71 @@ function HotspotsOverlay({
 }
 
 // ---------- Main ----------
+type Props = {
+  points: Point[];
+  defaultScale?: ScaleMethod;
+  palette?: GradientName;
+  meta?: Meta;
+  filters?: Filters;
+  initialUI?: UI;
+  onUIChange?: (ui: UI) => void;
+  onViewportChange?: (center: [number, number], zoom: number) => void;
+};
+
 export default function HeatmapWithScaling({
-  points, defaultScale = "robust", palette = "fire", meta
-}: { points: Point[]; defaultScale?: ScaleMethod; palette?: GradientName; meta?: Meta }) {
+  points, defaultScale = "robust", palette = "fire", meta,
+  filters, initialUI, onUIChange, onViewportChange
+}: Props) {
   const isSmall = useIsSmall();
 
-  const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(60);
-  const [blur, setBlur] = useState<number>(35);
+  const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(initialUI?.scale ?? defaultScale);
+  const [radius, setRadius] = useState<number>(initialUI?.radius ?? 60);
+  const [blur, setBlur] = useState<number>(initialUI?.blur ?? 35);
   const [selected, setSelected] = useState<Point | null>(null);
   const [topHotspots, setTopHotspots] = useState<Point[]>([]);
 
-  const center = points.length ? { lat: points[0].lat, lng: points[0].lng } : { lat: 51.5074, lng: -0.1278 };
+  // apply filters
+  const filtered = useMemo(() => {
+    const op = (filters?.operator || "any").toLowerCase();
+    const dcOnly = !!filters?.dcOnly;
+    const minKW = Math.max(0, filters?.minKW ?? 0);
+    return points.filter(p => {
+      if (dcOnly && !p.dc) return false;
+      if (minKW > 0 && (p.kw || 0) < minKW) return false;
+      if (op !== "any") {
+        const pop = (p.op || "unknown").toLowerCase();
+        if (pop !== op) return false;
+      }
+      return true;
+    });
+  }, [points, filters?.operator, filters?.dcOnly, filters?.minKW]);
+
+  const center = filtered.length ? { lat: filtered[0].lat, lng: filtered[0].lng } : { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
-    const vals = points.map(p => p.value ?? 0);
+    const vals = filtered.map(p => p.value ?? 0);
     return scale(vals, scaleMethod);
-  }, [points, scaleMethod]);
+  }, [filtered, scaleMethod]);
 
   const heatData = useMemo(() => {
     const gamma = 0.55, baseline = 0.05;
-    return points.map((p, i) => {
+    return filtered.map((p, i) => {
       const s = scaled[i] ?? 0;
       const w = baseline + (1 - baseline) * Math.pow(s, gamma);
       return [p.lat, p.lng, w] as [number, number, number];
     });
-  }, [points, scaled]);
+  }, [filtered, scaled]);
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
-  // UI boxes (responsive)
-  const boxPad = isSmall ? 8 : 12;
-  const boxRadius = isSmall ? 10 : 12;
-  const boxFont = isSmall ? 13 : 14;
+  // notify parent on UI change (for shareable URL)
+  useEffect(() => {
+    onUIChange?.({ scale: scaleMethod, radius, blur });
+  }, [scaleMethod, radius, blur, onUIChange]);
 
-  // ----- Export CSV -----
+  // Export CSV (top in view after filters)
   const exportCSV = React.useCallback(() => {
-    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw"];
+    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw", "operator", "dc", "max_kw"];
     const rows = topHotspots.map(h => {
       const shares = weightedShares(h.breakdown);
       const b = h.breakdown || { reports: 0, downtime: 0, connectors: 0 };
@@ -287,40 +319,36 @@ export default function HeatmapWithScaling({
         h.value.toFixed(3),
         shares.reports, shares.downtime, shares.connectors,
         b.reports.toFixed(3), b.downtime.toFixed(3), b.connectors.toFixed(3),
+        (h.op || "Unknown").replace(/,/g, " "),
+        h.dc ? "1" : "0",
+        String(h.kw ?? 0),
       ];
     });
 
-    const metaLine = `# halfReports=${meta?.halfReports ?? ""}, halfDown=${meta?.halfDown ?? ""}, scale=${scaleMethod}`;
-    const csv = [
-      metaLine,
-      headers.join(","),
-      ...rows.map(r => r.join(","))
-    ].join("\n");
+    const metaLine = `# halfReports=${meta?.halfReports ?? ""}, halfDown=${meta?.halfDown ?? ""}, scale=${scaleMethod}, radius=${radius}, blur=${blur}, filters=op:${filters?.operator||"any"};dc:${filters?.dcOnly?"1":"0"};minKW:${filters?.minKW ?? 0}`;
+    const csv = [metaLine, headers.join(","), ...rows.map(r => r.join(","))].join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "ev_hotspots.csv";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }, [topHotspots, meta?.halfDown, meta?.halfReports, scaleMethod]);
+    a.href = url; a.download = "ev_hotspots.csv";
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }, [topHotspots, meta?.halfDown, meta?.halfReports, scaleMethod, radius, blur, filters?.operator, filters?.dcOnly, filters?.minKW]);
+
+  // UI boxes (responsive)
+  const boxPad = isSmall ? 8 : 12;
+  const boxRadius = isSmall ? 10 : 12;
+  const boxFont = isSmall ? 13 : 14;
 
   return (
     <div className="relative w-full" style={{ height: "80vh", position: "relative" }}>
       <MapContainer center={[center.lat, center.lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
         <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        <ViewportReporter onChange={(c, z) => onViewportChange?.(c, z)} />
         <DynamicRadius setRadius={setRadius} />
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
-        <HotspotsOverlay
-          points={points}
-          onSelect={setSelected}
-          selected={selected}
-          onTopChange={setTopHotspots}
-        />
+        <HotspotsOverlay points={filtered} onSelect={setSelected} selected={selected} onTopChange={setTopHotspots} />
       </MapContainer>
 
       {/* Controls */}
@@ -351,16 +379,10 @@ export default function HeatmapWithScaling({
 
       {/* Legend + Export */}
       <Legend domain={domain} palette={palette} compact={isSmall} />
-      <div style={{
-        position: "absolute", right: 12, bottom: 12, zIndex: 1000,
-        display: "flex", gap: 8, alignItems: "center"
-      }}>
+      <div style={{ position: "absolute", right: 12, bottom: 12, zIndex: 1000, display: "flex", gap: 8, alignItems: "center" }}>
         <button
           onClick={exportCSV}
-          style={{
-            border: "1px solid #ddd", background: "#ffffff", borderRadius: 12, padding: "8px 12px",
-            boxShadow: "0 2px 8px rgba(0,0,0,0.08)", cursor: "pointer", fontSize: isSmall ? 12 : 13
-          }}
+          style={{ border: "1px solid #ddd", background: "#ffffff", borderRadius: 12, padding: "8px 12px", boxShadow: "0 2px 8px rgba(0,0,0,0.08)", cursor: "pointer", fontSize: isSmall ? 12 : 13 }}
           title="Export current top hotspots in view as CSV"
         >
           Export CSV (top ~3%)
@@ -373,9 +395,7 @@ export default function HeatmapWithScaling({
 // ---------- Legend ----------
 function Legend({ domain, palette, compact }: { domain: [number, number]; palette: GradientName; compact?: boolean }) {
   const grad = gradientStops(palette);
-  const gradientCSS = `linear-gradient(to right, ${Object.entries(grad)
-    .map(([k, color]) => `${color} ${Number(k) * 100}%`).join(", ")})`;
-
+  const gradientCSS = `linear-gradient(to right, ${Object.entries(grad).map(([k, color]) => `${color} ${Number(k) * 100}%`).join(", ")})`;
   const pad = compact ? 8 : 12;
   const radius = compact ? 10 : 12;
   const font = compact ? 11 : 12;
@@ -384,8 +404,7 @@ function Legend({ domain, palette, compact }: { domain: [number, number]; palett
   return (
     <div style={{
       position: "absolute", bottom: 12, left: 12, background: "rgba(255,255,255,0.9)",
-      padding: pad, borderRadius: radius, boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
-      fontSize: font, zIndex: 1000, width,
+      padding: pad, borderRadius: radius, boxShadow: "0 2px 10px rgba(0,0,0,0.1)", fontSize: font, zIndex: 1000, width,
     }}>
       <div style={{ fontWeight: 600, marginBottom: 6 }}>Intensity</div>
       <div style={{ width: "100%", height: 10, background: gradientCSS, borderRadius: 6 }} />
@@ -399,7 +418,6 @@ function Legend({ domain, palette, compact }: { domain: [number, number]; palett
     </div>
   );
 }
-
 function formatNumber(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   if (n >= 100) return n.toFixed(0);
