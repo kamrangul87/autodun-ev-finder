@@ -53,13 +53,14 @@ function gradientStops(name: GradientName) {
   }
 }
 
-// ---------------- C) Dynamic radius by zoom (tighter) ----------------
+// ---------------- C) Dynamic radius by zoom (keep a bigger minimum) ----------------
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      const r = Math.max(6, 30 - (z - 7) * 4);   // smaller at z=7, scales gently
+      // smaller than before, but never below 20px so zoomed-in heat stays visible
+      const r = Math.max(20, 40 - (z - 7) * 4);
       setRadius(r);
     };
     map.on("zoomend", update);
@@ -79,13 +80,13 @@ function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] 
     const latLngs = heatPoints.map(([lat, lng]) => L.latLng(lat, lng));
     const bounds = L.latLngBounds(latLngs);
     map.fitBounds(bounds, { padding: [40, 40] });
-    didFit.current = true; // don’t fight user after first fit
+    didFit.current = true;
   }, [map, heatPoints]);
 
   return null;
 }
 
-// ---------------- D) Heat layer wrapper (dynamic plugin) ----------------
+// ---------------- D) Heat layer wrapper (no viewport filtering) ----------------
 function HeatLayer({
   heatPoints, radius, blur, gradient
 }: {
@@ -108,9 +109,9 @@ function HeatLayer({
         layerRef.current = (L as any).heatLayer(heatPoints, {
           radius,
           blur,
-          max: 1.0,          // allow strong peaks without blanket
+          max: 1.0,          // allow strong peaks
           gradient,
-          minOpacity: 0.15   // faint areas much lighter
+          minOpacity: 0.20   // a bit higher so zoomed-in areas don’t vanish
         });
         layerRef.current.addTo(map).bringToFront();
       } catch (e) {
@@ -127,36 +128,19 @@ function HeatLayer({
     };
   }, [map]);
 
-  // helper to (re)apply data/options, filtered to current view
-  const applyUpdate = React.useCallback(() => {
+  // update on changes (always use all points — no viewport filtering)
+  useEffect(() => {
     if (!layerRef.current) return;
-    const bounds = map.getBounds();
-    const visible = heatPoints.filter(([lat, lng]) => bounds.contains(L.latLng(lat, lng)));
-
     layerRef.current.setOptions({
       radius,
       blur,
       max: 1.0,
       gradient,
-      minOpacity: 0.15
+      minOpacity: 0.20
     });
-    layerRef.current.setLatLngs((visible.length ? visible : heatPoints).map(p => [p[0], p[1], p[2]]));
+    layerRef.current.setLatLngs(heatPoints);
     layerRef.current.redraw();
-  }, [map, heatPoints, radius, blur, gradient]);
-
-  // update when props change
-  useEffect(() => { applyUpdate(); }, [applyUpdate]);
-
-  // update when map moves/zooms
-  useEffect(() => {
-    const handler = () => applyUpdate();
-    map.on("moveend", handler);
-    map.on("zoomend", handler);
-    return () => {
-      map.off("moveend", handler);
-      map.off("zoomend", handler);
-    };
-  }, [map, applyUpdate]);
+  }, [heatPoints, radius, blur, gradient]);
 
   return null;
 }
@@ -165,7 +149,7 @@ function HeatLayer({
 export default function HeatmapWithScaling({
   points,
   defaultScale = "robust",
-  palette = "fire",            // punchier palette
+  palette = "fire",
 }: {
   points: Point[];
   defaultScale?: ScaleMethod;
@@ -177,7 +161,7 @@ export default function HeatmapWithScaling({
 
   const center = points.length
     ? { lat: points[0].lat, lng: points[0].lng }
-    : { lat: 51.5074, lng: -0.1278 }; // London fallback
+    : { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
     const vals = points.map(p => p.value ?? 0);
@@ -190,7 +174,7 @@ export default function HeatmapWithScaling({
     const baseline = 0.05;  // lower floor so weak areas fade out
     return points.map((p, i) => {
       const s = scaled[i] ?? 0;
-      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.08..1
+      const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.05..1
       return [p.lat, p.lng, w] as [number, number, number];
     });
   }, [points, scaled]);
@@ -226,7 +210,7 @@ export default function HeatmapWithScaling({
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
       </MapContainer>
 
-      {/* Controls (always visible) */}
+      {/* Controls */}
       <div style={controlsBox}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Heatmap Settings</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
