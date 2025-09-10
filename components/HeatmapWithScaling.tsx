@@ -2,14 +2,12 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
-import L from "leaflet";
-import "leaflet.heat"; // attaches L.heatLayer
+import L from "leaflet"; // NOTE: no direct import of "leaflet.heat" here
 
 type Point = { lat: number; lng: number; value: number };
 
 // -----  A. SCALING HELPERS  -----
 function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
-
 function quantile(arr: number[], q: number) {
   if (arr.length === 0) return 0;
   const a = [...arr].sort((x, y) => x - y);
@@ -19,42 +17,30 @@ function quantile(arr: number[], q: number) {
   if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
   return a[base];
 }
-
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [], domain: [0, 1] as [number, number] };
-
   if (method === "robust") {
-    const p10 = quantile(values, 0.10);
-    const p90 = quantile(values, 0.90);
+    const p10 = quantile(values, 0.10); const p90 = quantile(values, 0.90);
     const denom = p90 - p10 || 1;
     return { scaled: values.map(v => clamp01((v - p10) / denom)), domain: [p10, p90] as [number, number] };
   }
-
   if (method === "log") {
-    const max = Math.max(...values);
-    const denom = Math.log1p(max) || 1;
+    const max = Math.max(...values); const denom = Math.log1p(max) || 1;
     return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / denom)), domain: [0, max] as [number, number] };
   }
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const denom = max - min || 1;
+  const min = Math.min(...values); const max = Math.max(...values); const denom = max - min || 1;
   return { scaled: values.map(v => clamp01((v - min) / denom)), domain: [min, max] as [number, number] };
 }
 
-// -----  B. GRADIENT PALETTES  -----
+// -----  B. GRADIENTS  -----
 type GradientName = "viridis" | "turbo" | "fire" | "blueRed";
 function gradientStops(name: GradientName) {
   switch (name) {
-    case "viridis":
-      return { 0.0: "#440154", 0.25: "#31688E", 0.5: "#35B779", 0.75: "#FDE725", 1.0: "#FFFFE5" };
-    case "turbo":
-      return { 0.0: "#30123B", 0.25: "#1F9E89", 0.5: "#73D055", 0.75: "#FDE725", 1.0: "#FAE61E" };
-    case "fire":
-      return { 0.0: "#000004", 0.25: "#2C105C", 0.5: "#B63679", 0.75: "#FC8961", 1.0: "#F0F921" };
-    case "blueRed":
-      return { 0.0: "#08306B", 0.25: "#2171B5", 0.5: "#6BAED6", 0.75: "#FDAE6B", 1.0: "#CB181D" };
+    case "viridis": return { 0.0: "#440154", 0.25: "#31688E", 0.5: "#35B779", 0.75: "#FDE725", 1.0: "#FFFFE5" };
+    case "turbo":   return { 0.0: "#30123B", 0.25: "#1F9E89", 0.5: "#73D055", 0.75: "#FDE725", 1.0: "#FAE61E" };
+    case "fire":    return { 0.0: "#000004", 0.25: "#2C105C", 0.5: "#B63679", 0.75: "#FC8961", 1.0: "#F0F921" };
+    case "blueRed": return { 0.0: "#08306B", 0.25: "#2171B5", 0.5: "#6BAED6", 0.75: "#FDAE6B", 1.0: "#CB181D" };
   }
 }
 
@@ -64,33 +50,42 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      const r = Math.max(8, 60 - (z - 7) * 6); // tweak if you want
-      setRadius(r);
+      setRadius(Math.max(8, 60 - (z - 7) * 6));
     };
-    map.on("zoomend", update);
-    update();
+    map.on("zoomend", update); update();
     return () => { map.off("zoomend", update); };
   }, [map, setRadius]);
   return null;
 }
 
-// -----  D. Leaflet Heat layer wrapper  -----
+// -----  D. Leaflet Heat layer wrapper (loads plugin after mount) -----
 function HeatLayer({
   heatPoints, radius, blur, gradient, max
 }: {
-  heatPoints: [number, number, number][],
-  radius: number,
-  blur: number,
-  gradient: Record<number, string>,
-  max: number
+  heatPoints: [number, number, number][], radius: number, blur: number,
+  gradient: Record<number, string>, max: number
 }) {
   const map = useMap();
 
   useEffect(() => {
-    // @ts-ignore - plugin attaches to L
-    const layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
-    layer.addTo(map);
-    return () => { map.removeLayer(layer); };
+    let layer: any;
+    let mounted = true;
+
+    (async () => {
+      try {
+        // Dynamically load the plugin in the browser
+        await import("leaflet.heat");
+        // @ts-ignore plugin attaches to L
+        if (mounted) {
+          layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
+          layer.addTo(map);
+        }
+      } catch (e) {
+        console.error("Failed to load leaflet.heat", e);
+      }
+    })();
+
+    return () => { mounted = false; if (layer) map.removeLayer(layer); };
   }, [map, heatPoints, radius, blur, max, gradient]);
 
   return null;
@@ -110,7 +105,9 @@ export default function HeatmapWithScaling({
   const [radius, setRadius] = useState<number>(30);
   const [blur, setBlur] = useState<number>(20);
 
-  const { lat, lng } = points[0] || { lat: 51.5074, lng: -0.1278 };
+  const center = points.length
+    ? { lat: points[0].lat, lng: points[0].lng }
+    : { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
     const vals = points.map(p => p.value ?? 0);
@@ -126,7 +123,7 @@ export default function HeatmapWithScaling({
 
   return (
     <div className="relative w-full h-[80vh]">
-      <MapContainer center={[lat, lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
+      <MapContainer center={[center.lat, center.lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
         <TileLayer
           attribution='&copy; OpenStreetMap'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
