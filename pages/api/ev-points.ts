@@ -43,7 +43,8 @@ function isDC(c: OCMConnection): boolean {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // /api/ev-points?lat=52.5&lon=-1.5&radius=400&halfReports=90&halfDown=60
+  // /api/ev-points?cc=GB&lat=52.5&lon=-1.5&radius=400&halfReports=90&halfDown=60
+  const cc = (String(req.query.cc || "GB").toUpperCase().trim() || "GB").slice(0, 2);
   const lat = Number(req.query.lat) || 52.5;
   const lon = Number(req.query.lon) || -1.5;
   const distKm = Math.min(Number(req.query.radius) || 400, 800);
@@ -53,7 +54,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   const url =
     `https://api.openchargemap.io/v3/poi/` +
-    `?output=json&countrycode=GB&latitude=${lat}&longitude=${lon}` +
+    `?output=json&countrycode=${cc}&latitude=${lat}&longitude=${lon}` +
     `&distance=${distKm}&distanceunit=KM&maxresults=5000` +
     `&compact=true&verbose=false&includecomments=true`;
 
@@ -96,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const refSum = 5; // ~ five recent issues saturate
         let sum = 0;
         for (const c of comments) {
-          const rating = c?.Rating ?? 0;             // missing rating => treat as issue
+          const rating = c?.Rating ?? 0;  // missing rating ⇒ treat as issue
           if (rating <= 3) {
             const age = daysSince(c?.DateCreated) ?? 3650;
             sum += expDecay(age, halfReports);
