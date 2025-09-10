@@ -118,15 +118,15 @@ function HeatLayer({
 export default function HeatmapWithScaling({
   points,
   defaultScale = "robust",
-  palette = "viridis",
+  palette = "fire",            // punchier palette
 }: {
   points: Point[];
   defaultScale?: ScaleMethod;
   palette?: GradientName;
 }) {
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
-  const [radius, setRadius] = useState<number>(48); // stronger defaults so you see heat fast
-  const [blur, setBlur] = useState<number>(30);
+  const [radius, setRadius] = useState<number>(60); // stronger defaults;
+  const [blur, setBlur] = useState<number>(35);     // stronger defaults;
 
   const center = points.length
     ? { lat: points[0].lat, lng: points[0].lng }
