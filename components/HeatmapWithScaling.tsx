@@ -129,6 +129,20 @@ function HeatLayer({
 
   return null;
 }
+function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] }) {
+  const map = useMap();
+  const didFit = React.useRef(false);
+
+  useEffect(() => {
+    if (didFit.current || heatPoints.length === 0) return;
+    const latLngs = heatPoints.map(([lat, lng]) => L.latLng(lat, lng));
+    const bounds = L.latLngBounds(latLngs);
+    map.fitBounds(bounds, { padding: [40, 40] });
+    didFit.current = true;
+  }, [map, heatPoints]);
+
+  return null;
+}
 
 // ---------------- E) MAIN ----------------
 export default function HeatmapWithScaling({
