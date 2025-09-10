@@ -2,7 +2,8 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap } from "react-leaflet";
-import { HeatmapLayer } from "react-leaflet-heatmap-layer-v3";
+import L from "leaflet";
+import "leaflet.heat"; // attaches L.heatLayer
 
 type Point = { lat: number; lng: number; value: number };
 
@@ -24,84 +25,46 @@ function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [], domain: [0, 1] as [number, number] };
 
   if (method === "robust") {
-    // Robust min-max using 10th–90th percentiles to tame outliers
     const p10 = quantile(values, 0.10);
     const p90 = quantile(values, 0.90);
     const denom = p90 - p10 || 1;
-    return {
-      scaled: values.map(v => clamp01((v - p10) / denom)),
-      domain: [p10, p90] as [number, number],
-    };
+    return { scaled: values.map(v => clamp01((v - p10) / denom)), domain: [p10, p90] as [number, number] };
   }
 
   if (method === "log") {
-    // Log compression (good for heavy-tailed distributions)
     const max = Math.max(...values);
     const denom = Math.log1p(max) || 1;
-    return {
-      scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / denom)),
-      domain: [0, max] as [number, number],
-    };
+    return { scaled: values.map(v => clamp01(Math.log1p(Math.max(0, v)) / denom)), domain: [0, max] as [number, number] };
   }
 
-  // Default linear min-max
   const min = Math.min(...values);
   const max = Math.max(...values);
   const denom = max - min || 1;
-  return {
-    scaled: values.map(v => clamp01((v - min) / denom)),
-    domain: [min, max] as [number, number],
-  };
+  return { scaled: values.map(v => clamp01((v - min) / denom)), domain: [min, max] as [number, number] };
 }
 
 // -----  B. GRADIENT PALETTES  -----
 type GradientName = "viridis" | "turbo" | "fire" | "blueRed";
 function gradientStops(name: GradientName) {
-  // Keys must be between 0 and 1 for leaflet.heat
   switch (name) {
-    case "viridis": // colorblind-friendly
-      return {
-        0.0: "#440154",
-        0.25: "#31688E",
-        0.5: "#35B779",
-        0.75: "#FDE725",
-        1.0: "#FFFFE5",
-      };
-    case "turbo":  // Google Turbo
-      return {
-        0.0: "#30123B",
-        0.25: "#1F9E89",
-        0.5: "#73D055",
-        0.75: "#FDE725",
-        1.0: "#FAE61E",
-      };
+    case "viridis":
+      return { 0.0: "#440154", 0.25: "#31688E", 0.5: "#35B779", 0.75: "#FDE725", 1.0: "#FFFFE5" };
+    case "turbo":
+      return { 0.0: "#30123B", 0.25: "#1F9E89", 0.5: "#73D055", 0.75: "#FDE725", 1.0: "#FAE61E" };
     case "fire":
-      return {
-        0.0: "#000004",
-        0.25: "#2C105C",
-        0.5: "#B63679",
-        0.75: "#FC8961",
-        1.0: "#F0F921",
-      };
+      return { 0.0: "#000004", 0.25: "#2C105C", 0.5: "#B63679", 0.75: "#FC8961", 1.0: "#F0F921" };
     case "blueRed":
-      return {
-        0.0: "#08306B",
-        0.25: "#2171B5",
-        0.5: "#6BAED6",
-        0.75: "#FDAE6B",
-        1.0: "#CB181D",
-      };
+      return { 0.0: "#08306B", 0.25: "#2171B5", 0.5: "#6BAED6", 0.75: "#FDAE6B", 1.0: "#CB181D" };
   }
 }
 
-// -----  C. ZOOM → DYNAMIC RADIUS  -----
+// -----  C. Dynamic radius by zoom  -----
 function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   const map = useMap();
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      // Larger zoom → smaller radius (in pixels)
-      const r = Math.max(8, 60 - (z - 7) * 6); // tweak as you like
+      const r = Math.max(8, 60 - (z - 7) * 6); // tweak if you want
       setRadius(r);
     };
     map.on("zoomend", update);
@@ -111,7 +74,29 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   return null;
 }
 
-// -----  D. MAIN HEATMAP COMPONENT  -----
+// -----  D. Leaflet Heat layer wrapper  -----
+function HeatLayer({
+  heatPoints, radius, blur, gradient, max
+}: {
+  heatPoints: [number, number, number][],
+  radius: number,
+  blur: number,
+  gradient: Record<number, string>,
+  max: number
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    // @ts-ignore - plugin attaches to L
+    const layer = (L as any).heatLayer(heatPoints, { radius, blur, max, gradient });
+    layer.addTo(map);
+    return () => { map.removeLayer(layer); };
+  }, [map, heatPoints, radius, blur, max, gradient]);
+
+  return null;
+}
+
+// -----  E. MAIN  -----
 export default function HeatmapWithScaling({
   points,
   defaultScale = "robust",
@@ -125,7 +110,7 @@ export default function HeatmapWithScaling({
   const [radius, setRadius] = useState<number>(30);
   const [blur, setBlur] = useState<number>(20);
 
-  const { lat, lng } = points[0] || { lat: 51.5074, lng: -0.1278 }; // fallback London
+  const { lat, lng } = points[0] || { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
     const vals = points.map(p => p.value ?? 0);
@@ -137,9 +122,6 @@ export default function HeatmapWithScaling({
     [points, scaled]
   );
 
-  // Auto "max" near the upper tail so outliers don't dominate
-  const maxForLayer = 1; // we already scaled to 0..1
-
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
   return (
@@ -150,16 +132,7 @@ export default function HeatmapWithScaling({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         <DynamicRadius setRadius={setRadius} />
-        <HeatmapLayer
-          points={heatData}
-          longitudeExtractor={(p: any) => p[1]}
-          latitudeExtractor={(p: any) => p[0]}
-          intensityExtractor={(p: any) => p[2]}
-          radius={radius}
-          blur={blur}
-          max={maxForLayer}
-          gradient={gradient}
-        />
+        <HeatLayer heatPoints={heatData} radius={radius} blur={blur} max={1} gradient={gradient} />
       </MapContainer>
 
       {/* Controls */}
@@ -191,7 +164,7 @@ export default function HeatmapWithScaling({
   );
 }
 
-// -----  E. LEGEND  -----
+// -----  F. LEGEND  -----
 function Legend({ domain, palette }: { domain: [number, number]; palette: GradientName }) {
   const grad = gradientStops(palette);
   const gradientCSS = `linear-gradient(to right, ${Object.entries(grad)
