@@ -4,12 +4,14 @@ import React, { useMemo, useState, useEffect } from "react";
 import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip } from "react-leaflet";
 import L from "leaflet";
 
+// ---------- Types ----------
 export type Breakdown = { reports: number; downtime: number; connectors: number };
 export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number };
 type Meta = { halfReports: number; halfDown: number };
 type Filters = { operator?: string; dcOnly?: boolean; minKW?: number };
 type UI = { scale: ScaleMethod; radius: number; blur: number };
 
+// ---------- Helpers ----------
 const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
@@ -22,14 +24,17 @@ function quantile(arr: number[], q: number) {
   if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
   return a[base];
 }
+
 function weightedShares(b?: Breakdown) {
   if (!b) return { reports: 0, downtime: 0, connectors: 0 };
+
   const cRep = b.reports * WEIGHTS.reports;
   const cDown = b.downtime * WEIGHTS.downtime;
   const cConn = b.connectors * WEIGHTS.connectors;
   const total = cRep + cDown + cConn;
   if (total <= 1e-9) return { reports: 0, downtime: 0, connectors: 0 };
 
+  // turn into whole percentages that always sum to 100
   const raw = [
     { k: "reports", v: (cRep / total) * 100 },
     { k: "downtime", v: (cDown / total) * 100 },
@@ -48,6 +53,7 @@ function weightedShares(b?: Breakdown) {
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [] as number[], domain: [0, 1] as [number, number] };
+
   if (method === "robust") {
     const p10 = quantile(values, 0.10), p90 = quantile(values, 0.90);
     const d = p90 - p10 || 1;
@@ -331,7 +337,7 @@ export default function HeatmapWithScaling({
       ];
     });
 
-    const metaLine = `# halfReports=${meta?.halfReports ?? ""}, halfDown=${meta?.halfDown ?? ""}, scale=${scaleMethod}, radius=${radius}, blur=${blur}, filters=op:${filters?.operator||"any"};dc:${filters?.dcOnly?"1":"0"};minKW:${filters?.minKW ?? 0}`;
+    const metaLine = `# scale=${scaleMethod}, radius=${radius}, blur=${blur}, filters=op:${filters?.operator||"any"};dc:${filters?.dcOnly?"1":"0"};minKW:${filters?.minKW ?? 0}`;
     const csv = [metaLine, headers.join(","), ...rows.map(r => r.join(","))].join("\n");
 
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -339,9 +345,8 @@ export default function HeatmapWithScaling({
     const a = document.createElement("a");
     a.href = url; a.download = "ev_hotspots.csv";
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  }, [topHotspots, meta?.halfDown, meta?.halfReports, scaleMethod, radius, blur, filters?.operator, filters?.dcOnly, filters?.minKW]);
+  }, [topHotspots, scaleMethod, radius, blur, filters?.operator, filters?.dcOnly, filters?.minKW]);
 
-  const isSmall = useIsSmall();
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 13 : 14;
@@ -429,7 +434,11 @@ function Legend({ domain, palette, compact }: { domain: [number, number]; palett
     </div>
   );
 }
+
 function formatNumber(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   if (n >= 100) return n.toFixed(0);
-  if
+  if (n >= 10) return n.toFixed(1);
+  if (n > 0) return n.toFixed(2);
+  return "0";
+}
