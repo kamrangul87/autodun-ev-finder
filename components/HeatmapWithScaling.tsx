@@ -7,6 +7,7 @@ import L from "leaflet";
 // ---------- Types ----------
 export type Breakdown = { reports: number; downtime: number; connectors: number };
 export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown };
+type Meta = { halfReports: number; halfDown: number };
 
 // ---------- Constants ----------
 const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 }; // must match API
@@ -162,13 +163,12 @@ function HeatLayer({
 
 // ---------- Hotspots (top ~3% in view, sized by score, clickable highlight) ----------
 function HotspotsOverlay({
-  points,
-  onSelect,
-  selected
+  points, onSelect, selected, onTopChange
 }: {
   points: Point[];
   onSelect: (p: Point | null) => void;
   selected: Point | null;
+  onTopChange: (top: Point[]) => void;
 }) {
   const map = useMap();
   const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
@@ -187,6 +187,10 @@ function HotspotsOverlay({
     return inView.filter(p => p.value >= threshold).slice(0, 60);
   }, [bounds, points]);
 
+  useEffect(() => {
+    onTopChange(topPoints);
+  }, [topPoints, onTopChange]);
+
   const dotSize = (v: number) => 6 + Math.round(v * 10); // 6..16px
 
   return (
@@ -196,7 +200,6 @@ function HotspotsOverlay({
         const sel = selected && p.lat === selected.lat && p.lng === selected.lng && p.value === selected.value;
         return (
           <React.Fragment key={`${p.lat}-${p.lng}-${i}`}>
-            {/* highlight ring for selected */}
             {sel && (
               <CircleMarker
                 center={[p.lat, p.lng]}
@@ -239,14 +242,15 @@ function HotspotsOverlay({
 
 // ---------- Main ----------
 export default function HeatmapWithScaling({
-  points, defaultScale = "robust", palette = "fire",
-}: { points: Point[]; defaultScale?: ScaleMethod; palette?: GradientName }) {
+  points, defaultScale = "robust", palette = "fire", meta
+}: { points: Point[]; defaultScale?: ScaleMethod; palette?: GradientName; meta?: Meta }) {
   const isSmall = useIsSmall();
 
   const [scaleMethod, setScaleMethod] = useState<ScaleMethod>(defaultScale);
   const [radius, setRadius] = useState<number>(60);
   const [blur, setBlur] = useState<number>(35);
   const [selected, setSelected] = useState<Point | null>(null);
+  const [topHotspots, setTopHotspots] = useState<Point[]>([]);
 
   const center = points.length ? { lat: points[0].lat, lng: points[0].lng } : { lat: 51.5074, lng: -0.1278 };
 
@@ -255,7 +259,6 @@ export default function HeatmapWithScaling({
     return scale(vals, scaleMethod);
   }, [points, scaleMethod]);
 
-  // bright peaks, low baseline so “blanket” fades
   const heatData = useMemo(() => {
     const gamma = 0.55, baseline = 0.05;
     return points.map((p, i) => {
@@ -272,6 +275,39 @@ export default function HeatmapWithScaling({
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 13 : 14;
 
+  // ----- Export CSV -----
+  const exportCSV = React.useCallback(() => {
+    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw"];
+    const rows = topHotspots.map(h => {
+      const shares = weightedShares(h.breakdown);
+      const b = h.breakdown || { reports: 0, downtime: 0, connectors: 0 };
+      return [
+        h.lat.toFixed(6),
+        h.lng.toFixed(6),
+        h.value.toFixed(3),
+        shares.reports, shares.downtime, shares.connectors,
+        b.reports.toFixed(3), b.downtime.toFixed(3), b.connectors.toFixed(3),
+      ];
+    });
+
+    const metaLine = `# halfReports=${meta?.halfReports ?? ""}, halfDown=${meta?.halfDown ?? ""}, scale=${scaleMethod}`;
+    const csv = [
+      metaLine,
+      headers.join(","),
+      ...rows.map(r => r.join(","))
+    ].join("\n");
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ev_hotspots.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [topHotspots, meta?.halfDown, meta?.halfReports, scaleMethod]);
+
   return (
     <div className="relative w-full" style={{ height: "80vh", position: "relative" }}>
       <MapContainer center={[center.lat, center.lng]} zoom={7} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
@@ -279,7 +315,12 @@ export default function HeatmapWithScaling({
         <DynamicRadius setRadius={setRadius} />
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
-        <HotspotsOverlay points={points} onSelect={setSelected} selected={selected} />
+        <HotspotsOverlay
+          points={points}
+          onSelect={setSelected}
+          selected={selected}
+          onTopChange={setTopHotspots}
+        />
       </MapContainer>
 
       {/* Controls */}
@@ -308,8 +349,23 @@ export default function HeatmapWithScaling({
         </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend + Export */}
       <Legend domain={domain} palette={palette} compact={isSmall} />
+      <div style={{
+        position: "absolute", right: 12, bottom: 12, zIndex: 1000,
+        display: "flex", gap: 8, alignItems: "center"
+      }}>
+        <button
+          onClick={exportCSV}
+          style={{
+            border: "1px solid #ddd", background: "#ffffff", borderRadius: 12, padding: "8px 12px",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.08)", cursor: "pointer", fontSize: isSmall ? 12 : 13
+          }}
+          title="Export current top hotspots in view as CSV"
+        >
+          Export CSV (top ~3%)
+        </button>
+      </div>
     </div>
   );
 }
