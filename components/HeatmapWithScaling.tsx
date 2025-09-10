@@ -59,7 +59,7 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   useEffect(() => {
     const update = () => {
       const z = map.getZoom();
-      const r = Math.max(6, 44 - (z - 7) * 5); // smaller kernel → crisper blobs
+      const r = Math.max(6, 30 - (z - 7) * 4);   // smaller at z=7, scales gently
       setRadius(r);
     };
     map.on("zoomend", update);
@@ -187,7 +187,7 @@ export default function HeatmapWithScaling({
   // Brighter peaks + low baseline to avoid blanket
   const heatData = useMemo(() => {
     const gamma = 0.55;     // < 1 = brighter highlights
-    const baseline = 0.08;  // lower floor so weak areas fade out
+    const baseline = 0.05;  // lower floor so weak areas fade out
     return points.map((p, i) => {
       const s = scaled[i] ?? 0;
       const w = baseline + (1 - baseline) * Math.pow(s, gamma); // 0.08..1
