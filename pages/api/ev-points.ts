@@ -2,13 +2,21 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 type OCMComment = {
-  Rating?: number | null;        // 0..5 (lower often = problems)
-  DateCreated?: string | null;   // ISO
+  Rating?: number | null;
+  DateCreated?: string | null;
+};
+
+type OCMConnection = {
+  PowerKW?: number | null;
+  Level?: { IsFastChargeCapable?: boolean | null } | null;
+  CurrentType?: { Title?: string | null } | null; // "AC" / "DC"
+  LevelID?: number | null;                         // often 3 => DC fast
 };
 
 type OCM = {
   AddressInfo?: { Latitude?: number; Longitude?: number };
-  Connections?: any[];
+  OperatorInfo?: { Title?: string | null } | null;
+  Connections?: OCMConnection[] | null;
   NumberOfPoints?: number | null;
   StatusType?: { IsOperational?: boolean } | null;
   UserComments?: OCMComment[] | null;
@@ -17,6 +25,7 @@ type OCM = {
 
 const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+const LN2 = Math.log(2);
 
 function daysSince(iso?: string | null): number | null {
   if (!iso) return null;
@@ -24,9 +33,13 @@ function daysSince(iso?: string | null): number | null {
   return Number.isNaN(t) ? null : Math.max(0, (Date.now() - t) / (24 * 3600 * 1000));
 }
 function expDecay(ageDays: number, halfLifeDays: number) {
-  // 1 at age=0, 0.5 at age=halfLife, decays smoothly
-  const LN2 = Math.log(2);
   return Math.exp(-LN2 * (ageDays / Math.max(1e-6, halfLifeDays)));
+}
+function isDC(c: OCMConnection): boolean {
+  const lvlFast = c?.Level?.IsFastChargeCapable === true;
+  const currentDC = (c?.CurrentType?.Title || "").toUpperCase().includes("DC");
+  const lvlIdDC = c?.LevelID === 3;
+  return Boolean(lvlFast || currentDC || lvlIdDC);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -35,8 +48,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const lon = Number(req.query.lon) || -1.5;
   const distKm = Math.min(Number(req.query.radius) || 400, 800);
 
-  const halfReports = Math.max(1, Number(req.query.halfReports) || 90); // days
-  const halfDown = Math.max(1, Number(req.query.halfDown) || 60);       // days
+  const halfReports = Math.max(1, Number(req.query.halfReports) || 90);
+  const halfDown = Math.max(1, Number(req.query.halfDown) || 60);
 
   const url =
     `https://api.openchargemap.io/v3/poi/` +
@@ -54,7 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const raw: OCM[] = await r.json();
 
-    // normalize connectors
+    // normalize connectors (for connectorsScore normalization)
     let maxConnectors = 1;
     for (const s of raw) {
       const c = s.Connections?.length ?? s.NumberOfPoints ?? 1;
@@ -67,33 +80,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const ln = site.AddressInfo?.Longitude;
         if (typeof la !== "number" || typeof ln !== "number") return null;
 
+        const operator = (site.OperatorInfo?.Title || "Unknown").trim();
+
+        // per-site power/DC aggregation
+        const conns = site.Connections || [];
+        const maxKW = conns.reduce((m, c) => Math.max(m, Number(c?.PowerKW || 0)), 0);
+        const hasDC = conns.some(isDC);
+
         // connectors (0..1)
-        const connectors = site.Connections?.length ?? site.NumberOfPoints ?? 1;
+        const connectors = conns.length || site.NumberOfPoints || 1;
         const connectorsScore = clamp01(connectors / maxConnectors);
 
-        // reports (time-decayed, cap against ref sum)
+        // reports (time-decayed)
         const comments = site.UserComments ?? [];
-        const refSum = 5; // ~ five recent issues saturate the score
+        const refSum = 5; // ~ five recent issues saturate
         let sum = 0;
         for (const c of comments) {
-          const rating = c?.Rating ?? 0; // missing rating → treat as issue
+          const rating = c?.Rating ?? 0;             // missing rating => treat as issue
           if (rating <= 3) {
-            const age = daysSince(c?.DateCreated) ?? 3650; // unknown → very old
+            const age = daysSince(c?.DateCreated) ?? 3650;
             sum += expDecay(age, halfReports);
           }
         }
         const reportsScore = clamp01(sum / refSum);
 
-        // downtime (time-decayed from last status update if down)
+        // downtime (time-decayed if down)
         const isUp = site.StatusType?.IsOperational === true;
-        let downtimeScore = 0.05; // tiny baseline when operational
+        let downtimeScore = 0.05;
         if (!isUp) {
           const age = daysSince(site.DateLastStatusUpdate);
           downtimeScore = age == null ? 0.8 : clamp01(expDecay(age, halfDown));
-          downtimeScore = Math.max(downtimeScore, 0.25); // never below this if known down
+          downtimeScore = Math.max(downtimeScore, 0.25);
         }
 
-        // final value 0..1
         const value01 =
           WEIGHTS.reports    * reportsScore +
           WEIGHTS.downtime   * downtimeScore +
@@ -111,9 +130,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             downtime: Number(downtimeScore.toFixed(3)),
             connectors: Number(connectorsScore.toFixed(3)),
           },
+          op: operator,
+          dc: hasDC,
+          kw: Math.round(maxKW || 0),
         };
       })
-      .filter(Boolean) as Array<{ lat: number; lng: number; value: number; breakdown: {reports:number; downtime:number; connectors:number} }>;
+      .filter(Boolean);
 
     res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
     return res.status(200).json(points);
