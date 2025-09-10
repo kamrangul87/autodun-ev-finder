@@ -89,7 +89,7 @@ export default function EVPage() {
     }
   }, [cc, halfReports, halfDown, view.lat, view.lng, view.z]);
 
-  React.useEffect(() => { fetchData(true); /* first load */ }, []); // eslint-disable-line
+ React.useEffect(() => { fetchData({ silent: true }); }, []); // eslint-disable-line
 
   // operators list for filter
   const operatorOptions = React.useMemo(() => {
