@@ -1,25 +1,22 @@
+// pages/ev.tsx
 import React from "react";
 import dynamic from "next/dynamic";
 const HeatmapWithScaling = dynamic(() => import("../components/HeatmapWithScaling"), { ssr: false });
 import type { Point } from "../components/HeatmapWithScaling";
 
-// zoom -> km
 function kmForZoom(z: number) {
-  const base = 420; // ~country view at z≈7
+  const base = 420;
   return Math.max(80, Math.round(base / Math.pow(2, (z - 7) / 2)));
 }
 const SUPPORTED_CC = new Set(["GB","IE","DE","FR","ES"]);
-function degDist(a:[number,number], b:[number,number]) {
-  const dLat = Math.abs(a[0]-b[0]);
-  const dLon = Math.abs(a[1]-b[1]);
-  return Math.max(dLat, dLon);
-}
 
 export default function EVPage() {
+  // Core state
   const [cc, setCC] = React.useState<"GB"|"IE"|"DE"|"FR"|"ES">("GB");
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState(0);
 
+  // Filters
   const [dcOnly, setDcOnly] = React.useState(false);
   const [minKW, setMinKW] = React.useState(0);
   const [minConn, setMinConn] = React.useState(0);
@@ -27,10 +24,12 @@ export default function EVPage() {
   const [typesSel, setTypesSel] = React.useState<string[]>(ALL_TYPES);
   const [operator, setOperator] = React.useState<string>("any");
 
+  // View
   const [center, setCenter] = React.useState<[number, number]>([51.5074, -0.1278]);
   const [zoom, setZoom] = React.useState<number>(7);
   const [externalCenter, setExternalCenter] = React.useState<{lat:number;lng:number;z?:number}|null>(null);
 
+  // UI
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -44,67 +43,41 @@ export default function EVPage() {
     return ["any", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [points]);
 
-  // ------- API fetch -------
-  const lastFetchRef = React.useRef<{c:[number,number]; z:number} | null>(null);
-
-  const fetchData = React.useCallback(async (opts?: {
-    silent?: boolean; lat?: number; lon?: number; radius?: number; ccOverride?: string;
-  }) => {
+  // --- Fetch wrapper (deterministic; always clears loading) ---
+  const fetchData = React.useCallback(async (p?: { lat?:number; lon?:number; ccOverride?: string; radius?:number; showLoader?: boolean }) => {
     try {
+      if (p?.showLoader !== false) setLoading(true);
       setError(null);
-      if (!opts?.silent) setLoading(true);
-      const lat = opts?.lat ?? center[0];
-      const lon = opts?.lon ?? center[1];
-      const radius = opts?.radius ?? kmForZoom(zoom);
-      const useCC = (opts?.ccOverride ?? cc);
-      const r = await fetch(`/api/ev-points?cc=${encodeURIComponent(useCC)}&lat=${lat}&lon=${lon}&distKm=${radius}`, { cache: "no-store" });
+      const lat = p?.lat ?? center[0];
+      const lon = p?.lon ?? center[1];
+      const radius = p?.radius ?? kmForZoom(zoom);
+      const useCC = p?.ccOverride ?? cc;
+
+      const url = `/api/ev-points?cc=${encodeURIComponent(useCC)}&lat=${lat}&lon=${lon}&distKm=${radius}`;
+      const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) throw new Error(`API ${r.status}`);
-      const data: Point[] = await r.json();
-      setPoints(Array.isArray(data) ? data : []);
-      lastFetchRef.current = { c:[lat,lon], z: zoom };
+      const data: unknown = await r.json();
+      setPoints(Array.isArray(data) ? (data as Point[]) : []);
     } catch (e:any) {
+      setPoints([]);
       setError(e?.message ?? "Failed to load data");
     } finally {
       setLoading(false);
     }
   }, [cc, center, zoom]);
 
-  // first load + one soft retry if empty
-  React.useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await fetchData({ silent:false });
-      if (!cancelled) {
-        setTimeout(async () => {
-          if (points.length === 0) await fetchData({ silent:true });
-        }, 1800);
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Initial load
+  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // eslint-disable-line
 
-  // when country changes
-  React.useEffect(() => { fetchData({ silent:false }); }, [cc, fetchData]);
+  // Reload when country changes (user action)
+  React.useEffect(() => { fetchData({ showLoader: true }); }, [cc]); // eslint-disable-line
 
-  // auto-refetch on viewport changes (debounced + threshold)
-  React.useEffect(() => {
-    const t = setTimeout(() => {
-      const last = lastFetchRef.current;
-      const now: [number,number] = center;
-      const need = !last || degDist(last.c, now) > 0.4 || Math.abs((last.z||0) - zoom) >= 1;
-      if (need) fetchData({ silent:true });
-    }, 700);
-    return () => clearTimeout(t);
-  }, [center[0], center[1], zoom, fetchData]);
-
-  const handleViewport = React.useCallback((c:[number,number], z:number) => { setCenter(c); setZoom(z); }, []);
-
-  // ------- Search & geolocate -------
+  // Search
   async function handleGo() {
     const q = search.trim();
     if (!q) return;
     try {
+      setLoading(true); setError(null);
       const resp = await fetch(
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=${cc.toLowerCase()}&addressdetails=1`
       );
@@ -116,32 +89,38 @@ export default function EVPage() {
         const newCC = (newCCRaw && SUPPORTED_CC.has(newCCRaw)) ? newCCRaw : null;
         if (newCC && newCC !== cc) setCC(newCC as any);
         setExternalCenter({ lat, lng: lon, z: 12 });
-        await fetchData({ silent:true, lat, lon, radius: kmForZoom(12), ccOverride: newCC ?? cc });
+        await fetchData({ lat, lon, radius: kmForZoom(12), ccOverride: newCC ?? cc, showLoader: false });
       }
-    } catch {
-      // ignore
+    } catch (e:any) {
+      setError(e?.message ?? "Search failed");
+    } finally {
+      setLoading(false);
     }
   }
+
+  // Geolocate
   function handleGeolocate() {
     if (!navigator.geolocation) return;
+    setLoading(true); setError(null);
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
         setExternalCenter({ lat, lng: lon, z: 12 });
-        await fetchData({ silent:true, lat, lon, radius: kmForZoom(12) });
+        await fetchData({ lat, lon, radius: kmForZoom(12), showLoader: false });
+        setLoading(false);
       },
-      () => {},
+      (err) => { setLoading(false); setError(err?.message ?? "Geolocation failed"); },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }
 
-  const allTypes = ALL_TYPES;
-  const toggleType = (t:string) => setTypesSel(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
+  const toggleType = (t:string) =>
+    setTypesSel(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
   return (
     <div style={{ padding: 0 }}>
-      {/* HEADER */}
+      {/* Sticky header */}
       <div
         ref={barRef}
         style={{
@@ -172,18 +151,18 @@ export default function EVPage() {
 
           <div>Network{" "}
             <select value={operator} onChange={e => setOperator(e.target.value)}>
-              {["any", ...operatorOptions.slice(1)].map(op => <option key={op} value={op}>{op}</option>)}
+              {operatorOptions.map(op => <option key={op} value={op}>{op}</option>)}
             </select>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             Types:
-            {allTypes.map(t => (
+            {ALL_TYPES.map(t => (
               <label key={t} style={{ marginRight: 6 }}>
                 <input type="checkbox" checked={typesSel.includes(t)} onChange={() => toggleType(t)} /> {t}
               </label>
             ))}
-            <button onClick={() => setTypesSel(allTypes.slice())} style={{ marginLeft: 4 }}>All</button>
+            <button onClick={() => setTypesSel(ALL_TYPES.slice())} style={{ marginLeft: 4 }}>All</button>
             <button onClick={() => setTypesSel([])} style={{ marginLeft: 4 }}>None</button>
           </div>
 
@@ -197,7 +176,7 @@ export default function EVPage() {
             />
             <button onClick={handleGo}>Go</button>
             <button onClick={handleGeolocate}>Geolocate</button>
-            <button onClick={() => fetchData({ silent:false })} disabled={loading}>
+            <button onClick={() => fetchData({ showLoader: true })}>
               {loading ? "Loading..." : "Refresh"}
             </button>
           </div>
@@ -206,7 +185,7 @@ export default function EVPage() {
         {error ? <div style={{ marginTop: 6, color: "#b00020" }}>Error: {error}</div> : null}
       </div>
 
-      {/* MAP */}
+      {/* Map */}
       <HeatmapWithScaling
         points={points}
         filters={{ operator, dcOnly, minKW, minConn, types: typesSel }}
@@ -215,12 +194,6 @@ export default function EVPage() {
         externalCenter={externalCenter}
         offsetTopPx={headerOffset}
       />
-
-      {(!loading && points.length === 0) ? (
-        <div style={{ position: "absolute", top: 72, left: 16, background: "#fff7d6", border: "1px solid #efd48a", padding: "8px 12px", borderRadius: 8, zIndex: 1002 }}>
-          No points yet for this view. Try ⟶ Refresh, zoom out, or search another place.
-        </div>
-      ) : null}
     </div>
   );
 }
