@@ -6,9 +6,18 @@ import L from "leaflet";
 
 // ---------- Types ----------
 export type Breakdown = { reports: number; downtime: number; connectors: number };
-export type Point = { lat: number; lng: number; value: number; breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number };
+export type Point = {
+  id?: number | null;
+  name?: string | null;
+  lat: number; lng: number; value: number;
+  breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number;
+  conn?: number; types?: string[];
+};
 type Meta = { halfReports: number; halfDown: number };
-type Filters = { operator?: string; dcOnly?: boolean; minKW?: number };
+type Filters = {
+  operator?: string; dcOnly?: boolean; minKW?: number;
+  minConn?: number; types?: string[]; // NEW
+};
 type UI = { scale: ScaleMethod; radius: number; blur: number };
 
 // ---------- Helpers ----------
@@ -24,17 +33,14 @@ function quantile(arr: number[], q: number) {
   if (a[base + 1] !== undefined) return a[base] + rest * (a[base + 1] - a[base]);
   return a[base];
 }
-
 function weightedShares(b?: Breakdown) {
   if (!b) return { reports: 0, downtime: 0, connectors: 0 };
-
   const cRep = b.reports * WEIGHTS.reports;
   const cDown = b.downtime * WEIGHTS.downtime;
   const cConn = b.connectors * WEIGHTS.connectors;
   const total = cRep + cDown + cConn;
   if (total <= 1e-9) return { reports: 0, downtime: 0, connectors: 0 };
 
-  // turn into whole percentages that always sum to 100
   const raw = [
     { k: "reports", v: (cRep / total) * 100 },
     { k: "downtime", v: (cDown / total) * 100 },
@@ -53,7 +59,6 @@ function weightedShares(b?: Breakdown) {
 type ScaleMethod = "linear" | "log" | "robust";
 function scale(values: number[], method: ScaleMethod) {
   if (values.length === 0) return { scaled: [] as number[], domain: [0, 1] as [number, number] };
-
   if (method === "robust") {
     const p10 = quantile(values, 0.10), p90 = quantile(values, 0.90);
     const d = p90 - p10 || 1;
@@ -228,7 +233,7 @@ function HotspotsOverlay({
             >
               <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
                 <div style={{ fontSize: 12, lineHeight: 1.2 }}>
-                  <div><b>Hotspot</b></div>
+                  <div><b>{p.name ? p.name : "Hotspot"}</b></div>
                   <div>Score: {p.value.toFixed(2)}</div>
                   {p.breakdown && (
                     <div style={{ marginTop: 4, opacity: 0.9 }}>
@@ -282,21 +287,29 @@ export default function HeatmapWithScaling({
     onSelectChange?.(p || null);
   }, [selectedInit, points, onSelectChange]);
 
-  // apply filters
+  // apply filters (including new ones)
   const filtered = useMemo(() => {
     const op = (filters?.operator || "any").toLowerCase();
     const dcOnly = !!filters?.dcOnly;
     const minKW = Math.max(0, filters?.minKW ?? 0);
+    const minConn = Math.max(0, filters?.minConn ?? 0);
+    const typesSel = (filters?.types ?? []);
     return points.filter(p => {
       if (dcOnly && !p.dc) return false;
       if (minKW > 0 && (p.kw || 0) < minKW) return false;
+      if (minConn > 0 && (p.conn || 0) < minConn) return false;
       if (op !== "any") {
         const pop = (p.op || "unknown").toLowerCase();
         if (pop !== op) return false;
       }
+      if (typesSel.length > 0) {
+        const ptTypes = new Set((p.types || []).map(t => t.toLowerCase()));
+        const anyHit = typesSel.some(t => ptTypes.has(t.toLowerCase()));
+        if (!anyHit) return false;
+      }
       return true;
     });
-  }, [points, filters?.operator, filters?.dcOnly, filters?.minKW]);
+  }, [points, filters?.operator, filters?.dcOnly, filters?.minKW, filters?.minConn, filters?.types]);
 
   const center = filtered.length ? { lat: filtered[0].lat, lng: filtered[0].lng } : { lat: 51.5074, lng: -0.1278 };
 
@@ -321,7 +334,7 @@ export default function HeatmapWithScaling({
 
   // Export CSV (top in view after filters)
   const exportCSV = React.useCallback(() => {
-    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw", "operator", "dc", "max_kw"];
+    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw", "operator", "dc", "max_kw", "connectors", "types", "name"];
     const rows = topHotspots.map(h => {
       const shares = weightedShares(h.breakdown);
       const b = h.breakdown || { reports: 0, downtime: 0, connectors: 0 };
@@ -334,18 +347,19 @@ export default function HeatmapWithScaling({
         (h.op || "Unknown").replace(/,/g, " "),
         h.dc ? "1" : "0",
         String(h.kw ?? 0),
+        String(h.conn ?? 0),
+        (h.types || []).join("|"),
+        (h.name || "").replace(/,/g, " "),
       ];
     });
 
-    const metaLine = `# scale=${scaleMethod}, radius=${radius}, blur=${blur}, filters=op:${filters?.operator||"any"};dc:${filters?.dcOnly?"1":"0"};minKW:${filters?.minKW ?? 0}`;
-    const csv = [metaLine, headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-
+    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url; a.download = "ev_hotspots.csv";
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  }, [topHotspots, scaleMethod, radius, blur, filters?.operator, filters?.dcOnly, filters?.minKW]);
+  }, [topHotspots]);
 
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
@@ -434,7 +448,6 @@ function Legend({ domain, palette, compact }: { domain: [number, number]; palett
     </div>
   );
 }
-
 function formatNumber(n: number) {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
   if (n >= 100) return n.toFixed(0);
