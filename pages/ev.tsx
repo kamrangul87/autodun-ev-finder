@@ -8,13 +8,13 @@ function kmForZoom(z: number) {
   const base = 420;
   return Math.max(80, Math.round(base / Math.pow(2, (z - 7) / 2)));
 }
-const SUPPORTED_CC = new Set(["GB","IE","DE","FR","ES"]);
 
 export default function EVPage() {
-  const [cc, setCC] = React.useState<"GB"|"IE"|"DE"|"FR"|"ES">("GB");
+  // ----- fixed GB only -----
+  const cc = "GB";
+
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState(0);
-
   const [dcOnly, setDcOnly] = React.useState(false);
   const [minKW, setMinKW] = React.useState(0);
   const [minConn, setMinConn] = React.useState(0);
@@ -29,6 +29,7 @@ export default function EVPage() {
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [source, setSource] = React.useState<"ocm"|"fallback"|"">("");
 
   const barRef = React.useRef<HTMLDivElement>(null);
   const headerOffset = (barRef.current?.getBoundingClientRect().height ?? 0) + 12;
@@ -39,17 +40,16 @@ export default function EVPage() {
     return ["any", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [points]);
 
-  const fetchData = React.useCallback(async (p?: { lat?:number; lon?:number; ccOverride?: string; radius?:number; showLoader?: boolean }) => {
+  const fetchData = React.useCallback(async (p?: { lat?:number; lon?:number; radius?:number; showLoader?: boolean }) => {
     try {
       if (p?.showLoader !== false) setLoading(true);
       setError(null);
       const lat = p?.lat ?? center[0];
       const lon = p?.lon ?? center[1];
       const radius = p?.radius ?? kmForZoom(zoom);
-      const useCC = p?.ccOverride ?? cc;
 
-      const url = `/api/ev-points?cc=${encodeURIComponent(useCC)}&lat=${lat}&lon=${lon}&distKm=${radius}`;
-      const r = await fetch(url, { cache: "no-store" });
+      const r = await fetch(`/api/ev-points?lat=${lat}&lon=${lon}&distKm=${radius}`, { cache: "no-store" });
+      setSource((r.headers.get("x-ev-source") as any) || "");
       if (!r.ok) throw new Error(`API ${r.status}`);
       const data: unknown = await r.json();
       setPoints(Array.isArray(data) ? (data as Point[]) : []);
@@ -59,10 +59,9 @@ export default function EVPage() {
     } finally {
       setLoading(false);
     }
-  }, [cc, center, zoom]);
+  }, [center, zoom]);
 
-  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // first load
-  React.useEffect(() => { fetchData({ showLoader: true }); }, [cc]); // when country changes
+  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // initial load
 
   async function handleGo() {
     const q = search.trim();
@@ -70,17 +69,14 @@ export default function EVPage() {
     try {
       setLoading(true); setError(null);
       const resp = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=${cc.toLowerCase()}&addressdetails=1`
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=gb&addressdetails=1`
       );
       const js = await resp.json();
       if (Array.isArray(js) && js.length > 0) {
         const lat = parseFloat(js[0].lat);
         const lon = parseFloat(js[0].lon);
-        const newCCRaw = js[0]?.address?.country_code ? String(js[0].address.country_code).toUpperCase() : null;
-        const newCC = (newCCRaw && SUPPORTED_CC.has(newCCRaw)) ? newCCRaw : null;
-        if (newCC && newCC !== cc) setCC(newCC as any);
         setExternalCenter({ lat, lng: lon, z: 12 });
-        await fetchData({ lat, lon, radius: kmForZoom(12), ccOverride: newCC ?? cc, showLoader: false });
+        await fetchData({ lat, lon, radius: kmForZoom(12), showLoader: false });
       }
     } catch (e:any) {
       setError(e?.message ?? "Search failed");
@@ -120,16 +116,15 @@ export default function EVPage() {
       >
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
           <div style={{ fontWeight: 600 }}>
-            Live OCM data <span style={{ opacity: 0.7 }}>• {points.length.toLocaleString()} points</span>
+            Live OCM data • {points.length.toLocaleString()} points
+            {source && (
+              <span style={{ marginLeft: 8, fontWeight: 500, fontSize: 12, opacity: 0.8 }}>
+                ({source === "ocm" ? "live" : "fallback sample"})
+              </span>
+            )}
           </div>
 
-          <div style={{ marginLeft: 12 }}>
-            Country{" "}
-            <select value={cc} onChange={e => setCC(e.target.value as any)}>
-              <option value="GB">GB</option><option value="IE">IE</option>
-              <option value="DE">DE</option><option value="FR">FR</option><option value="ES">ES</option>
-            </select>
-          </div>
+          <div style={{ marginLeft: 12 }}>Country <b>GB</b></div>
 
           <div style={{ marginLeft: 12 }}>
             <label><input type="checkbox" checked={dcOnly} onChange={e => setDcOnly(e.target.checked)} /> DC only</label>
@@ -140,7 +135,9 @@ export default function EVPage() {
 
           <div>Network{" "}
             <select value={operator} onChange={e => setOperator(e.target.value)}>
-              {operatorOptions.map(op => <option key={op} value={op}>{op}</option>)}
+              { (["any", ...new Set(points.map(p => p.op || "Unknown"))] as string[])
+                .filter((v, i, a) => a.indexOf(v) === i)
+                .map(op => <option key={op} value={op}>{op}</option>) }
             </select>
           </div>
 
