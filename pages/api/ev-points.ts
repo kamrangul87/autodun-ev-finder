@@ -1,9 +1,9 @@
 // pages/api/ev-points.ts
-export const runtime = "nodejs"; // force Node on Vercel (not Edge)
+export const runtime = "nodejs"; // ensure Node runtime on Vercel
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
-/* ---------------- Types ---------------- */
+/* ---------------- types ---------------- */
 type OCMConn = {
   PowerKW?: number | null;
   LevelID?: number | null;
@@ -12,7 +12,6 @@ type OCMConn = {
   ConnectionType?: { Title?: string | null; FormalName?: string | null } | null;
   ConnectionTypeID?: number | null;
 };
-
 type OCM = {
   ID?: number;
   AddressInfo?: {
@@ -30,7 +29,18 @@ type OCM = {
   NumberOfPoints?: number | null;
   StatusType?: { IsOperational?: boolean } | null;
 };
+type Point = {
+  id?: number | null;
+  name?: string | null;
+  addr?: string | null;
+  postcode?: string | null;
+  lat: number; lng: number; value: number;
+  breakdown?: { reports: number; downtime: number; connectors: number };
+  op?: string | null; dc?: boolean; kw?: number | null;
+  conn?: number | null; types?: string[];
+};
 
+/* --------------- helpers --------------- */
 const CTID: Record<number, "CCS" | "CHAdeMO" | "Type 2" | "Tesla"> = {
   32: "CCS", 33: "CCS", 1030: "CCS", 1031: "CCS",
   2: "CHAdeMO",
@@ -38,7 +48,6 @@ const CTID: Record<number, "CCS" | "CHAdeMO" | "Type 2" | "Tesla"> = {
   25: "Tesla", 27: "Tesla", 1036: "Tesla",
 };
 
-/* --------------- Helpers --------------- */
 function detectType(c: OCMConn): string | null {
   const id = c?.ConnectionTypeID ?? null;
   if (id && CTID[id]) return CTID[id];
@@ -56,7 +65,7 @@ function detectType(c: OCMConn): string | null {
   return null;
 }
 
-function mapSites(raw: unknown) {
+function mapSites(raw: unknown): Point[] {
   const data: OCM[] = Array.isArray(raw) ? raw : [];
   return data.map((site) => {
     const info = site.AddressInfo || {};
@@ -67,7 +76,6 @@ function mapSites(raw: unknown) {
     const typeSet = new Set<string>();
     let maxKW = 0;
     let anyDC = false;
-
     for (const c of site.Connections ?? []) {
       const fam = detectType(c);
       if (fam) typeSet.add(fam);
@@ -100,22 +108,51 @@ function mapSites(raw: unknown) {
       conn: connectors,
       types: Array.from(typeSet),
     };
-  }).filter(Boolean) as any[];
+  }).filter(Boolean) as Point[];
 }
 
-async function timedFetch(url: string, opts: RequestInit, ms = 10000) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(url, { ...opts, signal: ctrl.signal });
-  } finally { clearTimeout(t); }
+/* --------- tiny embedded fallback so first run isn't empty ---------- */
+const FALLBACK_GB: Point[] = [
+  { lat: 51.5074, lng: -0.1278, value: 1.2, name: "London (fallback)", conn: 8, kw: 150, dc: true, types: ["CCS","CHAdeMO","Type 2","Tesla"], op: "Unknown" },
+  { lat: 52.4862, lng: -1.8904, value: 0.9, name: "Birmingham (fallback)", conn: 6, kw: 120, dc: true, types: ["CCS","Type 2"], op: "Unknown" },
+  { lat: 53.4808, lng: -2.2426, value: 0.8, name: "Manchester (fallback)", conn: 5, kw: 50, dc: false, types: ["Type 2","Tesla"], op: "Unknown" },
+  { lat: 51.4545, lng: -2.5879, value: 0.7, name: "Bristol (fallback)", conn: 4, kw: 22, dc: false, types: ["Type 2"], op: "Unknown" },
+];
+
+/* ---------------- in-memory SWR cache ---------------- */
+// Warm memory cache (persists while the lambda stays warm)
+type CacheEntry = { when: number; payload: Point[] };
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MAX_KEYS = 20;
+const cache = new Map<string, CacheEntry>();
+let lastGood: CacheEntry | null = null;
+
+function setCache(key: string, payload: Point[]) {
+  const entry = { when: Date.now(), payload };
+  cache.set(key, entry);
+  lastGood = entry;
+  if (cache.size > MAX_KEYS) {
+    // naive LRU: delete oldest
+    let oldestKey = "";
+    let oldest = Infinity;
+    for (const [k, v] of cache) if (v.when < oldest) { oldest = v.when; oldestKey = k; }
+    if (oldestKey) cache.delete(oldestKey);
+  }
+}
+function getFresh(key: string): Point[] | null {
+  const e = cache.get(key);
+  if (!e) return null;
+  if (Date.now() - e.when > CACHE_TTL_MS) return null;
+  return e.payload;
 }
 
-async function tryFetch(params: { lat: number; lon: number; distKm: number }) {
-  // GB only (locked)
-  const q = new URLSearchParams({
+/* ----------------- HTTP helpers ----------------- */
+function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
+
+async function fetchOCM(params: { lat: number; lon: number; distKm: number }) {
+  const qs = new URLSearchParams({
     output: "json",
-    countrycode: "GB",
+    countrycode: "GB", // locked
     latitude: String(params.lat),
     longitude: String(params.lon),
     distance: String(Math.max(10, Math.min(650, Math.round(params.distKm)))),
@@ -124,49 +161,67 @@ async function tryFetch(params: { lat: number; lon: number; distKm: number }) {
     compact: "true",
     verbose: "false",
   });
-  if (process.env.OCM_API_KEY) q.set("key", process.env.OCM_API_KEY);
+  if (process.env.OCM_API_KEY) qs.set("key", process.env.OCM_API_KEY);
 
-  const url = `https://api.openchargemap.io/v3/poi/?${q.toString()}`;
+  const url = `https://api.openchargemap.io/v3/poi/?${qs.toString()}`;
   const headers: Record<string, string> = {
-    "User-Agent": "ev-hotspots/1.2 (vercel)",
+    "User-Agent": "ev-hotspots/1.3 (vercel)",
     Accept: "application/json",
     Referer: "https://openchargemap.org/",
   };
   if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
-  const r = await timedFetch(url, { headers, cache: "no-store" }, 10000);
-  if (r.status === 429) {
-    await new Promise(res => setTimeout(res, 700));
-    const r2 = await timedFetch(url, { headers, cache: "no-store" }, 10000);
-    if (!r2.ok) throw new Error(`OCM ${r2.status}`);
-    return mapSites(await r2.json().catch(() => []));
+  // retry w/ exponential backoff for 429/5xx
+  let delay = 500;
+  for (let i = 0; i < 3; i++) {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+    try {
+      const r = await fetch(url, { headers, cache: "no-store", signal: ctrl.signal });
+      if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
+        await sleep(delay + Math.floor(Math.random() * 250));
+        delay *= 2;
+        continue;
+      }
+      if (!r.ok) throw new Error(`OCM ${r.status}`);
+      const json = await r.json().catch(() => []);
+      return mapSites(json);
+    } finally { clearTimeout(to); }
   }
-  if (!r.ok) throw new Error(`OCM ${r.status}`);
-  return mapSites(await r.json().catch(() => []));
+  throw new Error("OCM fetch failed after retries");
 }
 
-/* --------- small embedded fallback so UI never empty ---------- */
-const FALLBACK_GB: any[] = [
-  { lat: 51.5074, lng: -0.1278, value: 1.2, name: "London (fallback)", conn: 8, kw: 150, dc: true, types: ["CCS","CHAdeMO","Type 2","Tesla"], op: "Unknown" },
-  { lat: 52.4862, lng: -1.8904, value: 0.9, name: "Birmingham (fallback)", conn: 6, kw: 120, dc: true, types: ["CCS","Type 2"], op: "Unknown" },
-  { lat: 53.4808, lng: -2.2426, value: 0.8, name: "Manchester (fallback)", conn: 5, kw: 50, dc: false, types: ["Type 2","Tesla"], op: "Unknown" },
-  { lat: 51.4545, lng: -2.5879, value: 0.7, name: "Bristol (fallback)", conn: 4, kw: 22, dc: false, types: ["Type 2"], op: "Unknown" },
-];
-
+/* ----------------- handler ----------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // fixed GB; ignore incoming cc
+  // GB locked; ignore cc
   const lat = Number(req.query.lat ?? 52.5);
   const lon = Number(req.query.lon ?? -1.5);
   const distKm = Number(req.query.distKm ?? 400);
 
+  const key = `${lat.toFixed(3)}|${lon.toFixed(3)}|${Math.round(distKm)}`;
+
+  // serve fresh cache if available
+  const fresh = getFresh(key);
+  if (fresh) {
+    res.setHeader("x-ev-source", "live");
+    res.setHeader("x-ev-cache", "hit");
+    return res.status(200).json(fresh);
+  }
+
   try {
-    let out = await tryFetch({ lat, lon, distKm });
-    if (out.length === 0) out = await tryFetch({ lat, lon, distKm: distKm * 1.6 });
-    if (out.length === 0) out = await tryFetch({ lat, lon, distKm: 650 });
-    res.setHeader("x-ev-source", "ocm");
-    res.status(200).json(out);
+    const out = await fetchOCM({ lat, lon, distKm });
+    setCache(key, out);
+    res.setHeader("x-ev-source", "live");
+    res.setHeader("x-ev-cache", "miss");
+    return res.status(200).json(out);
   } catch {
+    if (lastGood) {
+      res.setHeader("x-ev-source", "stale");
+      res.setHeader("x-ev-cache", "stale");
+      return res.status(200).json(lastGood.payload);
+    }
     res.setHeader("x-ev-source", "fallback");
-    res.status(200).json(FALLBACK_GB);
+    res.setHeader("x-ev-cache", "none");
+    return res.status(200).json(FALLBACK_GB);
   }
 }
