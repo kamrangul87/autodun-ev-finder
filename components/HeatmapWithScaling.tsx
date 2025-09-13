@@ -287,29 +287,39 @@ export default function HeatmapWithScaling({
     onSelectChange?.(p || null);
   }, [selectedInit, points, onSelectChange]);
 
-  // apply filters (including types)
-  const filtered = useMemo(() => {
-    const op = (filters?.operator || "any").toLowerCase();
+   const filtered = useMemo(() => {
+    const opSel = (filters?.operator || "any").toLowerCase();
     const dcOnly = !!filters?.dcOnly;
     const minKW = Math.max(0, filters?.minKW ?? 0);
     const minConn = Math.max(0, filters?.minConn ?? 0);
-    const typesSel = (filters?.types ?? []);
-    return points.filter(p => {
+
+    const ALL_TYPES = ["CCS", "CHAdeMO", "Type 2", "Tesla"];
+    const typesSel = filters?.types ?? ALL_TYPES;
+    const allSelected = typesSel.length === ALL_TYPES.length;
+
+    return points.filter((p) => {
       if (dcOnly && !p.dc) return false;
       if (minKW > 0 && (p.kw || 0) < minKW) return false;
       if (minConn > 0 && (p.conn || 0) < minConn) return false;
-      if (op !== "any") {
+
+      if (opSel !== "any") {
         const pop = (p.op || "unknown").toLowerCase();
-        if (pop !== op) return false;
+        if (pop !== opSel) return false;
       }
-      if (typesSel.length > 0) {
-        const ptTypes = new Set((p.types || []).map(t => t.toLowerCase()));
-        const anyHit = typesSel.some(t => ptTypes.has(t.toLowerCase()));
-        if (!anyHit) return false;
+
+      // Connector type filter:
+      // If all types are selected, do not filter by type at all.
+      if (!allSelected) {
+        const ptTypes = new Set((p.types || []).map((t) => t.toLowerCase()));
+        if (ptTypes.size === 0) return false; // unknown type => exclude only when filtering by types
+        const ok = typesSel.some((t) => ptTypes.has(t.toLowerCase()));
+        if (!ok) return false;
       }
+
       return true;
     });
   }, [points, filters?.operator, filters?.dcOnly, filters?.minKW, filters?.minConn, filters?.types]);
+
 
   // report filtered count up
   useEffect(() => { onFilteredCountChange?.(filtered.length); }, [filtered.length, onFilteredCountChange]);
