@@ -7,20 +7,29 @@ type OCMConn = {
   Level?: { Title?: string | null } | null;
   CurrentType?: { Title?: string | null } | null;
   ConnectionType?: { Title?: string | null; FormalName?: string | null } | null;
-  ConnectionTypeID?: number | null; // <-- use numeric IDs too
+  ConnectionTypeID?: number | null; // <-- numeric IDs too
+};
+
+type OCMAddress = {
+  Title?: string | null;
+  AddressLine1?: string | null;
+  Town?: string | null;
+  StateOrProvince?: string | null;
+  Postcode?: string | null;
+  Latitude?: number;
+  Longitude?: number;
 };
 
 type OCM = {
   ID?: number;
-  AddressInfo?: { Title?: string | null; Latitude?: number; Longitude?: number };
+  AddressInfo?: OCMAddress;
   OperatorInfo?: { Title?: string | null } | null;
   Connections?: OCMConn[] | null;
   NumberOfPoints?: number | null;
   StatusType?: { IsOperational?: boolean } | null;
 };
 
-// Loose map of common OpenChargeMap ConnectionTypeID values → family
-// (covers old + new IDs; unknowns still fall back to string matching)
+// Map of common OpenChargeMap ConnectionTypeID → connector family
 const CTID: Record<number, "CCS" | "CHAdeMO" | "Type 2" | "Tesla"> = {
   32: "CCS",   // CCS (Type 1)
   33: "CCS",   // CCS (Type 2)
@@ -40,7 +49,7 @@ function detectType(c: OCMConn): string | null {
   const id = c?.ConnectionTypeID ?? null;
   if (id && CTID[id as number]) return CTID[id as number];
 
-  // 2) fall back to names (very broad)
+  // 2) fall back to names (broad)
   const s = [
     c?.ConnectionType?.Title,
     c?.ConnectionType?.FormalName,
@@ -86,8 +95,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const out = data
       .map((site) => {
-        const la = site.AddressInfo?.Latitude;
-        const ln = site.AddressInfo?.Longitude;
+        const ai = site.AddressInfo ?? {};
+        const la = ai.Latitude;
+        const ln = ai.Longitude;
         if (typeof la !== "number" || typeof ln !== "number") return null;
 
         const conns = site.Connections ?? [];
@@ -116,9 +126,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         // score is log-scaled connector count, softened by status
         const value = Math.max(0.01, Math.log1p(connectors) * operational);
 
+        // NEW: address + postcode
+        const addr = [
+          ai.Title,
+          ai.AddressLine1,
+          ai.Town,
+          ai.StateOrProvince,
+        ].filter(Boolean).join(", ");
+        const pc = ai.Postcode ?? null;
+
         return {
           id: site.ID ?? null,
-          name: site.AddressInfo?.Title ?? null,
+          name: ai.Title ?? null,
+          addr: addr || null,  // <— NEW
+          pc: pc || null,      // <— NEW
           lat: la,
           lng: ln,
           value,
