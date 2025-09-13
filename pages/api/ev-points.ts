@@ -1,5 +1,5 @@
 // pages/api/ev-points.ts
-export const runtime = "nodejs"; // ensure Node runtime on Vercel
+export const runtime = "nodejs";
 
 import type { NextApiRequest, NextApiResponse } from "next";
 
@@ -111,48 +111,44 @@ function mapSites(raw: unknown): Point[] {
   }).filter(Boolean) as Point[];
 }
 
-/* --------- tiny embedded fallback so first run isn't empty ---------- */
+/* -------- fallback sample (used only if no live cache yet) -------- */
 const FALLBACK_GB: Point[] = [
-  { lat: 51.5074, lng: -0.1278, value: 1.2, name: "London (fallback)", conn: 8, kw: 150, dc: true, types: ["CCS","CHAdeMO","Type 2","Tesla"], op: "Unknown" },
-  { lat: 52.4862, lng: -1.8904, value: 0.9, name: "Birmingham (fallback)", conn: 6, kw: 120, dc: true, types: ["CCS","Type 2"], op: "Unknown" },
-  { lat: 53.4808, lng: -2.2426, value: 0.8, name: "Manchester (fallback)", conn: 5, kw: 50, dc: false, types: ["Type 2","Tesla"], op: "Unknown" },
-  { lat: 51.4545, lng: -2.5879, value: 0.7, name: "Bristol (fallback)", conn: 4, kw: 22, dc: false, types: ["Type 2"], op: "Unknown" },
+  { lat: 51.5074, lng: -0.1278, value: 1.2, name: "London (fallback)", conn: 8, kw: 150, dc: true,  types: ["CCS","CHAdeMO","Type 2","Tesla"], op: "Unknown" },
+  { lat: 52.4862, lng: -1.8904, value: 0.9, name: "Birmingham (fallback)", conn: 6, kw: 120, dc: true,  types: ["CCS","Type 2"], op: "Unknown" },
+  { lat: 53.4808, lng: -2.2426, value: 0.8, name: "Manchester (fallback)", conn: 5, kw: 50,  dc: false, types: ["Type 2","Tesla"], op: "Unknown" },
+  { lat: 51.4545, lng: -2.5879, value: 0.7, name: "Bristol (fallback)",    conn: 4, kw: 22,  dc: false, types: ["Type 2"], op: "Unknown" },
 ];
 
-/* ---------------- in-memory SWR cache ---------------- */
-// Warm memory cache (persists while the lambda stays warm)
-type CacheEntry = { when: number; payload: Point[] };
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/* ---------------- in-memory cache ---------------- */
+type CacheEntry = { when: number; payload: Point[]; upstreamStatus: string };
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 min
 const MAX_KEYS = 20;
 const cache = new Map<string, CacheEntry>();
 let lastGood: CacheEntry | null = null;
 
-function setCache(key: string, payload: Point[]) {
-  const entry = { when: Date.now(), payload };
+function setCache(key: string, payload: Point[], upstreamStatus: string) {
+  const entry = { when: Date.now(), payload, upstreamStatus };
   cache.set(key, entry);
   lastGood = entry;
   if (cache.size > MAX_KEYS) {
-    // naive LRU: delete oldest
-    let oldestKey = "";
-    let oldest = Infinity;
+    let oldestKey = ""; let oldest = Infinity;
     for (const [k, v] of cache) if (v.when < oldest) { oldest = v.when; oldestKey = k; }
     if (oldestKey) cache.delete(oldestKey);
   }
 }
-function getFresh(key: string): Point[] | null {
+function getFresh(key: string): CacheEntry | null {
   const e = cache.get(key);
   if (!e) return null;
   if (Date.now() - e.when > CACHE_TTL_MS) return null;
-  return e.payload;
+  return e;
 }
 
-/* ----------------- HTTP helpers ----------------- */
 function sleep(ms: number) { return new Promise(res => setTimeout(res, ms)); }
 
 async function fetchOCM(params: { lat: number; lon: number; distKm: number }) {
   const qs = new URLSearchParams({
     output: "json",
-    countrycode: "GB", // locked
+    countrycode: "GB",                      // GB locked
     latitude: String(params.lat),
     longitude: String(params.lon),
     distance: String(Math.max(10, Math.min(650, Math.round(params.distKm)))),
@@ -165,63 +161,85 @@ async function fetchOCM(params: { lat: number; lon: number; distKm: number }) {
 
   const url = `https://api.openchargemap.io/v3/poi/?${qs.toString()}`;
   const headers: Record<string, string> = {
-    "User-Agent": "ev-hotspots/1.3 (vercel)",
+    "User-Agent": "ev-hotspots/1.4 (vercel)",
     Accept: "application/json",
     Referer: "https://openchargemap.org/",
   };
   if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
-  // retry w/ exponential backoff for 429/5xx
-  let delay = 500;
+  let lastStatus = "unknown";
+  let delay = 600;
   for (let i = 0; i < 3; i++) {
     const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 10000);
+    const to = setTimeout(() => ctrl.abort(), 12000);
     try {
       const r = await fetch(url, { headers, cache: "no-store", signal: ctrl.signal });
+      lastStatus = `${r.status}`;
       if (r.status === 429 || (r.status >= 500 && r.status < 600)) {
-        await sleep(delay + Math.floor(Math.random() * 250));
-        delay *= 2;
+        await sleep(delay + Math.floor(Math.random() * 300));
+        delay *= 1.8;
         continue;
       }
       if (!r.ok) throw new Error(`OCM ${r.status}`);
       const json = await r.json().catch(() => []);
-      return mapSites(json);
+      const mapped = mapSites(json);
+      return { points: mapped, upstream: lastStatus };
     } finally { clearTimeout(to); }
   }
-  throw new Error("OCM fetch failed after retries");
+  throw new Error(`OCM failed after retries (${lastStatus})`);
 }
 
 /* ----------------- handler ----------------- */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // GB locked; ignore cc
   const lat = Number(req.query.lat ?? 52.5);
   const lon = Number(req.query.lon ?? -1.5);
   const distKm = Number(req.query.distKm ?? 400);
 
   const key = `${lat.toFixed(3)}|${lon.toFixed(3)}|${Math.round(distKm)}`;
 
-  // serve fresh cache if available
   const fresh = getFresh(key);
   if (fresh) {
     res.setHeader("x-ev-source", "live");
     res.setHeader("x-ev-cache", "hit");
-    return res.status(200).json(fresh);
+    res.setHeader("x-ev-upstream-status", fresh.upstreamStatus);
+    return res.status(200).json(fresh.payload);
   }
 
   try {
-    const out = await fetchOCM({ lat, lon, distKm });
-    setCache(key, out);
-    res.setHeader("x-ev-source", "live");
-    res.setHeader("x-ev-cache", "miss");
-    return res.status(200).json(out);
-  } catch {
+    const { points, upstream } = await fetchOCM({ lat, lon, distKm });
+
+    // guard against weird tiny payloads (don’t poison cache)
+    if (points.length >= 50) {
+      setCache(key, points, upstream);
+      res.setHeader("x-ev-source", "live");
+      res.setHeader("x-ev-cache", "miss");
+      res.setHeader("x-ev-upstream-status", upstream);
+      return res.status(200).json(points);
+    }
+
+    // tiny payload from upstream → serve last good if possible
     if (lastGood) {
       res.setHeader("x-ev-source", "stale");
       res.setHeader("x-ev-cache", "stale");
+      res.setHeader("x-ev-upstream-status", upstream);
+      return res.status(200).json(lastGood.payload);
+    }
+
+    // nothing good cached yet → fallback sample
+    res.setHeader("x-ev-source", "fallback");
+    res.setHeader("x-ev-cache", "none");
+    res.setHeader("x-ev-upstream-status", upstream);
+    return res.status(200).json(FALLBACK_GB);
+  } catch (e: any) {
+    if (lastGood) {
+      res.setHeader("x-ev-source", "stale");
+      res.setHeader("x-ev-cache", "stale");
+      res.setHeader("x-ev-upstream-status", "error");
       return res.status(200).json(lastGood.payload);
     }
     res.setHeader("x-ev-source", "fallback");
     res.setHeader("x-ev-cache", "none");
+    res.setHeader("x-ev-upstream-status", "error");
     return res.status(200).json(FALLBACK_GB);
   }
 }
