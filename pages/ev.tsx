@@ -10,15 +10,14 @@ function kmForZoom(z: number) {
 }
 
 export default function EVPage() {
-  // ----- fixed GB only -----
-  const cc = "GB";
-
+  // GB only (locked)
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState(0);
+
   const [dcOnly, setDcOnly] = React.useState(false);
   const [minKW, setMinKW] = React.useState(0);
   const [minConn, setMinConn] = React.useState(0);
-  const ALL_TYPES = ["CCS","CHAdeMO","Type 2","Tesla"];
+  const ALL_TYPES = ["CCS", "CHAdeMO", "Type 2", "Tesla"];
   const [typesSel, setTypesSel] = React.useState<string[]>(ALL_TYPES);
   const [operator, setOperator] = React.useState<string>("any");
 
@@ -29,10 +28,13 @@ export default function EVPage() {
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [source, setSource] = React.useState<"ocm"|"fallback"|"">("");
+  const [source, setSource] = React.useState<"live"|"stale"|"fallback"| "">("");
 
   const barRef = React.useRef<HTMLDivElement>(null);
   const headerOffset = (barRef.current?.getBoundingClientRect().height ?? 0) + 12;
+
+  const inFlight = React.useRef<AbortController | null>(null);
+  const retryTimer = React.useRef<number | null>(null);
 
   const operatorOptions = React.useMemo(() => {
     const set = new Set<string>();
@@ -40,43 +42,63 @@ export default function EVPage() {
     return ["any", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [points]);
 
-  const fetchData = React.useCallback(async (p?: { lat?:number; lon?:number; radius?:number; showLoader?: boolean }) => {
+  const doFetch = React.useCallback(async (args?: { lat?:number; lon?:number; radius?:number; showLoader?: boolean; allowRetry?: boolean }) => {
     try {
-      if (p?.showLoader !== false) setLoading(true);
+      if (args?.showLoader !== false) setLoading(true);
       setError(null);
-      const lat = p?.lat ?? center[0];
-      const lon = p?.lon ?? center[1];
-      const radius = p?.radius ?? kmForZoom(zoom);
 
-      const r = await fetch(`/api/ev-points?lat=${lat}&lon=${lon}&distKm=${radius}`, { cache: "no-store" });
-      setSource((r.headers.get("x-ev-source") as any) || "");
-      if (!r.ok) throw new Error(`API ${r.status}`);
-      const data: unknown = await r.json();
-      setPoints(Array.isArray(data) ? (data as Point[]) : []);
+      // cancel any in-flight request
+      if (inFlight.current) inFlight.current.abort();
+      const ctrl = new AbortController();
+      inFlight.current = ctrl;
+
+      const lat = args?.lat ?? center[0];
+      const lon = args?.lon ?? center[1];
+      const radius = args?.radius ?? kmForZoom(zoom);
+
+      const res = await fetch(`/api/ev-points?lat=${lat}&lon=${lon}&distKm=${radius}`, {
+        cache: "no-store",
+        signal: ctrl.signal,
+      });
+      const evSource = (res.headers.get("x-ev-source") as any) || "";
+      setSource(evSource);
+      if (!res.ok) throw new Error(`API ${res.status}`);
+      const data = await res.json();
+      setPoints(Array.isArray(data) ? data : []);
+
+      // if server gave fallback, schedule 2 quick retries (1.2s / 2.4s)
+      if (evSource === "fallback" && (args?.allowRetry ?? true)) {
+        if (retryTimer.current) window.clearTimeout(retryTimer.current);
+        retryTimer.current = window.setTimeout(() => {
+          doFetch({ lat, lon, radius, showLoader: false, allowRetry: false });
+        }, 1200);
+      }
     } catch (e:any) {
-      setPoints([]);
-      setError(e?.message ?? "Failed to load data");
+      if (e?.name !== "AbortError") {
+        setError(e?.message ?? "Failed to load data");
+        setPoints([]);
+      }
     } finally {
       setLoading(false);
     }
   }, [center, zoom]);
 
-  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // initial load
+  React.useEffect(() => { doFetch({ showLoader: true }); }, []); // first load
 
   async function handleGo() {
     const q = search.trim();
     if (!q) return;
     try {
       setLoading(true); setError(null);
-      const resp = await fetch(
+      const r = await fetch(
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=gb&addressdetails=1`
       );
-      const js = await resp.json();
+      const js = await r.json();
       if (Array.isArray(js) && js.length > 0) {
         const lat = parseFloat(js[0].lat);
         const lon = parseFloat(js[0].lon);
         setExternalCenter({ lat, lng: lon, z: 12 });
-        await fetchData({ lat, lon, radius: kmForZoom(12), showLoader: false });
+        await doFetch({ lat, lon, radius: kmForZoom(12), showLoader: false });
       }
     } catch (e:any) {
       setError(e?.message ?? "Search failed");
@@ -93,7 +115,7 @@ export default function EVPage() {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
         setExternalCenter({ lat, lng: lon, z: 12 });
-        await fetchData({ lat, lon, radius: kmForZoom(12), showLoader: false });
+        await doFetch({ lat, lon, radius: kmForZoom(12), showLoader: false });
         setLoading(false);
       },
       (err) => { setLoading(false); setError(err?.message ?? "Geolocation failed"); },
@@ -101,7 +123,7 @@ export default function EVPage() {
     );
   }
 
-  const toggleType = (t:string) =>
+  const toggleType = (t: string) =>
     setTypesSel(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
   return (
@@ -119,7 +141,7 @@ export default function EVPage() {
             Live OCM data • {points.length.toLocaleString()} points
             {source && (
               <span style={{ marginLeft: 8, fontWeight: 500, fontSize: 12, opacity: 0.8 }}>
-                ({source === "ocm" ? "live" : "fallback sample"})
+                ({source === "live" ? "live" : source === "stale" ? "stale (cached)" : "fallback sample"})
               </span>
             )}
           </div>
@@ -135,9 +157,7 @@ export default function EVPage() {
 
           <div>Network{" "}
             <select value={operator} onChange={e => setOperator(e.target.value)}>
-              { (["any", ...new Set(points.map(p => p.op || "Unknown"))] as string[])
-                .filter((v, i, a) => a.indexOf(v) === i)
-                .map(op => <option key={op} value={op}>{op}</option>) }
+              {operatorOptions.map(op => <option key={op} value={op}>{op}</option>)}
             </select>
           </div>
 
@@ -162,7 +182,7 @@ export default function EVPage() {
             />
             <button onClick={handleGo}>Go</button>
             <button onClick={handleGeolocate}>Geolocate</button>
-            <button onClick={() => fetchData({ showLoader: true })}>{loading ? "Loading..." : "Refresh"}</button>
+            <button onClick={() => doFetch({ showLoader: true })}>{loading ? "Loading..." : "Refresh"}</button>
           </div>
         </div>
 
