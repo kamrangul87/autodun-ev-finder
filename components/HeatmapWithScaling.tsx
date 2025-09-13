@@ -9,8 +9,8 @@ export type Breakdown = { reports: number; downtime: number; connectors: number 
 export type Point = {
   id?: number | null;
   name?: string | null;
-  addr?: string | null;   // NEW
-  pc?: string | null;     // NEW
+  addr?: string | null;          // optional, shown if present
+  postcode?: string | null;      // optional, shown if present
   lat: number; lng: number; value: number;
   breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number;
   conn?: number; types?: string[];
@@ -123,7 +123,7 @@ function ViewportReporter({ onChange }: { onChange: (center: [number, number], z
         const c = map.getCenter();
         onChange([c.lat, c.lng], map.getZoom());
         t = null;
-      }, 300); // throttle
+      }, 300);
     };
     send();
     map.on("moveend", send);
@@ -140,15 +140,14 @@ function ViewportReporter({ onChange }: { onChange: (center: [number, number], z
 // ---------- Compute an offset target (so place sits under header) ----------
 function offsetTargetLatLng(map: L.Map, lat: number, lng: number, offsetYPx: number, zoom?: number) {
   const z = (zoom ?? map.getZoom());
-  // project the target into pixel coords, apply vertical offset, then unproject
   const pt = map.project(L.latLng(lat, lng), z);
   const shifted = L.point(pt.x, pt.y - offsetYPx);
   return map.unproject(shifted, z);
 }
 
-// ---------- Fly to external center WITHOUT post-pan (no “bounce”) ----------
+// ---------- Fly to external center WITHOUT post-pan ----------
 function FlyToOnChange({
-  center, zoom, offsetTopPx = 90,
+  center, zoom, offsetTopPx = 120,
 }: { center?: [number, number] | null; zoom?: number | null; offsetTopPx?: number }) {
   const map = useMap();
   const prevKey = React.useRef<string>("");
@@ -267,7 +266,7 @@ function HotspotsOverlay({
               eventHandlers={{
                 click: () => {
                   onSelect(p);
-                  const targetZoom = Math.max(map.getZoom(), 10);
+                  const targetZoom = Math.max(map.getZoom(), 12);
                   map.flyTo([p.lat, p.lng], targetZoom, { duration: 0.4 });
                 }
               }}
@@ -281,44 +280,38 @@ function HotspotsOverlay({
               <Popup>
                 <div style={{ fontSize: 12, lineHeight: 1.3 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
-
-                  {(p.addr || p.pc) && (
-                    <div style={{ marginTop: 4 }}>
-                      {p.addr}{p.pc ? `, ${p.pc}` : ""}
+                  {p.addr || p.postcode ? (
+                    <div style={{ marginTop: 4, opacity: 0.9 }}>
+                      {p.addr ? <div>{p.addr}</div> : null}
+                      {p.postcode ? <div>{p.postcode}</div> : null}
                     </div>
-                  )}
-
-                  <div style={{ marginTop: 6 }}>
-                    Score: {p.value.toFixed(2)}
-                  </div>
-
+                  ) : null}
+                  <div style={{ marginTop: 4 }}>Score: {p.value.toFixed(2)}</div>
                   {p.breakdown && (
                     <div style={{ marginTop: 4, opacity: 0.9 }}>
-                      <div>Reports: {shares.reports}%</div>
-                      <div>Downtime: {shares.downtime}%</div>
-                      <div>Connectors: {shares.connectors}%</div>
+                      {(() => {
+                        const s = weightedShares(p.breakdown);
+                        return (
+                          <>
+                            <div>Reports: {s.reports}%</div>
+                            <div>Downtime: {s.downtime}%</div>
+                            <div>Connectors: {s.connectors}%</div>
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
-
                   <div style={{ marginTop: 6, opacity: .85 }}>
                     {(p.types && p.types.length > 0) ? `Types: ${p.types.join(", ")}` : "Types: unknown"}
                     {p.op ? ` • ${p.op}` : ""}
                     {typeof p.kw === "number" ? ` • max ${p.kw}kW` : ""}
                   </div>
-
                   <div style={{ marginTop: 8 }}>
                     <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.lat},${p.lng}`)}`}
                       target="_blank" rel="noreferrer"
                     >
                       Open in Google Maps
-                    </a>
-                    {" • "}
-                    <a
-                      href={`https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`}
-                      target="_blank" rel="noreferrer"
-                    >
-                      Directions
                     </a>
                   </div>
                 </div>
@@ -345,13 +338,14 @@ type Props = {
   onSelectChange?: (p: Point | null) => void;
   onFilteredCountChange?: (n: number) => void;
   externalCenter?: { lat: number; lng: number; z?: number } | null;
+  offsetTopPx?: number;                 // NEW: how many pixels to offset under header
 };
 
 export default function HeatmapWithScaling({
   points, defaultScale = "robust", palette = "fire",
   filters, initialUI, onUIChange, onViewportChange,
   selectedInit, onSelectChange, onFilteredCountChange,
-  externalCenter
+  externalCenter, offsetTopPx = 120,                 // default
 }: Props) {
   const isSmall = useIsSmall();
 
@@ -423,7 +417,7 @@ export default function HeatmapWithScaling({
   useEffect(() => { onUIChange?.({ scale: scaleMethod, radius, blur }); }, [scaleMethod, radius, blur, onUIChange]);
 
   const exportCSV = React.useCallback(() => {
-    const headers = ["lat","lng","score","reports_pct","downtime_pct","connectors_pct","reports_raw","downtime_raw","connectors_raw","operator","dc","max_kw","connectors","types","name"];
+    const headers = ["lat","lng","score","reports_pct","downtime_pct","connectors_pct","reports_raw","downtime_raw","connectors_raw","operator","dc","max_kw","connectors","types","name","addr","postcode"];
     const rows = topHotspots.map(h => {
       const shares = weightedShares(h.breakdown);
       const b = h.breakdown || { reports: 0, downtime: 0, connectors: 0 };
@@ -434,6 +428,7 @@ export default function HeatmapWithScaling({
         (h.op || "Unknown").replace(/,/g, " "), h.dc ? "1" : "0",
         String(h.kw ?? 0), String(h.conn ?? 0),
         (h.types || []).join("|"), (h.name || "").replace(/,/g, " "),
+        (h.addr || "").replace(/,/g, " "), (h.postcode || "").replace(/,/g, " "),
       ];
     });
     const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
@@ -443,6 +438,7 @@ export default function HeatmapWithScaling({
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }, [topHotspots]);
 
+  const isSmall = useIsSmall();
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 12 : 13;
@@ -454,7 +450,11 @@ export default function HeatmapWithScaling({
         <ViewportReporter onChange={(c, z) => onViewportChange?.(c, z)} />
         <DynamicRadius setRadius={setRadius} />
         {externalCenter && (
-          <FlyToOnChange center={[externalCenter.lat, externalCenter.lng]} zoom={externalCenter.z ?? null} offsetTopPx={90} />
+          <FlyToOnChange
+            center={[externalCenter.lat, externalCenter.lng]}
+            zoom={externalCenter.z ?? null}
+            offsetTopPx={offsetTopPx}
+          />
         )}
         <FitBoundsOnce heatPoints={heatData} skip={!!externalCenter} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
