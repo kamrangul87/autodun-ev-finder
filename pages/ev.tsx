@@ -1,16 +1,18 @@
-'use client';
-
 import React from "react";
 import dynamic from "next/dynamic";
+
+// Load the map component on the client only (prevents "window is not defined")
 const HeatmapWithScaling = dynamic(
   () => import("../components/HeatmapWithScaling"),
   { ssr: false }
 );
 
-// small helper to compute search distance from zoom (rough)
+// Import types only (safe for SSR)
+import type { Point } from "../components/HeatmapWithScaling";
+
+// Rough helper: pick a search radius (km) from zoom
 function kmForZoom(z: number) {
-  // very rough heuristic: halve radius each 2 zoom levels
-  const base = 400; // km at z ≈ 7
+  const base = 400; // km at z≈7
   return Math.max(50, Math.round(base / Math.pow(2, (z - 7) / 2)));
 }
 
@@ -20,26 +22,39 @@ export default function EVPage() {
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState<number>(0);
 
+  // filters
   const [dcOnly, setDcOnly] = React.useState(false);
   const [minKW, setMinKW] = React.useState(0);
   const [minConn, setMinConn] = React.useState(0);
-  const [typesSel, setTypesSel] = React.useState<string[]>(["CCS","CHAdeMO","Type 2","Tesla"]);
+  const ALL_TYPES = ["CCS","CHAdeMO","Type 2","Tesla"];
+  const [typesSel, setTypesSel] = React.useState<string[]>(ALL_TYPES);
   const [operator, setOperator] = React.useState<string>("any");
 
+  // search + viewport
   const [search, setSearch] = React.useState<string>("");
   const [externalCenter, setExternalCenter] = React.useState<{lat:number;lng:number;z?:number}|null>(null);
-
   const [center, setCenter] = React.useState<[number, number]>([51.5074, -0.1278]);
   const [zoom, setZoom] = React.useState<number>(7);
 
+  // misc
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // measure header height → offset for flyTo (keeps target under bar)
+  // measure header height → pass as offsetTopPx to the map (keeps targets under the bar)
   const barRef = React.useRef<HTMLDivElement>(null);
   const headerOffset = (barRef.current?.getBoundingClientRect().height ?? 0) + 12;
 
-  // ---------- Fetch OCM data (server-side API proxy) ----------
+  // Build operator options from current data
+  const operatorOptions = React.useMemo(() => {
+    const set = new Set<string>();
+    for (const p of points) {
+      const name = (p.op || "Unknown").trim();
+      if (name) set.add(name);
+    }
+    return ["any", ...Array.from(set).sort((a, b) => a.localeCompare(b))];
+  }, [points]);
+
+  // ---------- Fetch OCM data via our API (server-side proxy) ----------
   const fetchData = React.useCallback(async (opts?: { silent?: boolean; lat?: number; lon?: number; radius?: number }) => {
     try {
       setError(null);
@@ -64,7 +79,7 @@ export default function EVPage() {
   // initial fetch
   React.useEffect(() => {
     fetchData({ silent: false });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // re-fetch when country changes
@@ -72,7 +87,7 @@ export default function EVPage() {
     fetchData({ silent: false });
   }, [cc, fetchData]);
 
-  // ---------- Map callbacks ----------
+  // Map viewport callback
   const handleViewport = React.useCallback((c: [number, number], z: number) => {
     setCenter(c);
     setZoom(z);
@@ -83,19 +98,23 @@ export default function EVPage() {
     const q = search.trim();
     if (!q) return;
     try {
-      // Nominatim geocode
-      const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=${cc.toLowerCase()}&addressdetails=1`);
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=${cc.toLowerCase()}&addressdetails=1`
+      );
       const js = await resp.json();
       if (Array.isArray(js) && js.length > 0) {
         const lat = parseFloat(js[0].lat);
         const lon = parseFloat(js[0].lon);
         // center & zoom in
         setExternalCenter({ lat, lng: lon, z: 12 });
-        // also refresh data around that area (silent)
+        // refresh data around that area (silent)
         fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
       }
-    } catch (_) { /* ignore */ }
+    } catch {
+      // ignore; you can add toast if you like
+    }
   }
+
   function handleGeolocate() {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(
@@ -105,13 +124,12 @@ export default function EVPage() {
         setExternalCenter({ lat, lng: lon, z: 12 });
         fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
       },
-      () => { /* ignore */ },
+      () => {},
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }
 
   // ---------- Type toggles ----------
-  const ALL_TYPES = ["CCS","CHAdeMO","Type 2","Tesla"];
   const allChecked = typesSel.length === ALL_TYPES.length;
   const noneChecked = typesSel.length === 0;
   function toggleType(t: string) {
@@ -138,11 +156,11 @@ export default function EVPage() {
       >
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
           <div style={{ fontWeight: 600 }}>
-            Live OCM data
-            <span style={{ opacity: 0.7 }}> • {points.length.toLocaleString()} points</span>
-            {filteredCount !== points.length ? (
-              <span style={{ opacity: 0.7 }}> (filtered {filteredCount.toLocaleString()})</span>
-            ) : null}
+            Live OCM data{" "}
+            <span style={{ opacity: 0.7 }}>
+              • {points.length.toLocaleString()} points
+              {filteredCount !== points.length ? ` (filtered ${filteredCount.toLocaleString()})` : ""}
+            </span>
           </div>
 
           <div style={{ marginLeft: 12 }}>
@@ -157,17 +175,42 @@ export default function EVPage() {
           </div>
 
           <div style={{ marginLeft: 12 }}>
-            <label><input type="checkbox" checked={dcOnly} onChange={e => setDcOnly(e.target.checked)} /> DC only</label>
+            <label>
+              <input type="checkbox" checked={dcOnly} onChange={e => setDcOnly(e.target.checked)} /> DC only
+            </label>
           </div>
 
           <div>
             Min kW{" "}
-            <input type="number" min={0} step={5} value={minKW} onChange={e => setMinKW(+e.target.value || 0)} style={{ width: 70 }} />
+            <input
+              type="number"
+              min={0}
+              step={5}
+              value={minKW}
+              onChange={e => setMinKW(+e.target.value || 0)}
+              style={{ width: 70 }}
+            />
           </div>
 
           <div>
             Min connectors{" "}
-            <input type="number" min={0} step={1} value={minConn} onChange={e => setMinConn(+e.target.value || 0)} style={{ width: 70 }} />
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={minConn}
+              onChange={e => setMinConn(+e.target.value || 0)}
+              style={{ width: 70 }}
+            />
+          </div>
+
+          <div>
+            Network{" "}
+            <select value={operator} onChange={e => setOperator(e.target.value)}>
+              {operatorOptions.map(op => (
+                <option key={op} value={op}>{op}</option>
+              ))}
+            </select>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -191,7 +234,9 @@ export default function EVPage() {
             />
             <button onClick={handleGo}>Go</button>
             <button onClick={handleGeolocate}>Geolocate</button>
-            <button onClick={() => fetchData({ silent: false })} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+            <button onClick={() => fetchData({ silent: false })} disabled={loading}>
+              {loading ? "Loading…" : "Refresh"}
+            </button>
           </div>
         </div>
 
@@ -205,7 +250,7 @@ export default function EVPage() {
         onViewportChange={(c, z) => handleViewport(c, z)}
         onFilteredCountChange={setFilteredCount}
         externalCenter={externalCenter}
-        offsetTopPx={headerOffset}               // <<— precise center under the header
+        offsetTopPx={headerOffset}   // <<< keeps the searched/geolocated target under the header
       />
     </div>
   );
