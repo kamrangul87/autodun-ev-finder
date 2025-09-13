@@ -15,8 +15,7 @@ export type Point = {
 };
 type Meta = { halfReports: number; halfDown: number };
 type Filters = {
-  operator?: string; dcOnly?: boolean; minKW?: number;
-  minConn?: number; types?: string[];
+  operator?: string; dcOnly?: boolean; minKW?: number; minConn?: number; types?: string[];
 };
 type UI = { scale: ScaleMethod; radius: number; blur: number };
 
@@ -122,6 +121,20 @@ function ViewportReporter({ onChange }: { onChange: (center: [number, number], z
     send(); map.on("moveend", send); map.on("zoomend", send);
     return () => { map.off("moveend", send); map.off("zoomend", send); };
   }, [map, onChange]);
+  return null;
+}
+
+// ---------- Fly to external center (fixes Go/Geolocate) ----------
+function FlyToOnChange({ center, zoom }: { center?: [number, number] | null; zoom?: number | null }) {
+  const map = useMap();
+  const prevKey = React.useRef<string>("");
+  useEffect(() => {
+    if (!center) return;
+    const key = `${center[0].toFixed(5)},${center[1].toFixed(5)}|${zoom ?? map.getZoom()}`;
+    if (prevKey.current === key) return;
+    map.flyTo(center, zoom ?? map.getZoom(), { duration: 0.6 });
+    prevKey.current = key;
+  }, [center?.[0], center?.[1], zoom, map]);
   return null;
 }
 
@@ -264,13 +277,15 @@ type Props = {
   onViewportChange?: (center: [number, number], zoom: number) => void;
   selectedInit?: { lat: number; lng: number } | null;
   onSelectChange?: (p: Point | null) => void;
-  onFilteredCountChange?: (n: number) => void; // NEW
+  onFilteredCountChange?: (n: number) => void;
+  externalCenter?: { lat: number; lng: number; z?: number } | null; // NEW
 };
 
 export default function HeatmapWithScaling({
-  points, defaultScale = "robust", palette = "fire", meta,
+  points, defaultScale = "robust", palette = "fire",
   filters, initialUI, onUIChange, onViewportChange,
-  selectedInit, onSelectChange, onFilteredCountChange
+  selectedInit, onSelectChange, onFilteredCountChange,
+  externalCenter
 }: Props) {
   const isSmall = useIsSmall();
 
@@ -287,7 +302,8 @@ export default function HeatmapWithScaling({
     onSelectChange?.(p || null);
   }, [selectedInit, points, onSelectChange]);
 
-   const filtered = useMemo(() => {
+  // apply filters (with improved types logic)
+  const filtered = useMemo(() => {
     const opSel = (filters?.operator || "any").toLowerCase();
     const dcOnly = !!filters?.dcOnly;
     const minKW = Math.max(0, filters?.minKW ?? 0);
@@ -295,7 +311,8 @@ export default function HeatmapWithScaling({
 
     const ALL_TYPES = ["CCS", "CHAdeMO", "Type 2", "Tesla"];
     const typesSel = filters?.types ?? ALL_TYPES;
-    const allSelected = typesSel.length === ALL_TYPES.length;
+    const noneSelected = typesSel.length === 0;
+    const allSelected  = typesSel.length === ALL_TYPES.length;
 
     return points.filter((p) => {
       if (dcOnly && !p.dc) return false;
@@ -307,11 +324,10 @@ export default function HeatmapWithScaling({
         if (pop !== opSel) return false;
       }
 
-      // Connector type filter:
-      // If all types are selected, do not filter by type at all.
-      if (!allSelected) {
+      // If none OR all are selected, do not filter by types at all (matches your earlier behavior)
+      if (!(noneSelected || allSelected)) {
         const ptTypes = new Set((p.types || []).map((t) => t.toLowerCase()));
-        if (ptTypes.size === 0) return false; // unknown type => exclude only when filtering by types
+        if (ptTypes.size === 0) return false; // unknown types -> exclude only when actively filtering
         const ok = typesSel.some((t) => ptTypes.has(t.toLowerCase()));
         if (!ok) return false;
       }
@@ -320,8 +336,7 @@ export default function HeatmapWithScaling({
     });
   }, [points, filters?.operator, filters?.dcOnly, filters?.minKW, filters?.minConn, filters?.types]);
 
-
-  // report filtered count up
+  // report filtered count to header
   useEffect(() => { onFilteredCountChange?.(filtered.length); }, [filtered.length, onFilteredCountChange]);
 
   const center = filtered.length ? { lat: filtered[0].lat, lng: filtered[0].lng } : { lat: 51.5074, lng: -0.1278 };
@@ -345,30 +360,23 @@ export default function HeatmapWithScaling({
   useEffect(() => { onUIChange?.({ scale: scaleMethod, radius, blur }); }, [scaleMethod, radius, blur, onUIChange]);
 
   const exportCSV = React.useCallback(() => {
-    const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw", "operator", "dc", "max_kw", "connectors", "types", "name"];
+    const headers = ["lat","lng","score","reports_pct","downtime_pct","connectors_pct","reports_raw","downtime_raw","connectors_raw","operator","dc","max_kw","connectors","types","name"];
     const rows = topHotspots.map(h => {
       const shares = weightedShares(h.breakdown);
       const b = h.breakdown || { reports: 0, downtime: 0, connectors: 0 };
       return [
-        h.lat.toFixed(6),
-        h.lng.toFixed(6),
-        h.value.toFixed(3),
+        h.lat.toFixed(6), h.lng.toFixed(6), h.value.toFixed(3),
         shares.reports, shares.downtime, shares.connectors,
         b.reports.toFixed(3), b.downtime.toFixed(3), b.connectors.toFixed(3),
-        (h.op || "Unknown").replace(/,/g, " "),
-        h.dc ? "1" : "0",
-        String(h.kw ?? 0),
-        String(h.conn ?? 0),
-        (h.types || []).join("|"),
-        (h.name || "").replace(/,/g, " "),
+        (h.op || "Unknown").replace(/,/g, " "), h.dc ? "1" : "0",
+        String(h.kw ?? 0), String(h.conn ?? 0),
+        (h.types || []).join("|"), (h.name || "").replace(/,/g, " "),
       ];
     });
-
     const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = "ev_hotspots.csv";
+    const a = document.createElement("a"); a.href = url; a.download = "ev_hotspots.csv";
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }, [topHotspots]);
 
@@ -382,6 +390,10 @@ export default function HeatmapWithScaling({
         <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <ViewportReporter onChange={(c, z) => onViewportChange?.(c, z)} />
         <DynamicRadius setRadius={setRadius} />
+        {/* NEW: fly when parent asks us to (Go / Geolocate) */}
+        {externalCenter && (
+          <FlyToOnChange center={[externalCenter.lat, externalCenter.lng]} zoom={externalCenter.z ?? null} />
+        )}
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
         <HotspotsOverlay
@@ -392,7 +404,7 @@ export default function HeatmapWithScaling({
         />
       </MapContainer>
 
-      {/* Controls */}
+      {/* Heatmap controls */}
       <div style={{
         position: "absolute", top: 12, left: 12, background: "rgba(255,255,255,0.9)",
         padding: boxPad, borderRadius: boxRadius, boxShadow: "0 2px 10px rgba(0,0,0,0.1)", fontSize: boxFont, zIndex: 1000,
@@ -400,7 +412,7 @@ export default function HeatmapWithScaling({
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Heatmap Settings</div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <label>Scale:</label>
-          <select value={scaleMethod} onChange={e => setScaleMethod(e.target.value as ScaleMethod)}>
+          <select value={scaleMethod} onChange={e => setScaleMethod(e.target.value as any)}>
             <option value="robust">Robust (p10–p90)</option>
             <option value="linear">Linear</option>
             <option value="log">Log</option>
