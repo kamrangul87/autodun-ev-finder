@@ -7,69 +7,51 @@ type OCMConn = {
   Level?: { Title?: string | null } | null;
   CurrentType?: { Title?: string | null } | null;
   ConnectionType?: { Title?: string | null; FormalName?: string | null } | null;
-  ConnectionTypeID?: number | null; // <-- numeric IDs too
-};
-
-type OCMAddress = {
-  Title?: string | null;
-  AddressLine1?: string | null;
-  Town?: string | null;
-  StateOrProvince?: string | null;
-  Postcode?: string | null;
-  Latitude?: number;
-  Longitude?: number;
+  ConnectionTypeID?: number | null;
 };
 
 type OCM = {
   ID?: number;
-  AddressInfo?: OCMAddress;
+  AddressInfo?: {
+    Title?: string | null;
+    AddressLine1?: string | null;
+    AddressLine2?: string | null;
+    Town?: string | null;
+    StateOrProvince?: string | null;
+    Postcode?: string | null;
+    Latitude?: number;
+    Longitude?: number;
+  } | null;
   OperatorInfo?: { Title?: string | null } | null;
   Connections?: OCMConn[] | null;
   NumberOfPoints?: number | null;
   StatusType?: { IsOperational?: boolean } | null;
 };
 
-// Map of common OpenChargeMap ConnectionTypeID → connector family
+// Loose map of OpenChargeMap ConnectionTypeIDs to families
 const CTID: Record<number, "CCS" | "CHAdeMO" | "Type 2" | "Tesla"> = {
-  32: "CCS",   // CCS (Type 1)
-  33: "CCS",   // CCS (Type 2)
-  2:  "CHAdeMO",
-  28: "Type 2", // Type 2 (Tethered)
-  30: "Type 2", // Type 2 (Socket)
-  25: "Tesla",  // Tesla Connector
-  27: "Tesla",  // Tesla Supercharger
-  // newer / alternate IDs sometimes seen in feeds:
-  1036: "Tesla", // NACS
-  1030: "CCS",
-  1031: "CCS",
+  32: "CCS", 33: "CCS", 1030: "CCS", 1031: "CCS",
+  2: "CHAdeMO",
+  28: "Type 2", 30: "Type 2",
+  25: "Tesla", 27: "Tesla", 1036: "Tesla" // NACS
 };
 
 function detectType(c: OCMConn): string | null {
-  // 1) prefer numeric id
   const id = c?.ConnectionTypeID ?? null;
-  if (id && CTID[id as number]) return CTID[id as number];
+  if (id && CTID[id]) return CTID[id];
 
-  // 2) fall back to names (broad)
   const s = [
     c?.ConnectionType?.Title,
     c?.ConnectionType?.FormalName,
     c?.Level?.Title,
     c?.CurrentType?.Title,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  ].filter(Boolean).join(" ").toLowerCase();
 
   if (!s) return null;
-  if (
-    s.includes("ccs") || s.includes("combo") || s.includes("iec 62196-3") ||
-    s.includes("type 2 combo") || s.includes("combo 2") || s.includes("sae ccs")
-  ) return "CCS";
   if (s.includes("chademo")) return "CHAdeMO";
-  if (s.includes("type 2") || s.includes("mennekes") || s.includes("iec 62196-2") || s.includes("t2"))
-    return "Type 2";
-  if (s.includes("tesla") || s.includes("supercharger") || s.includes("nacs"))
-    return "Tesla";
+  if (s.includes("tesla") || s.includes("supercharger") || s.includes("nacs")) return "Tesla";
+  if (s.includes("type 2") || s.includes("mennekes") || s.includes("iec 62196-2") || s.includes("t2")) return "Type 2";
+  if (s.includes("ccs") || s.includes("combo") || s.includes("iec 62196-3") || s.includes("combo 2") || s.includes("type 2 combo")) return "CCS";
   return null;
 }
 
@@ -77,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const cc = (req.query.cc as string) || "GB";
   const lat = Number(req.query.lat ?? 52.5);
   const lon = Number(req.query.lon ?? -1.5);
-  const distKm = Number(req.query.distKm ?? 400);
+  const distKm = Math.max(10, Number(req.query.distKm ?? 400)); // safety min
 
   const url =
     `https://api.openchargemap.io/v3/poi/` +
@@ -85,23 +67,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     `&latitude=${lat}&longitude=${lon}` +
     `&distance=${distKm}&distanceunit=KM&maxresults=5000&compact=true&verbose=false`;
 
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    "User-Agent": "ev-hotspots/1.0 (vercel server proxy)"
+  };
   if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
   try {
-    const r = await fetch(url, { headers, next: { revalidate: 1200 } } as any);
+    const r = await fetch(url, { headers });
     if (!r.ok) throw new Error(`OCM ${r.status}`);
     const data: OCM[] = await r.json();
 
-    const out = data
+    const out = (data || [])
       .map((site) => {
-        const ai = site.AddressInfo ?? {};
-        const la = ai.Latitude;
-        const ln = ai.Longitude;
+        const info = site.AddressInfo || {};
+        const la = info.Latitude;
+        const ln = info.Longitude;
         if (typeof la !== "number" || typeof ln !== "number") return null;
 
         const conns = site.Connections ?? [];
-
         const typeSet = new Set<string>();
         let maxKW = 0;
         let anyDC = false;
@@ -123,32 +106,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const connectors = (conns?.length ?? site.NumberOfPoints ?? 0) || 0;
         const operational = site.StatusType?.IsOperational === true ? 1.0 : 0.6;
 
-        // score is log-scaled connector count, softened by status
-        const value = Math.max(0.01, Math.log1p(connectors) * operational);
+        // log-scaled connector count, softened by status
+        const score = Math.max(0.01, Math.log1p(connectors) * operational);
 
-        // NEW: address + postcode
-        const addr = [
-          ai.Title,
-          ai.AddressLine1,
-          ai.Town,
-          ai.StateOrProvince,
-        ].filter(Boolean).join(", ");
-        const pc = ai.Postcode ?? null;
+        const addrParts = [
+          info.AddressLine1, info.AddressLine2, info.Town, info.StateOrProvince
+        ].filter(Boolean);
+        const addr = addrParts.join(", ");
+        const postcode = info.Postcode || null;
 
         return {
           id: site.ID ?? null,
-          name: ai.Title ?? null,
-          addr: addr || null,  // <— NEW
-          pc: pc || null,      // <— NEW
+          name: info.Title ?? null,
+          addr: addr || null,
+          postcode,
           lat: la,
           lng: ln,
-          value,
+          value: score,
           breakdown: { reports: 0, downtime: 0, connectors: Math.max(0.1, connectors) },
           op: site.OperatorInfo?.Title ?? null,
           dc: anyDC,
           kw: maxKW || null,
           conn: connectors,
-          types: Array.from(typeSet), // used by front-end filters
+          types: Array.from(typeSet),
         };
       })
       .filter(Boolean);
