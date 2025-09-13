@@ -204,36 +204,57 @@ function HeatLayer({ heatPoints, radius, blur, gradient }:{
   return null;
 }
 
-// ---------- Hotspots ----------
+// ---------- Hotspots with persistent Popup (grid sampling) ----------
 function HotspotsOverlay({
   points, onSelect, selected, onTopChange
 }: {
-  points: Point[]; onSelect: (p: Point | null) => void; selected: Point | null; onTopChange: (top: Point[]) => void;
+  points: Point[];
+  onSelect: (p: Point | null) => void;
+  selected: Point | null;
+  onTopChange: (top: Point[]) => void;
 }) {
   const map = useMap();
   const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
 
   useEffect(() => {
     const update = () => setBounds(map.getBounds());
-    update(); map.on("moveend", update); map.on("zoomend", update);
-    return () => { map.off("moveend", update); map.off("zoomend", update); };
+    update();
+    map.on("moveend", update);
+    map.on("zoomend", update);
+    return () => {
+      map.off("moveend", update);
+      map.off("zoomend", update);
+    };
   }, [map]);
 
-  const topPoints = useMemo(() => {
-    const inView = bounds ? points.filter(p => bounds.contains(L.latLng(p.lat, p.lng))) : points;
-    if (inView.length === 0) return [];
-    const values = inView.map(p => p.value);
-    const threshold = quantile(values, 0.97); // top 3%
-    return inView.filter(p => p.value >= threshold).slice(0, 60);
-  }, [bounds, points]);
+  // Pick the strongest point per small screen cell to ensure even coverage
+  const gridPoints = useMemo(() => {
+    if (!bounds) return [] as Point[];
+    const cellPx = 140;        // cell size on screen; smaller = more, larger = fewer
+    const maxOut = 60;         // hard cap
+    const buckets = new Map<string, Point>();
 
-  useEffect(() => { onTopChange(topPoints); }, [topPoints, onTopChange]);
+    for (const p of points) {
+      if (!bounds.contains(L.latLng(p.lat, p.lng))) continue;
+      const pt = map.latLngToContainerPoint([p.lat, p.lng]);
+      const gx = Math.floor(pt.x / cellPx);
+      const gy = Math.floor(pt.y / cellPx);
+      const key = `${gx}:${gy}`;
+      const cur = buckets.get(key);
+      if (!cur || (p.value ?? 0) > (cur.value ?? 0)) buckets.set(key, p);
+    }
+
+    const arr = Array.from(buckets.values()).sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+    return arr.slice(0, maxOut);
+  }, [bounds, points, map]);
+
+  useEffect(() => { onTopChange(gridPoints); }, [gridPoints, onTopChange]);
 
   const dotSize = (v: number) => 6 + Math.round(v * 10);
 
   return (
     <>
-      {topPoints.map((p, i) => {
+      {gridPoints.map((p, i) => {
         const sel = selected && p.lat === selected.lat && p.lng === selected.lng && p.value === selected.value;
         const shares = weightedShares(p.breakdown);
         return (
@@ -266,35 +287,19 @@ function HotspotsOverlay({
               <Popup>
                 <div style={{ fontSize: 12, lineHeight: 1.3 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
-                  {p.addr || p.postcode ? (
-                    <div style={{ marginTop: 4, opacity: 0.9 }}>
-                      {p.addr ? <div>{p.addr}</div> : null}
-                      {p.postcode ? <div>{p.postcode}</div> : null}
-                    </div>
-                  ) : null}
+                  {p.addr && <div style={{ marginTop: 2 }}>{p.addr}{p.postcode ? `, ${p.postcode}` : ""}</div>}
                   <div style={{ marginTop: 4 }}>Score: {p.value.toFixed(2)}</div>
-                  {p.breakdown && (() => {
-                    const s = weightedShares(p.breakdown);
-                    return (
-                      <div style={{ marginTop: 4, opacity: 0.9 }}>
-                        <div>Reports: {s.reports}%</div>
-                        <div>Downtime: {s.downtime}%</div>
-                        <div>Connectors: {s.connectors}%</div>
-                      </div>
-                    );
-                  })()}
+                  {p.breakdown && (
+                    <div style={{ marginTop: 4, opacity: 0.9 }}>
+                      <div>Reports: {shares.reports}%</div>
+                      <div>Downtime: {shares.downtime}%</div>
+                      <div>Connectors: {shares.connectors}%</div>
+                    </div>
+                  )}
                   <div style={{ marginTop: 6, opacity: .85 }}>
                     {(p.types && p.types.length > 0) ? `Types: ${p.types.join(", ")}` : "Types: unknown"}
                     {p.op ? ` • ${p.op}` : ""}
                     {typeof p.kw === "number" ? ` • max ${p.kw}kW` : ""}
-                  </div>
-                  <div style={{ marginTop: 8 }}>
-                    <a
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.lat},${p.lng}`)}`}
-                      target="_blank" rel="noreferrer"
-                    >
-                      Open in Google Maps
-                    </a>
                   </div>
                 </div>
               </Popup>
@@ -305,6 +310,7 @@ function HotspotsOverlay({
     </>
   );
 }
+
 
 // ---------- Main ----------
 type Props = {
