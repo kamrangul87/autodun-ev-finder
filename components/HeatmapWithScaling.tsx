@@ -438,7 +438,7 @@ export default function HeatmapWithScaling({
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }, [topHotspots]);
 
-  const isSmall = useIsSmall();
+  
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 12 : 13;
