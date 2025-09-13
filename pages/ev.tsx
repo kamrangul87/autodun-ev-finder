@@ -1,7 +1,11 @@
 'use client';
 
 import React from "react";
-import HeatmapWithScaling, { Point } from "@/components/HeatmapWithScaling";
+import dynamic from "next/dynamic";
+const HeatmapWithScaling = dynamic(
+  () => import("../components/HeatmapWithScaling"),
+  { ssr: false }
+);
 
 // small helper to compute search distance from zoom (rough)
 function kmForZoom(z: number) {
