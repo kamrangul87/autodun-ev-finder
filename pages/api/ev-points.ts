@@ -18,22 +18,47 @@ type OCM = {
   StatusType?: { IsOperational?: boolean } | null;
 };
 
-function normalizeConnType(title: string | null | undefined): string | null {
-  const t = (title || "").toLowerCase();
+function detectType(c: OCMConn): string | null {
+  // Join all possibly useful fields and normalise
+  const s = [
+    c?.ConnectionType?.Title,
+    c?.ConnectionType?.FormalName,
+    c?.Level?.Title,
+    c?.CurrentType?.Title,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
 
-  if (!t) return null;
+  if (!s) return null;
 
-  // CCS (a.k.a. Combo)
-  if (t.includes("ccs") || t.includes("combo")) return "CCS";
+  // CCS (Combo, Combo 2, IEC 62196-3, CCS (Type 1/2), SAE CCS ...)
+  if (
+    s.includes("ccs") ||
+    s.includes("combo") ||
+    s.includes("iec 62196-3") ||
+    s.includes("type 2 combo") ||
+    s.includes("combo 2") ||
+    s.includes("ccs (type 2)") ||
+    s.includes("ccs (type 1)") ||
+    s.includes("sae ccs")
+  ) return "CCS";
 
   // CHAdeMO
-  if (t.includes("chademo")) return "CHAdeMO";
+  if (s.includes("chademo")) return "CHAdeMO";
 
-  // Type 2 (a.k.a. Mennekes / IEC 62196 Type 2)
-  if (t.includes("type 2") || t.includes("mennekes") || t.includes("iec 62196")) return "Type 2";
+  // Type 2 (Mennekes / IEC 62196-2 / socket / tethered variations)
+  if (
+    s.includes("type 2") ||
+    s.includes("type-2") ||
+    s.includes("mennekes") ||
+    s.includes("iec 62196-2") ||
+    s.includes("t2")
+  ) return "Type 2";
 
-  // Tesla / Supercharger / NACS (treat as Tesla family for now)
-  if (t.includes("tesla") || t.includes("supercharger") || t.includes("nacs")) return "Tesla";
+  // Tesla family (Supercharger / NACS / Tesla proprietary)
+  if (s.includes("tesla") || s.includes("supercharger") || s.includes("nacs"))
+    return "Tesla";
 
   return null;
 }
@@ -54,11 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
   try {
-    const r = await fetch(url, {
-      headers,
-      // small cache window to play nicely with the API
-      next: { revalidate: 1200 },
-    } as any);
+    const r = await fetch(url, { headers, next: { revalidate: 1200 } } as any);
     if (!r.ok) throw new Error(`OCM ${r.status}`);
     const data: OCM[] = await r.json();
 
@@ -70,34 +91,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const conns = site.Connections ?? [];
 
-        // gather types for this site
         const typeSet = new Set<string>();
         let maxKW = 0;
         let anyDC = false;
 
         for (const c of conns) {
-          const t =
-            normalizeConnType(c?.ConnectionType?.Title) ||
-            normalizeConnType(c?.ConnectionType?.FormalName) ||
-            normalizeConnType(c?.Level?.Title) ||
-            normalizeConnType(c?.CurrentType?.Title);
-
+          const t = detectType(c);
           if (t) typeSet.add(t);
 
           const kw = Number(c?.PowerKW ?? 0);
           if (kw > maxKW) maxKW = kw;
 
-          // mark DC (Level 3 or text hints)
+          // DC heuristic
           const lvlTitle = (c?.Level?.Title || "").toLowerCase();
           const curTitle = (c?.CurrentType?.Title || "").toLowerCase();
-          const dcLikely = c?.LevelID === 3 || lvlTitle.includes("dc") || lvlTitle.includes("rapid") || curTitle.includes("dc");
-          if (dcLikely) anyDC = true;
+          if (c?.LevelID === 3 || lvlTitle.includes("dc") || lvlTitle.includes("rapid") || curTitle.includes("dc")) {
+            anyDC = true;
+          }
         }
 
         const connectors = (conns?.length ?? site.NumberOfPoints ?? 0) || 0;
         const operational = site.StatusType?.IsOperational === true ? 1.0 : 0.6;
 
-        // simple score – log so big hubs don't dominate too much
+        // Balanced score (log so very large hubs don’t dominate)
         const value = Math.max(0.01, Math.log1p(connectors) * operational);
 
         return {
@@ -106,13 +122,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           lat: la,
           lng: ln,
           value,
-          // minimal breakdown so the tooltip percentages work (connectors drives it)
           breakdown: { reports: 0, downtime: 0, connectors: Math.max(0.1, connectors) },
           op: site.OperatorInfo?.Title ?? null,
           dc: anyDC,
           kw: maxKW || null,
           conn: connectors,
-          types: Array.from(typeSet), // <-- key for filtering
+          types: Array.from(typeSet), // <-- used by the filter
         };
       })
       .filter(Boolean);
