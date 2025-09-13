@@ -9,6 +9,8 @@ export type Breakdown = { reports: number; downtime: number; connectors: number 
 export type Point = {
   id?: number | null;
   name?: string | null;
+  addr?: string | null;   // NEW
+  pc?: string | null;     // NEW
   lat: number; lng: number; value: number;
   breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number;
   conn?: number; types?: string[];
@@ -279,7 +281,17 @@ function HotspotsOverlay({
               <Popup>
                 <div style={{ fontSize: 12, lineHeight: 1.3 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
-                  <div>Score: {p.value.toFixed(2)}</div>
+
+                  {(p.addr || p.pc) && (
+                    <div style={{ marginTop: 4 }}>
+                      {p.addr}{p.pc ? `, ${p.pc}` : ""}
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 6 }}>
+                    Score: {p.value.toFixed(2)}
+                  </div>
+
                   {p.breakdown && (
                     <div style={{ marginTop: 4, opacity: 0.9 }}>
                       <div>Reports: {shares.reports}%</div>
@@ -287,10 +299,27 @@ function HotspotsOverlay({
                       <div>Connectors: {shares.connectors}%</div>
                     </div>
                   )}
+
                   <div style={{ marginTop: 6, opacity: .85 }}>
                     {(p.types && p.types.length > 0) ? `Types: ${p.types.join(", ")}` : "Types: unknown"}
                     {p.op ? ` • ${p.op}` : ""}
                     {typeof p.kw === "number" ? ` • max ${p.kw}kW` : ""}
+                  </div>
+
+                  <div style={{ marginTop: 8 }}>
+                    <a
+                      href={`https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`}
+                      target="_blank" rel="noreferrer"
+                    >
+                      Open in Google Maps
+                    </a>
+                    {" • "}
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`}
+                      target="_blank" rel="noreferrer"
+                    >
+                      Directions
+                    </a>
                   </div>
                 </div>
               </Popup>
