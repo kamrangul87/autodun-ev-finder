@@ -10,7 +10,7 @@ function kmForZoom(z: number) {
 }
 
 export default function EVPage() {
-  // GB only (locked)
+  // GB only
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState(0);
 
@@ -29,6 +29,7 @@ export default function EVPage() {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [source, setSource] = React.useState<"live"|"stale"|"fallback"| "">("");
+  const [upstream, setUpstream] = React.useState<string>("");
 
   const barRef = React.useRef<HTMLDivElement>(null);
   const headerOffset = (barRef.current?.getBoundingClientRect().height ?? 0) + 12;
@@ -46,8 +47,6 @@ export default function EVPage() {
     try {
       if (args?.showLoader !== false) setLoading(true);
       setError(null);
-
-      // cancel any in-flight request
       if (inFlight.current) inFlight.current.abort();
       const ctrl = new AbortController();
       inFlight.current = ctrl;
@@ -61,17 +60,19 @@ export default function EVPage() {
         signal: ctrl.signal,
       });
       const evSource = (res.headers.get("x-ev-source") as any) || "";
-      setSource(evSource);
+      const up = res.headers.get("x-ev-upstream-status") || "";
+      setSource(evSource as any);
+      setUpstream(up);
       if (!res.ok) throw new Error(`API ${res.status}`);
       const data = await res.json();
       setPoints(Array.isArray(data) ? data : []);
 
-      // if server gave fallback, schedule 2 quick retries (1.2s / 2.4s)
+      // If fallback, auto-retry once or twice to escape sample
       if (evSource === "fallback" && (args?.allowRetry ?? true)) {
         if (retryTimer.current) window.clearTimeout(retryTimer.current);
         retryTimer.current = window.setTimeout(() => {
           doFetch({ lat, lon, radius, showLoader: false, allowRetry: false });
-        }, 1200);
+        }, 1500);
       }
     } catch (e:any) {
       if (e?.name !== "AbortError") {
@@ -83,7 +84,7 @@ export default function EVPage() {
     }
   }, [center, zoom]);
 
-  React.useEffect(() => { doFetch({ showLoader: true }); }, []); // first load
+  React.useEffect(() => { doFetch({ showLoader: true }); }, []); // initial load
 
   async function handleGo() {
     const q = search.trim();
@@ -141,7 +142,10 @@ export default function EVPage() {
             Live OCM data • {points.length.toLocaleString()} points
             {source && (
               <span style={{ marginLeft: 8, fontWeight: 500, fontSize: 12, opacity: 0.8 }}>
-                ({source === "live" ? "live" : source === "stale" ? "stale (cached)" : "fallback sample"})
+                ({source === "live" ? "live"
+                  : source === "stale" ? "stale cache"
+                  : "fallback sample"}
+                {upstream ? `, upstream ${upstream}` : ""})
               </span>
             )}
           </div>
@@ -157,7 +161,9 @@ export default function EVPage() {
 
           <div>Network{" "}
             <select value={operator} onChange={e => setOperator(e.target.value)}>
-              {operatorOptions.map(op => <option key={op} value={op}>{op}</option>)}
+              {["any", ...new Set(points.map(p => (p.op || "Unknown").trim()))].map(op => (
+                <option key={op} value={op}>{op}</option>
+              ))}
             </select>
           </div>
 
