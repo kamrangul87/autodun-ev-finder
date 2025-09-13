@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useMemo, useState, useEffect } from "react";
-import { MapContainer, TileLayer, useMap, CircleMarker, Tooltip } from "react-leaflet";
+import { MapContainer, TileLayer, useMap, CircleMarker, Popup, Tooltip } from "react-leaflet";
 import L from "leaflet";
 
 // ---------- Types ----------
@@ -115,26 +115,30 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
 function ViewportReporter({ onChange }: { onChange: (center: [number, number], zoom: number) => void }) {
   const map = useMap();
   useEffect(() => {
-    const send = () => {
-      const c = map.getCenter(); onChange([c.lat, c.lng], map.getZoom());
-    };
+    const send = () => { const c = map.getCenter(); onChange([c.lat, c.lng], map.getZoom()); };
     send(); map.on("moveend", send); map.on("zoomend", send);
     return () => { map.off("moveend", send); map.off("zoomend", send); };
   }, [map, onChange]);
   return null;
 }
 
-// ---------- Fly to external center (fixes Go/Geolocate) ----------
-function FlyToOnChange({ center, zoom }: { center?: [number, number] | null; zoom?: number | null }) {
+// ---------- Fly to external center & pan up under header ----------
+function FlyToOnChange({ center, zoom, offsetTopPx = 90 }:
+  { center?: [number, number] | null; zoom?: number | null; offsetTopPx?: number }) {
   const map = useMap();
   const prevKey = React.useRef<string>("");
   useEffect(() => {
     if (!center) return;
     const key = `${center[0].toFixed(5)},${center[1].toFixed(5)}|${zoom ?? map.getZoom()}`;
     if (prevKey.current === key) return;
+
     map.flyTo(center, zoom ?? map.getZoom(), { duration: 0.6 });
+    map.once("moveend", () => {
+      // nudge the view up so it's visually centered under the header
+      map.panBy([0, -offsetTopPx], { animate: true, duration: 0.3 });
+    });
     prevKey.current = key;
-  }, [center?.[0], center?.[1], zoom, map]);
+  }, [center?.[0], center?.[1], zoom, map, offsetTopPx]);
   return null;
 }
 
@@ -188,7 +192,7 @@ function HeatLayer({
   return null;
 }
 
-// ---------- Hotspots ----------
+// ---------- Hotspots with persistent Popup ----------
 function HotspotsOverlay({
   points, onSelect, selected, onTopChange
 }: {
@@ -221,8 +225,8 @@ function HotspotsOverlay({
   return (
     <>
       {topPoints.map((p, i) => {
-        const shares = weightedShares(p.breakdown);
         const sel = selected && p.lat === selected.lat && p.lng === selected.lng && p.value === selected.value;
+        const shares = weightedShares(p.breakdown);
         return (
           <React.Fragment key={`${p.lat}-${p.lng}-${i}`}>
             {sel && (
@@ -240,12 +244,20 @@ function HotspotsOverlay({
                 click: () => {
                   onSelect(p);
                   const targetZoom = Math.max(map.getZoom(), 10);
-                  map.flyTo([p.lat, p.lng], targetZoom, { duration: 0.6 });
+                  map.flyTo([p.lat, p.lng], targetZoom, { duration: 0.4 });
                 }
               }}
             >
+              {/* Hover tooltip (quick glance) */}
               <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
                 <div style={{ fontSize: 12, lineHeight: 1.2 }}>
+                  <div><b>{p.name ? p.name : "Hotspot"}</b></div>
+                  <div>Score: {p.value.toFixed(2)}</div>
+                </div>
+              </Tooltip>
+              {/* Click popup (persistent) */}
+              <Popup>
+                <div style={{ fontSize: 12, lineHeight: 1.3 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
                   <div>Score: {p.value.toFixed(2)}</div>
                   {p.breakdown && (
@@ -255,8 +267,13 @@ function HotspotsOverlay({
                       <div>Connectors: {shares.connectors}%</div>
                     </div>
                   )}
+                  <div style={{ marginTop: 6, opacity: .85 }}>
+                    {(p.types && p.types.length > 0) ? `Types: ${p.types.join(", ")}` : "Types: unknown"}
+                    {p.op ? ` • ${p.op}` : ""}
+                    {typeof p.kw === "number" ? ` • max ${p.kw}kW` : ""}
+                  </div>
                 </div>
-              </Tooltip>
+              </Popup>
             </CircleMarker>
           </React.Fragment>
         );
@@ -278,7 +295,7 @@ type Props = {
   selectedInit?: { lat: number; lng: number } | null;
   onSelectChange?: (p: Point | null) => void;
   onFilteredCountChange?: (n: number) => void;
-  externalCenter?: { lat: number; lng: number; z?: number } | null; // NEW
+  externalCenter?: { lat: number; lng: number; z?: number } | null;
 };
 
 export default function HeatmapWithScaling({
@@ -302,7 +319,7 @@ export default function HeatmapWithScaling({
     onSelectChange?.(p || null);
   }, [selectedInit, points, onSelectChange]);
 
-  // apply filters (with improved types logic)
+  // Filter (none or all selected types => no type filter)
   const filtered = useMemo(() => {
     const opSel = (filters?.operator || "any").toLowerCase();
     const dcOnly = !!filters?.dcOnly;
@@ -324,19 +341,16 @@ export default function HeatmapWithScaling({
         if (pop !== opSel) return false;
       }
 
-      // If none OR all are selected, do not filter by types at all (matches your earlier behavior)
       if (!(noneSelected || allSelected)) {
         const ptTypes = new Set((p.types || []).map((t) => t.toLowerCase()));
-        if (ptTypes.size === 0) return false; // unknown types -> exclude only when actively filtering
+        if (ptTypes.size === 0) return false;
         const ok = typesSel.some((t) => ptTypes.has(t.toLowerCase()));
         if (!ok) return false;
       }
-
       return true;
     });
   }, [points, filters?.operator, filters?.dcOnly, filters?.minKW, filters?.minConn, filters?.types]);
 
-  // report filtered count to header
   useEffect(() => { onFilteredCountChange?.(filtered.length); }, [filtered.length, onFilteredCountChange]);
 
   const center = filtered.length ? { lat: filtered[0].lat, lng: filtered[0].lng } : { lat: 51.5074, lng: -0.1278 };
@@ -382,7 +396,7 @@ export default function HeatmapWithScaling({
 
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
-  const boxFont = isSmall ? 13 : 14;
+  const boxFont = isSmall ? 12 : 13;
 
   return (
     <div className="relative w-full" style={{ height: "80vh", position: "relative" }}>
@@ -390,15 +404,14 @@ export default function HeatmapWithScaling({
         <TileLayer attribution='&copy; OpenStreetMap' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
         <ViewportReporter onChange={(c, z) => onViewportChange?.(c, z)} />
         <DynamicRadius setRadius={setRadius} />
-        {/* NEW: fly when parent asks us to (Go / Geolocate) */}
         {externalCenter && (
-          <FlyToOnChange center={[externalCenter.lat, externalCenter.lng]} zoom={externalCenter.z ?? null} />
+          <FlyToOnChange center={[externalCenter.lat, externalCenter.lng]} zoom={externalCenter.z ?? null} offsetTopPx={90} />
         )}
         <FitBoundsOnce heatPoints={heatData} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
         <HotspotsOverlay
           points={filtered}
-          onSelect={(p) => { setSelected(p); onSelectChange?.(p); }}
+          onSelect={(p) => { setSelected(p); }}
           selected={selected}
           onTopChange={setTopHotspots}
         />
