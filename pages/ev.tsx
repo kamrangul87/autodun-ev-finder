@@ -1,219 +1,208 @@
-// pages/ev.tsx
+'use client';
+
 import React from "react";
-import Head from "next/head";
-import dynamic from "next/dynamic";
+import HeatmapWithScaling, { Point } from "@/components/HeatmapWithScaling";
 
-const HeatmapWithScaling = dynamic(() => import("../components/HeatmapWithScaling"), { ssr: false });
-
-type Breakdown = { reports: number; downtime: number; connectors: number };
-type Point = {
-  id?: number | null;
-  name?: string | null;
-  lat: number; lng: number; value: number;
-  breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number;
-  conn?: number; types?: string[];
-};
-type Filters = { operator?: string; dcOnly?: boolean; minKW?: number; minConn?: number; types?: string[] };
-type UI = { scale: "linear" | "log" | "robust"; radius: number; blur: number };
-type View = { lat: number; lng: number; z: number };
-
-const DEFAULT_VIEW: View = { lat: 52.5, lng: -1.5, z: 6 };
-const DEFAULT_UI: UI = { scale: "robust", radius: 60, blur: 35 };
-const DEFAULT_FILTERS: Filters = { operator: "any", dcOnly: false, minKW: 0, minConn: 0, types: ["CCS","CHAdeMO","Type 2","Tesla"] };
-
-function uniq<T>(arr: T[]) { return Array.from(new Set(arr)); }
-function radiusKmFromZoom(z: number) {
-  if (z <= 6) return 500;
-  if (z <= 8) return 300;
-  if (z <= 10) return 120;
-  if (z <= 12) return 60;
-  return 30;
+// small helper to compute search distance from zoom (rough)
+function kmForZoom(z: number) {
+  // very rough heuristic: halve radius each 2 zoom levels
+  const base = 400; // km at z ≈ 7
+  return Math.max(50, Math.round(base / Math.pow(2, (z - 7) / 2)));
 }
 
 export default function EVPage() {
-  const [country, setCountry] = React.useState<string>("GB");
+  // ---------- UI state ----------
+  const [cc, setCC] = React.useState<"GB" | "IE" | "DE" | "FR" | "ES">("GB");
   const [points, setPoints] = React.useState<Point[]>([]);
-  const [loading, setLoading] = React.useState<boolean>(false);
-  const [reportsHalflife] = React.useState<number>(96);
-  const [downHalflife] = React.useState<number>(66);
-  const [ui, setUI] = React.useState<UI>(DEFAULT_UI);
-  const [view, setView] = React.useState<View>(DEFAULT_VIEW);
-  const [filters, setFilters] = React.useState<Filters>(DEFAULT_FILTERS);
   const [filteredCount, setFilteredCount] = React.useState<number>(0);
-  const [place, setPlace] = React.useState<string>("");
 
-  const operatorOptions = React.useMemo(() => {
-    const list = uniq(points.map(p => (p.op || "").trim()).filter(Boolean).map(s => s.replace(/\s+/g, " "))).sort((a, b) => a.localeCompare(b));
-    return ["any", ...list];
-  }, [points]);
+  const [dcOnly, setDcOnly] = React.useState(false);
+  const [minKW, setMinKW] = React.useState(0);
+  const [minConn, setMinConn] = React.useState(0);
+  const [typesSel, setTypesSel] = React.useState<string[]>(["CCS","CHAdeMO","Type 2","Tesla"]);
+  const [operator, setOperator] = React.useState<string>("any");
 
-  async function fetchData(opts?: { silent?: boolean; lat?: number; lon?: number; radius?: number }) {
-    const { silent = false } = opts || {};
-    const lat = opts?.lat ?? view.lat;
-    const lon = opts?.lon ?? view.lng;
-    const radius = opts?.radius ?? radiusKmFromZoom(view.z);
+  const [search, setSearch] = React.useState<string>("");
+  const [externalCenter, setExternalCenter] = React.useState<{lat:number;lng:number;z?:number}|null>(null);
 
-    if (!silent) setLoading(true);
+  const [center, setCenter] = React.useState<[number, number]>([51.5074, -0.1278]);
+  const [zoom, setZoom] = React.useState<number>(7);
+
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  // measure header height → offset for flyTo (keeps target under bar)
+  const barRef = React.useRef<HTMLDivElement>(null);
+  const headerOffset = (barRef.current?.getBoundingClientRect().height ?? 0) + 12;
+
+  // ---------- Fetch OCM data (server-side API proxy) ----------
+  const fetchData = React.useCallback(async (opts?: { silent?: boolean; lat?: number; lon?: number; radius?: number }) => {
     try {
-      const qs = new URLSearchParams({ cc: country, lat: String(lat), lon: String(lon), distKm: String(radius) });
-      const r = await fetch(`/api/ev-points?${qs.toString()}`);
+      setError(null);
+      if (!opts?.silent) setLoading(true);
+
+      const lat = opts?.lat ?? center[0];
+      const lon = opts?.lon ?? center[1];
+      const radius = opts?.radius ?? kmForZoom(zoom);
+
+      const url = `/api/ev-points?cc=${encodeURIComponent(cc)}&lat=${lat}&lon=${lon}&distKm=${radius}`;
+      const r = await fetch(url);
       if (!r.ok) throw new Error(`API ${r.status}`);
       const data: Point[] = await r.json();
       setPoints(data);
-    } catch (e) {
-      console.error(e);
-      alert("Failed to fetch EV data.");
+    } catch (e: any) {
+      setError(e?.message ?? "Failed to load data");
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
-  }
+  }, [cc, center, zoom]);
 
-  React.useEffect(() => { fetchData({ silent: true }); /* first load */ }, []); // eslint-disable-line
+  // initial fetch
+  React.useEffect(() => {
+    fetchData({ silent: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  async function geocode(query: string): Promise<{ lat: number; lon: number } | null> {
+  // re-fetch when country changes
+  React.useEffect(() => {
+    fetchData({ silent: false });
+  }, [cc, fetchData]);
+
+  // ---------- Map callbacks ----------
+  const handleViewport = React.useCallback((c: [number, number], z: number) => {
+    setCenter(c);
+    setZoom(z);
+  }, []);
+
+  // ---------- Search & Geolocate ----------
+  async function handleGo() {
+    const q = search.trim();
+    if (!q) return;
     try {
-      const u = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`;
-      const r = await fetch(u);
-      if (!r.ok) return null;
-      const j = (await r.json()) as Array<{ lat: string; lon: string }>;
-      if (!j || j.length === 0) return null;
-      return { lat: Number(j[0].lat), lon: Number(j[0].lon) };
-    } catch { return null; }
+      // Nominatim geocode
+      const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=${cc.toLowerCase()}&addressdetails=1`);
+      const js = await resp.json();
+      if (Array.isArray(js) && js.length > 0) {
+        const lat = parseFloat(js[0].lat);
+        const lon = parseFloat(js[0].lon);
+        // center & zoom in
+        setExternalCenter({ lat, lng: lon, z: 12 });
+        // also refresh data around that area (silent)
+        fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
+      }
+    } catch (_) { /* ignore */ }
+  }
+  function handleGeolocate() {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setExternalCenter({ lat, lng: lon, z: 12 });
+        fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
+      },
+      () => { /* ignore */ },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
   }
 
-  function buildShareUrl() {
-    const url = new URL(window.location.href);
-    url.searchParams.set("cc", country);
-    url.searchParams.set("lat", String(view.lat));
-    url.searchParams.set("lng", String(view.lng));
-    url.searchParams.set("z", String(view.z));
-    url.searchParams.set("s", ui.scale);
-    url.searchParams.set("r", String(ui.radius));
-    url.searchParams.set("b", String(ui.blur));
-    url.searchParams.set("op", String(filters.operator || "any"));
-    url.searchParams.set("dc", String(filters.dcOnly ? 1 : 0));
-    url.searchParams.set("kw", String(filters.minKW ?? 0));
-    url.searchParams.set("c", String(filters.minConn ?? 0));
-    url.searchParams.set("types", (filters.types ?? []).join(","));
-    return url.toString();
+  // ---------- Type toggles ----------
+  const ALL_TYPES = ["CCS","CHAdeMO","Type 2","Tesla"];
+  const allChecked = typesSel.length === ALL_TYPES.length;
+  const noneChecked = typesSel.length === 0;
+  function toggleType(t: string) {
+    setTypesSel(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
   }
-  function copyShare() { navigator.clipboard?.writeText(buildShareUrl()); alert("Sharable link copied."); }
-
-  function updateFilter<K extends keyof Filters>(k: K, v: Filters[K]) { setFilters((f) => ({ ...f, [k]: v })); }
-  function toggleAllTypes(on: boolean) { updateFilter("types", on ? ["CCS","CHAdeMO","Type 2","Tesla"] : []); }
+  function setAllTypes(on: boolean) {
+    setTypesSel(on ? ALL_TYPES.slice() : []);
+  }
 
   return (
-    <>
-      <Head><title>EV Hotspots</title><meta name="viewport" content="initial-scale=1, width=device-width" /></Head>
+    <div style={{ padding: 0 }}>
+      {/* HEADER / FILTER BAR (measured for offset) */}
+      <div
+        ref={barRef}
+        style={{
+          position: "relative",
+          zIndex: 1001,
+          background: "rgba(255,255,255,0.95)",
+          boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
+          borderRadius: 12,
+          margin: 12,
+          padding: 12
+        }}
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+          <div style={{ fontWeight: 600 }}>
+            Live OCM data
+            <span style={{ opacity: 0.7 }}> • {points.length.toLocaleString()} points</span>
+            {filteredCount !== points.length ? (
+              <span style={{ opacity: 0.7 }}> (filtered {filteredCount.toLocaleString()})</span>
+            ) : null}
+          </div>
 
-      <div style={{ position: "relative" }}>
-        {/* Top bar */}
-        <div style={{
-          position: "absolute", right: 16, top: 12, zIndex: 1100,
-          background: "rgba(255,255,255,0.95)", padding: "10px 12px",
-          borderRadius: 12, boxShadow: "0 2px 10px rgba(0,0,0,0.08)", fontSize: 12,
-          display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", maxWidth: 980
-        }}>
-          <div><b>Live OCM data</b> • {points.length.toLocaleString()} points <span style={{ opacity: .7 }}>(filtered {filteredCount.toLocaleString()})</span></div>
-          <div style={{ opacity: .8 }}>
+          <div style={{ marginLeft: 12 }}>
             Country{" "}
-            <select value={country} onChange={(e) => setCountry(e.target.value)} style={{ font: "inherit" }}>
-              <option value="GB">GB</option><option value="IE">IE</option><option value="NL">NL</option><option value="DE">DE</option><option value="FR">FR</option>
+            <select value={cc} onChange={e => setCC(e.target.value as any)}>
+              <option value="GB">GB</option>
+              <option value="IE">IE</option>
+              <option value="DE">DE</option>
+              <option value="FR">FR</option>
+              <option value="ES">ES</option>
             </select>
           </div>
-          <div style={{ opacity: .8 }}>Reports HL {reportsHalflife}</div>
-          <div style={{ opacity: .8 }}>Downtime HL {downHalflife}</div>
-          <button onClick={() => fetchData()} disabled={loading} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "#fff" }}>
-            {loading ? "Loading…" : "Refresh"}
-          </button>
 
-          <div style={{ paddingLeft: 12, borderLeft: "1px solid #eee", display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ opacity: .8 }}>Network</span>
-            <select value={filters.operator || "any"} onChange={(e) => updateFilter("operator", e.target.value)} style={{ font: "inherit" }}>
-              {operatorOptions.map(op => <option key={op} value={op}>{op}</option>)}
-            </select>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <input type="checkbox" checked={!!filters.dcOnly} onChange={(e) => updateFilter("dcOnly", e.target.checked)} /> DC only
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              Min kW <input type="number" min={0} value={filters.minKW ?? 0} onChange={(e) => updateFilter("minKW", Math.max(0, Number(e.target.value || 0)))} style={{ width: 64 }} />
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              Min connectors <input type="number" min={0} value={filters.minConn ?? 0} onChange={(e) => updateFilter("minConn", Math.max(0, Number(e.target.value || 0)))} style={{ width: 64 }} />
-            </label>
-
-            <div style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
-              <span style={{ opacity: .8 }}>Types:</span>
-              {["CCS","CHAdeMO","Type 2","Tesla"].map(t => (
-                <label key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <input
-                    type="checkbox"
-                    checked={filters.types?.includes(t) ?? false}
-                    onChange={(e) => {
-                      const on = e.target.checked;
-                      setFilters((f) => {
-                        const set = new Set(f.types ?? []);
-                        if (on) set.add(t); else set.delete(t);
-                        return { ...f, types: Array.from(set) };
-                      });
-                    }}
-                  />{t}
-                </label>
-              ))}
-              <button onClick={() => toggleAllTypes(true)}  style={{ padding: "4px 8px", borderRadius: 8, border: "1px solid #eee", background: "#fff" }}>All</button>
-              <button onClick={() => toggleAllTypes(false)} style={{ padding: "4px 8px", borderRadius: 8, border: "1px solid #eee", background: "#fff" }}>None</button>
-            </div>
+          <div style={{ marginLeft: 12 }}>
+            <label><input type="checkbox" checked={dcOnly} onChange={e => setDcOnly(e.target.checked)} /> DC only</label>
           </div>
 
-          <div style={{ paddingLeft: 12, borderLeft: "1px solid #eee", display: "flex", gap: 6, alignItems: "center" }}>
-            <input value={place} onChange={(e) => setPlace(e.target.value)} placeholder="Search place…" style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid #ddd", minWidth: 180 }} />
-            <button
-              onClick={async () => {
-                if (!place.trim()) return;
-                const g = await geocode(place.trim());
-                if (!g) return alert("Place not found.");
-                // move map and refetch around that area
-                const targetZ = Math.max(9, view.z);
-                setView({ lat: g.lat, lng: g.lon, z: targetZ });
-                await fetchData({ lat: g.lat, lon: g.lon, radius: radiusKmFromZoom(targetZ) });
-              }}
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "#fff" }}
-            >Go</button>
-            <button
-              onClick={() => {
-                if (!navigator.geolocation) return alert("Geolocation not available.");
-                navigator.geolocation.getCurrentPosition(async (p) => {
-                  const lat = p.coords.latitude, lon = p.coords.longitude;
-                  const targetZ = Math.max(10, view.z);
-                  setView({ lat, lng: lon, z: targetZ });
-                  await fetchData({ lat, lon, radius: radiusKmFromZoom(targetZ) });
-                });
-              }}
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "#fff" }}
-            >Geolocate</button>
-            <button
-              title="Refetch based on current map view"
-              onClick={() => fetchData({ radius: radiusKmFromZoom(view.z) })}
-              style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "#fff" }}
-            >Refetch (view)</button>
+          <div>
+            Min kW{" "}
+            <input type="number" min={0} step={5} value={minKW} onChange={e => setMinKW(+e.target.value || 0)} style={{ width: 70 }} />
           </div>
 
-          <button onClick={copyShare} style={{ marginLeft: "auto", padding: "6px 10px", borderRadius: 8, border: "1px solid #ddd", background: "#fff" }} title="Copy sharable link">
-            Share link
-          </button>
+          <div>
+            Min connectors{" "}
+            <input type="number" min={0} step={1} value={minConn} onChange={e => setMinConn(+e.target.value || 0)} style={{ width: 70 }} />
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            Types:
+            {ALL_TYPES.map(t => (
+              <label key={t} style={{ marginRight: 6 }}>
+                <input type="checkbox" checked={typesSel.includes(t)} onChange={() => toggleType(t)} /> {t}
+              </label>
+            ))}
+            <button onClick={() => setAllTypes(true)} style={{ marginLeft: 4 }}>All</button>
+            <button onClick={() => setAllTypes(false)} style={{ marginLeft: 4 }}>None</button>
+          </div>
+
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <input
+              placeholder="Search place or postcode…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleGo(); }}
+              style={{ width: 260, padding: "6px 8px", border: "1px solid #ddd", borderRadius: 8 }}
+            />
+            <button onClick={handleGo}>Go</button>
+            <button onClick={handleGeolocate}>Geolocate</button>
+            <button onClick={() => fetchData({ silent: false })} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+          </div>
         </div>
 
-        {/* Map */}
-        <HeatmapWithScaling
-          points={points}
-          initialUI={ui}
-          filters={filters}
-          onUIChange={(u) => setUI(u)}
-          onViewportChange={(c, z) => setView({ lat: c[0], lng: c[1], z })}
-          onFilteredCountChange={setFilteredCount}
-          externalCenter={{ lat: view.lat, lng: view.lng, z: view.z }}   // <-- make the map fly on Go/Geolocate
-        />
+        {error ? <div style={{ marginTop: 6, color: "#b00020" }}>{error}</div> : null}
       </div>
-    </>
+
+      {/* MAP */}
+      <HeatmapWithScaling
+        points={points}
+        filters={{ operator, dcOnly, minKW, minConn, types: typesSel }}
+        onViewportChange={(c, z) => handleViewport(c, z)}
+        onFilteredCountChange={setFilteredCount}
+        externalCenter={externalCenter}
+        offsetTopPx={headerOffset}               // <<— precise center under the header
+      />
+    </div>
   );
 }
