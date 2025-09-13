@@ -9,8 +9,8 @@ export type Breakdown = { reports: number; downtime: number; connectors: number 
 export type Point = {
   id?: number | null;
   name?: string | null;
-  addr?: string | null;          // optional, shown if present
-  postcode?: string | null;      // optional, shown if present
+  addr?: string | null;          // optional (shown if present)
+  postcode?: string | null;      // optional (shown if present)
   lat: number; lng: number; value: number;
   breakdown?: Breakdown; op?: string; dc?: boolean; kw?: number;
   conn?: number; types?: string[];
@@ -160,7 +160,9 @@ function FlyToOnChange({
     const adjusted = offsetTargetLatLng(map, center[0], center[1], offsetTopPx, zoom ?? undefined);
     map.flyTo(adjusted, zoom ?? map.getZoom(), { duration: 0.6 });
     prevKey.current = key;
-  }, [center?.[0], center?.[1], zoom, map, offsetTopPx]);
+    // NOTE: do NOT depend on offsetTopPx to avoid jitter when header height changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [center?.[0], center?.[1], zoom, map]);
 
   return null;
 }
@@ -338,14 +340,14 @@ type Props = {
   onSelectChange?: (p: Point | null) => void;
   onFilteredCountChange?: (n: number) => void;
   externalCenter?: { lat: number; lng: number; z?: number } | null;
-  offsetTopPx?: number;                 // NEW: how many pixels to offset under header
+  offsetTopPx?: number;                 // pixels to keep target under header
 };
 
 export default function HeatmapWithScaling({
   points, defaultScale = "robust", palette = "fire",
   filters, initialUI, onUIChange, onViewportChange,
   selectedInit, onSelectChange, onFilteredCountChange,
-  externalCenter, offsetTopPx = 120,                 // default
+  externalCenter, offsetTopPx = 120,
 }: Props) {
   const isSmall = useIsSmall();
 
@@ -438,7 +440,6 @@ export default function HeatmapWithScaling({
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }, [topHotspots]);
 
-  
   const boxPad = isSmall ? 8 : 12;
   const boxRadius = isSmall ? 10 : 12;
   const boxFont = isSmall ? 12 : 13;
