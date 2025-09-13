@@ -39,7 +39,6 @@ function weightedShares(b?: Breakdown) {
   const cConn = b.connectors * WEIGHTS.connectors;
   const total = cRep + cDown + cConn;
   if (total <= 1e-9) return { reports: 0, downtime: 0, connectors: 0 };
-
   const raw = [
     { k: "reports", v: (cRep / total) * 100 },
     { k: "downtime", v: (cDown / total) * 100 },
@@ -111,47 +110,70 @@ function DynamicRadius({ setRadius }: { setRadius: (r: number) => void }) {
   return null;
 }
 
-// ---------- Viewport reporter ----------
+// ---------- Viewport reporter (throttled) ----------
 function ViewportReporter({ onChange }: { onChange: (center: [number, number], zoom: number) => void }) {
   const map = useMap();
   useEffect(() => {
-    const send = () => { const c = map.getCenter(); onChange([c.lat, c.lng], map.getZoom()); };
-    send(); map.on("moveend", send); map.on("zoomend", send);
-    return () => { map.off("moveend", send); map.off("zoomend", send); };
+    let t: number | null = null;
+    const send = () => {
+      if (t) return;
+      t = window.setTimeout(() => {
+        const c = map.getCenter();
+        onChange([c.lat, c.lng], map.getZoom());
+        t = null;
+      }, 300); // throttle
+    };
+    send();
+    map.on("moveend", send);
+    map.on("zoomend", send);
+    return () => {
+      map.off("moveend", send);
+      map.off("zoomend", send);
+      if (t) window.clearTimeout(t);
+    };
   }, [map, onChange]);
   return null;
 }
 
-// ---------- Fly to external center & pan up under header ----------
-function FlyToOnChange({ center, zoom, offsetTopPx = 90 }:
-  { center?: [number, number] | null; zoom?: number | null; offsetTopPx?: number }) {
+// ---------- Compute an offset target (so place sits under header) ----------
+function offsetTargetLatLng(map: L.Map, lat: number, lng: number, offsetYPx: number, zoom?: number) {
+  const z = (zoom ?? map.getZoom());
+  // project the target into pixel coords, apply vertical offset, then unproject
+  const pt = map.project(L.latLng(lat, lng), z);
+  const shifted = L.point(pt.x, pt.y - offsetYPx);
+  return map.unproject(shifted, z);
+}
+
+// ---------- Fly to external center WITHOUT post-pan (no “bounce”) ----------
+function FlyToOnChange({
+  center, zoom, offsetTopPx = 90,
+}: { center?: [number, number] | null; zoom?: number | null; offsetTopPx?: number }) {
   const map = useMap();
   const prevKey = React.useRef<string>("");
+
   useEffect(() => {
     if (!center) return;
     const key = `${center[0].toFixed(5)},${center[1].toFixed(5)}|${zoom ?? map.getZoom()}`;
     if (prevKey.current === key) return;
 
-    map.flyTo(center, zoom ?? map.getZoom(), { duration: 0.6 });
-    map.once("moveend", () => {
-      // nudge the view up so it's visually centered under the header
-      map.panBy([0, -offsetTopPx], { animate: true, duration: 0.3 });
-    });
+    const adjusted = offsetTargetLatLng(map, center[0], center[1], offsetTopPx, zoom ?? undefined);
+    map.flyTo(adjusted, zoom ?? map.getZoom(), { duration: 0.6 });
     prevKey.current = key;
   }, [center?.[0], center?.[1], zoom, map, offsetTopPx]);
+
   return null;
 }
 
-// ---------- Fit bounds once ----------
-function FitBoundsOnce({ heatPoints }: { heatPoints: [number, number, number][] }) {
+// ---------- Fit bounds once (disabled when external center provided) ----------
+function FitBoundsOnce({ heatPoints, skip }: { heatPoints: [number, number, number][], skip?: boolean }) {
   const map = useMap();
   const didFit = React.useRef(false);
   useEffect(() => {
-    if (didFit.current || !heatPoints || heatPoints.length === 0) return;
+    if (skip || didFit.current || heatPoints.length === 0) return;
     const bounds = L.latLngBounds(heatPoints.map(([la, ln]) => L.latLng(la, ln)));
     map.fitBounds(bounds, { padding: [40, 40] });
     didFit.current = true;
-  }, [map, heatPoints]);
+  }, [map, heatPoints, skip]);
   return null;
 }
 
@@ -248,14 +270,12 @@ function HotspotsOverlay({
                 }
               }}
             >
-              {/* Hover tooltip (quick glance) */}
               <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
                 <div style={{ fontSize: 12, lineHeight: 1.2 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
                   <div>Score: {p.value.toFixed(2)}</div>
                 </div>
               </Tooltip>
-              {/* Click popup (persistent) */}
               <Popup>
                 <div style={{ fontSize: 12, lineHeight: 1.3 }}>
                   <div><b>{p.name ? p.name : "Hotspot"}</b></div>
@@ -407,7 +427,7 @@ export default function HeatmapWithScaling({
         {externalCenter && (
           <FlyToOnChange center={[externalCenter.lat, externalCenter.lng]} zoom={externalCenter.z ?? null} offsetTopPx={90} />
         )}
-        <FitBoundsOnce heatPoints={heatData} />
+        <FitBoundsOnce heatPoints={heatData} skip={!!externalCenter} />
         <HeatLayer heatPoints={heatData} radius={radius} blur={blur} gradient={gradient} />
         <HotspotsOverlay
           points={filtered}
