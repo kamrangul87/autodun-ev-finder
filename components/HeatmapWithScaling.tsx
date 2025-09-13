@@ -16,7 +16,7 @@ export type Point = {
 type Meta = { halfReports: number; halfDown: number };
 type Filters = {
   operator?: string; dcOnly?: boolean; minKW?: number;
-  minConn?: number; types?: string[]; // NEW
+  minConn?: number; types?: string[];
 };
 type UI = { scale: ScaleMethod; radius: number; blur: number };
 
@@ -264,12 +264,13 @@ type Props = {
   onViewportChange?: (center: [number, number], zoom: number) => void;
   selectedInit?: { lat: number; lng: number } | null;
   onSelectChange?: (p: Point | null) => void;
+  onFilteredCountChange?: (n: number) => void; // NEW
 };
 
 export default function HeatmapWithScaling({
   points, defaultScale = "robust", palette = "fire", meta,
   filters, initialUI, onUIChange, onViewportChange,
-  selectedInit, onSelectChange
+  selectedInit, onSelectChange, onFilteredCountChange
 }: Props) {
   const isSmall = useIsSmall();
 
@@ -279,7 +280,6 @@ export default function HeatmapWithScaling({
   const [selected, setSelected] = useState<Point | null>(null);
   const [topHotspots, setTopHotspots] = useState<Point[]>([]);
 
-  // try to preselect a hotspot by coords from URL
   useEffect(() => {
     if (!selectedInit) return;
     const p = points.find(pt => Math.abs(pt.lat - selectedInit.lat) < 1e-6 && Math.abs(pt.lng - selectedInit.lng) < 1e-6) || null;
@@ -287,7 +287,7 @@ export default function HeatmapWithScaling({
     onSelectChange?.(p || null);
   }, [selectedInit, points, onSelectChange]);
 
-  // apply filters (including new ones)
+  // apply filters (including types)
   const filtered = useMemo(() => {
     const op = (filters?.operator || "any").toLowerCase();
     const dcOnly = !!filters?.dcOnly;
@@ -311,6 +311,9 @@ export default function HeatmapWithScaling({
     });
   }, [points, filters?.operator, filters?.dcOnly, filters?.minKW, filters?.minConn, filters?.types]);
 
+  // report filtered count up
+  useEffect(() => { onFilteredCountChange?.(filtered.length); }, [filtered.length, onFilteredCountChange]);
+
   const center = filtered.length ? { lat: filtered[0].lat, lng: filtered[0].lng } : { lat: 51.5074, lng: -0.1278 };
 
   const { scaled, domain } = useMemo(() => {
@@ -329,10 +332,8 @@ export default function HeatmapWithScaling({
 
   const gradient = useMemo(() => gradientStops(palette), [palette]);
 
-  // bubble ui changes up
   useEffect(() => { onUIChange?.({ scale: scaleMethod, radius, blur }); }, [scaleMethod, radius, blur, onUIChange]);
 
-  // Export CSV (top in view after filters)
   const exportCSV = React.useCallback(() => {
     const headers = ["lat", "lng", "score", "reports_pct", "downtime_pct", "connectors_pct", "reports_raw", "downtime_raw", "connectors_raw", "operator", "dc", "max_kw", "connectors", "types", "name"];
     const rows = topHotspots.map(h => {
