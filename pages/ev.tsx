@@ -98,8 +98,8 @@ export default function EVPage() {
       if (Array.isArray(js) && js.length > 0) {
         const lat = parseFloat(js[0].lat);
         const lon = parseFloat(js[0].lon);
-        setExternalCenter({ lat, lng: lon, z: 12 });
-        await doFetch({ lat, lon, radius: kmForZoom(12), showLoader: false });
+        setExternalCenter({ lat, lng: lon, z: 13 });
+await doFetch({ lat, lon, radius: kmForZoom(13), showLoader: false });
       }
     } catch (e:any) {
       setError(e?.message ?? "Search failed");
