@@ -7,14 +7,17 @@ const HeatmapWithScaling = dynamic(
   { ssr: false }
 );
 
-// Import types only (safe for SSR)
+// Import only the type (safe for SSR)
 import type { Point } from "../components/HeatmapWithScaling";
 
-// Rough helper: pick a search radius (km) from zoom
+// Map zoom → search radius (km). Use a bigger minimum so remote areas still return data.
 function kmForZoom(z: number) {
   const base = 400; // km at z≈7
-  return Math.max(50, Math.round(base / Math.pow(2, (z - 7) / 2)));
+  return Math.max(80, Math.round(base / Math.pow(2, (z - 7) / 2)));
 }
+
+// Countries we support in the dropdown + auto-switch
+const SUPPORTED_CC = new Set(["GB","IE","DE","FR","ES"]);
 
 export default function EVPage() {
   // ---------- UI state ----------
@@ -55,7 +58,9 @@ export default function EVPage() {
   }, [points]);
 
   // ---------- Fetch OCM data via our API (server-side proxy) ----------
-  const fetchData = React.useCallback(async (opts?: { silent?: boolean; lat?: number; lon?: number; radius?: number }) => {
+  const fetchData = React.useCallback(async (opts?: {
+    silent?: boolean; lat?: number; lon?: number; radius?: number; ccOverride?: string;
+  }) => {
     try {
       setError(null);
       if (!opts?.silent) setLoading(true);
@@ -63,8 +68,9 @@ export default function EVPage() {
       const lat = opts?.lat ?? center[0];
       const lon = opts?.lon ?? center[1];
       const radius = opts?.radius ?? kmForZoom(zoom);
+      const useCC = (opts?.ccOverride ?? cc);
 
-      const url = `/api/ev-points?cc=${encodeURIComponent(cc)}&lat=${lat}&lon=${lon}&distKm=${radius}`;
+      const url = `/api/ev-points?cc=${encodeURIComponent(useCC)}&lat=${lat}&lon=${lon}&distKm=${radius}`;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`API ${r.status}`);
       const data: Point[] = await r.json();
@@ -105,13 +111,23 @@ export default function EVPage() {
       if (Array.isArray(js) && js.length > 0) {
         const lat = parseFloat(js[0].lat);
         const lon = parseFloat(js[0].lon);
+
+        // Try to auto-switch country to match the result, if supported
+        const newCCRaw = js[0]?.address?.country_code
+          ? String(js[0].address.country_code).toUpperCase()
+          : null;
+        const newCC = (newCCRaw && SUPPORTED_CC.has(newCCRaw)) ? newCCRaw : null;
+        if (newCC && newCC !== cc) setCC(newCC as any);
+
         // center & zoom in
         setExternalCenter({ lat, lng: lon, z: 12 });
-        // refresh data around that area (silent)
-        fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
+
+        // refresh data around that area using the best country code
+        const effectiveCC = newCC ?? cc;
+        fetchData({ silent: true, lat, lon, radius: kmForZoom(12), ccOverride: effectiveCC });
       }
     } catch {
-      // ignore; you can add toast if you like
+      // ignore; you can show a toast if you want
     }
   }
 
@@ -121,6 +137,8 @@ export default function EVPage() {
       (pos) => {
         const lat = pos.coords.latitude;
         const lon = pos.coords.longitude;
+
+        // if user is traveling, try to guess a supported CC from lat/lon via a tiny reverse api (optional improvement)
         setExternalCenter({ lat, lng: lon, z: 12 });
         fetchData({ silent: true, lat, lon, radius: kmForZoom(12) });
       },
@@ -141,11 +159,12 @@ export default function EVPage() {
 
   return (
     <div style={{ padding: 0 }}>
-      {/* HEADER / FILTER BAR (measured for offset) */}
+      {/* HEADER / FILTER BAR (sticky; measured for offset) */}
       <div
         ref={barRef}
         style={{
-          position: "relative",
+          position: "sticky",
+          top: 8,
           zIndex: 1001,
           background: "rgba(255,255,255,0.95)",
           boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
@@ -250,7 +269,7 @@ export default function EVPage() {
         onViewportChange={(c, z) => handleViewport(c, z)}
         onFilteredCountChange={setFilteredCount}
         externalCenter={externalCenter}
-        offsetTopPx={headerOffset}   // <<< keeps the searched/geolocated target under the header
+        offsetTopPx={headerOffset}   // keeps the searched/geolocated target under the header
       />
     </div>
   );
