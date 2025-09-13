@@ -10,6 +10,7 @@ const HeatmapWithScaling = dynamic(() => import("../components/HeatmapWithScalin
 const parseBool = (v: any, def=false)=> v===undefined?def:(v==='1'||v===1||v==='true');
 const num = (v:any, d:number)=> { const n=Number(v); return Number.isFinite(n)?n:d; };
 const str = (v:any, d:string)=> (typeof v==='string'&&v.length?v:d);
+const csvList = (v:any)=> typeof v==='string' && v ? v.split(",").map(s=>s.trim()).filter(Boolean) : [];
 
 // simple country presets (center & zoom)
 const COUNTRY_PRESETS: Record<string, {lat:number; lng:number; z:number; radius:number}> = {
@@ -33,6 +34,22 @@ function radiusForZoom(z:number){
   return r;
 }
 
+// shares calculator (for drawer)
+const WEIGHTS = { reports: 0.5, downtime: 0.3, connectors: 0.2 };
+function sharesFromBreakdown(b?: {reports:number;downtime:number;connectors:number}) {
+  if (!b) return { reports: 0, downtime: 0, connectors: 0 };
+  const cRep = b.reports * WEIGHTS.reports;
+  const cDown = b.downtime * WEIGHTS.downtime;
+  const cConn = b.connectors * WEIGHTS.connectors;
+  const total = cRep + cDown + cConn;
+  if (total <= 1e-9) return { reports: 0, downtime: 0, connectors: 0 };
+  const rep = Math.round((cRep/total)*100);
+  const down = Math.round((cDown/total)*100);
+  let conn = 100 - rep - down; // ensure sums to 100
+  if (conn < 0) conn = 0;
+  return { reports: rep, downtime: down, connectors: conn };
+}
+
 export default function EVPage() {
   const router = useRouter();
   const q = router.query;
@@ -46,10 +63,14 @@ export default function EVPage() {
     radius: num(q.r, 60),
     blur: num(q.b, 35),
   });
-  const [filters, setFilters] = React.useState<{operator: string; dcOnly: boolean; minKW: number}>({
+  const [filters, setFilters] = React.useState<{
+    operator: string; dcOnly: boolean; minKW: number; minConn: number; types: string[];
+  }>({
     operator: str(q.op, "any"),
     dcOnly: parseBool(q.dc, false),
     minKW: num(q.kw, 0),
+    minConn: num(q.mc, 0),
+    types: csvList(q.ct),
   });
   const [view, setView] = React.useState<{lat:number; lng:number; z:number}>({
     lat: num(q.lat, COUNTRY_PRESETS[cc]?.lat ?? 51.5074),
@@ -57,7 +78,7 @@ export default function EVPage() {
     z:   num(q.z,   COUNTRY_PRESETS[cc]?.z   ?? 7),
   });
 
-  // (optional) initial selected hotspot from query
+  // optional: initial selected hotspot from query
   const selectedInit = React.useMemo(() => {
     const hlat = q.hlat, hlng = q.hlng;
     if(hlat===undefined || hlng===undefined) return null;
@@ -68,6 +89,9 @@ export default function EVPage() {
   const [points, setPoints] = React.useState<Point[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+
+  // selected (for the drawer)
+  const [selected, setSelected] = React.useState<Point | null>(null);
 
   // fetcher
   const fetchData = React.useCallback(async (opts?: { silent?: boolean; lat?:number; lon?:number; radius?:number }) => {
@@ -89,7 +113,16 @@ export default function EVPage() {
     }
   }, [cc, halfReports, halfDown, view.lat, view.lng, view.z]);
 
- React.useEffect(() => { fetchData({ silent: true }); }, []); // eslint-disable-line
+  // first load (silent)
+  React.useEffect(() => { fetchData({ silent: true }); }, []); // eslint-disable-line
+
+  // debounced refetch on view/half-lives/country change
+  React.useEffect(() => {
+    const id = setTimeout(() => {
+      fetchData({ silent: true });
+    }, 300);
+    return () => clearTimeout(id);
+  }, [view.lat, view.lng, view.z, cc, halfReports, halfDown, fetchData]);
 
   // operators list for filter
   const operatorOptions = React.useMemo(() => {
@@ -111,11 +144,14 @@ export default function EVPage() {
     params.set("op", filters.operator || "any");
     params.set("dc", filters.dcOnly ? "1" : "0");
     params.set("kw", String(filters.minKW || 0));
+    params.set("mc", String(filters.minConn || 0));
+    if (filters.types.length) params.set("ct", filters.types.join(","));
     params.set("lat", String(view.lat.toFixed(5)));
     params.set("lng", String(view.lng.toFixed(5)));
     params.set("z", String(view.z));
+    if (selected) { params.set("hlat", String(selected.lat)); params.set("hlng", String(selected.lng)); }
     router.replace({ pathname: "/ev", query: Object.fromEntries(params) }, undefined, { shallow: true });
-  }, [router, cc, halfReports, halfDown, ui.scale, ui.radius, ui.blur, filters.operator, filters.dcOnly, filters.minKW, view.lat, view.lng, view.z]);
+  }, [router, cc, halfReports, halfDown, ui.scale, ui.radius, ui.blur, filters.operator, filters.dcOnly, filters.minKW, filters.minConn, filters.types, view.lat, view.lng, view.z, selected]);
 
   React.useEffect(() => { pushUrl(); }, [pushUrl]);
 
@@ -156,18 +192,36 @@ export default function EVPage() {
     fetchData({ lat: p.lat, lon: p.lng, radius: p.radius });
   };
 
-  // refetch for current view center/zoom
+  // refetch for current view center/zoom (manual)
   const refetchForView = () => {
     fetchData({ lat: view.lat, lon: view.lng, radius: radiusForZoom(view.z) });
   };
 
-  // when a hotspot is selected, write it into URL (permalink)
-  const writeHotspotToUrl = (p: Point | null) => {
+  // when a hotspot is selected, keep local & write url
+  const onSelectChange = (p: Point | null) => {
+    setSelected(p);
     const curr = new URLSearchParams(router.query as any);
     if (p) { curr.set("hlat", String(p.lat)); curr.set("hlng", String(p.lng)); }
     else { curr.delete("hlat"); curr.delete("hlng"); }
     router.replace({ pathname: "/ev", query: Object.fromEntries(curr) }, undefined, { shallow: true });
   };
+
+  // drawer copy link
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      alert("Link copied!");
+    } catch {
+      alert("Could not copy link");
+    }
+  };
+
+  const typeChecked = (t: string) => filters.types.includes(t);
+  const toggleType = (t: string) =>
+    setFilters(f => {
+      const has = f.types.includes(t);
+      return { ...f, types: has ? f.types.filter(x => x !== t) : [...f.types, t] };
+    });
 
   return (
     <div style={{ position: "relative" }}>
@@ -176,7 +230,7 @@ export default function EVPage() {
         position: "absolute", right: 16, top: 12, zIndex: 1100,
         background: "rgba(255,255,255,0.95)", padding: "10px 12px",
         borderRadius: 12, boxShadow: "0 2px 10px rgba(0,0,0,0.08)", fontSize: 12,
-        display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", maxWidth: 900
+        display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", maxWidth: 980
       }}>
         <div><b>Live OCM data</b> • {points.length.toLocaleString()} points</div>
 
@@ -205,7 +259,7 @@ export default function EVPage() {
 
         <div style={{ width: "100%", height: 0 }} />
 
-        {/* Filters */}
+        {/* Filters — existing */}
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <label>Network</label>
           <select value={filters.operator} onChange={e => setFilters(f => ({ ...f, operator: e.target.value }))}>
@@ -220,6 +274,22 @@ export default function EVPage() {
           <label>Min kW</label>
           <input type="number" min={0} max={400} step={10} value={filters.minKW}
                  onChange={e => setFilters(f => ({ ...f, minKW: Math.max(0, +e.target.value || 0) }))} style={{ width: 70 }} />
+        </div>
+
+        {/* Filters — NEW */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <label>Min connectors</label>
+          <input type="number" min={0} max={50} step={1} value={filters.minConn}
+                 onChange={e => setFilters(f => ({ ...f, minConn: Math.max(0, +e.target.value || 0) }))} style={{ width: 60 }} />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span>Types:</span>
+          {["CCS","CHAdeMO","Type 2","Tesla"].map(t => (
+            <label key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <input type="checkbox" checked={typeChecked(t)} onChange={() => toggleType(t)} /> {t}
+            </label>
+          ))}
         </div>
 
         {/* Search + locate + refetch-for-view */}
@@ -264,16 +334,79 @@ export default function EVPage() {
       )}
 
       {!loading && !error && (
-        <HeatmapWithScaling
-          points={points}
-          meta={{ halfReports, halfDown }}
-          filters={filters}
-          initialUI={ui}
-          onUIChange={(u) => setUI(u)}
-          onViewportChange={(c, z) => setView({ lat: c[0], lng: c[1], z })}
-          selectedInit={selectedInit}
-          onSelectChange={(p) => writeHotspotToUrl(p)}
-        />
+        <>
+          <HeatmapWithScaling
+            points={points}
+            meta={{ halfReports, halfDown }}
+            filters={filters}
+            initialUI={ui}
+            onUIChange={(u) => setUI(u)}
+            onViewportChange={(c, z) => setView({ lat: c[0], lng: c[1], z })}
+            selectedInit={selectedInit}
+            onSelectChange={onSelectChange}
+          />
+
+          {/* Right-side details drawer */}
+          {selected && (
+            <div style={{
+              position: "absolute", top: 80, right: 16, zIndex: 1200,
+              width: 320, background: "rgba(255,255,255,0.98)", borderRadius: 12,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: 12, fontSize: 13
+            }}>
+              <div style={{ display: "flex", alignItems: "start", gap: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, lineHeight: 1.2 }}>
+                  {selected.name || "Hotspot"}
+                </div>
+                <button
+                  onClick={() => onSelectChange(null)}
+                  style={{ marginLeft: "auto", border: "1px solid #ddd", borderRadius: 8, padding: "4px 8px", background: "#fff", cursor: "pointer" }}
+                >
+                  Close
+                </button>
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <div><b>Score</b>: {selected.value.toFixed(2)}</div>
+                <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  <div><b>Operator</b><br/>{selected.op || "Unknown"}</div>
+                  <div><b>Fast/DC</b><br/>{selected.dc ? "Yes" : "No"}</div>
+                  <div><b>Max kW</b><br/>{selected.kw ?? 0}</div>
+                  <div><b>Connectors</b><br/>{selected.conn ?? 0}</div>
+                  <div style={{ gridColumn: "1 / span 2" }}><b>Types</b><br/>{(selected.types||[]).join(", ") || "—"}</div>
+                </div>
+                {selected.breakdown && (
+                  <div style={{ marginTop: 8, opacity: 0.9 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 4 }}>Score breakdown</div>
+                    {(() => {
+                      const s = sharesFromBreakdown(selected.breakdown);
+                      return (
+                        <ul style={{ paddingLeft: 16, margin: 0 }}>
+                          <li>Reports: {s.reports}%</li>
+                          <li>Downtime: {s.downtime}%</li>
+                          <li>Connectors: {s.connectors}%</li>
+                        </ul>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+              <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                <a
+                  href={`https://www.google.com/maps?q=${selected.lat},${selected.lng}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ border: "1px solid #ddd", borderRadius: 8, padding: "6px 10px", textDecoration: "none", color: "#111", background: "#fff" }}
+                >
+                  Open in Google Maps
+                </a>
+                <button
+                  onClick={copyLink}
+                  style={{ border: "1px solid #ddd", borderRadius: 8, padding: "6px 10px", background: "#fff", cursor: "pointer" }}
+                >
+                  Copy link
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
