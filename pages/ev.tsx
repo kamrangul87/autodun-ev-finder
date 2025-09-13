@@ -11,12 +11,10 @@ function kmForZoom(z: number) {
 const SUPPORTED_CC = new Set(["GB","IE","DE","FR","ES"]);
 
 export default function EVPage() {
-  // Core state
   const [cc, setCC] = React.useState<"GB"|"IE"|"DE"|"FR"|"ES">("GB");
   const [points, setPoints] = React.useState<Point[]>([]);
   const [filteredCount, setFilteredCount] = React.useState(0);
 
-  // Filters
   const [dcOnly, setDcOnly] = React.useState(false);
   const [minKW, setMinKW] = React.useState(0);
   const [minConn, setMinConn] = React.useState(0);
@@ -24,12 +22,10 @@ export default function EVPage() {
   const [typesSel, setTypesSel] = React.useState<string[]>(ALL_TYPES);
   const [operator, setOperator] = React.useState<string>("any");
 
-  // View
   const [center, setCenter] = React.useState<[number, number]>([51.5074, -0.1278]);
   const [zoom, setZoom] = React.useState<number>(7);
   const [externalCenter, setExternalCenter] = React.useState<{lat:number;lng:number;z?:number}|null>(null);
 
-  // UI
   const [search, setSearch] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -43,7 +39,6 @@ export default function EVPage() {
     return ["any", ...Array.from(set).sort((a,b)=>a.localeCompare(b))];
   }, [points]);
 
-  // --- Fetch wrapper (deterministic; always clears loading) ---
   const fetchData = React.useCallback(async (p?: { lat?:number; lon?:number; ccOverride?: string; radius?:number; showLoader?: boolean }) => {
     try {
       if (p?.showLoader !== false) setLoading(true);
@@ -66,13 +61,9 @@ export default function EVPage() {
     }
   }, [cc, center, zoom]);
 
-  // Initial load
-  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // eslint-disable-line
+  React.useEffect(() => { fetchData({ showLoader: true }); }, []); // first load
+  React.useEffect(() => { fetchData({ showLoader: true }); }, [cc]); // when country changes
 
-  // Reload when country changes (user action)
-  React.useEffect(() => { fetchData({ showLoader: true }); }, [cc]); // eslint-disable-line
-
-  // Search
   async function handleGo() {
     const q = search.trim();
     if (!q) return;
@@ -98,7 +89,6 @@ export default function EVPage() {
     }
   }
 
-  // Geolocate
   function handleGeolocate() {
     if (!navigator.geolocation) return;
     setLoading(true); setError(null);
@@ -120,7 +110,6 @@ export default function EVPage() {
 
   return (
     <div style={{ padding: 0 }}>
-      {/* Sticky header */}
       <div
         ref={barRef}
         style={{
@@ -176,16 +165,13 @@ export default function EVPage() {
             />
             <button onClick={handleGo}>Go</button>
             <button onClick={handleGeolocate}>Geolocate</button>
-            <button onClick={() => fetchData({ showLoader: true })}>
-              {loading ? "Loading..." : "Refresh"}
-            </button>
+            <button onClick={() => fetchData({ showLoader: true })}>{loading ? "Loading..." : "Refresh"}</button>
           </div>
         </div>
 
         {error ? <div style={{ marginTop: 6, color: "#b00020" }}>Error: {error}</div> : null}
       </div>
 
-      {/* Map */}
       <HeatmapWithScaling
         points={points}
         filters={{ operator, dcOnly, minKW, minConn, types: typesSel }}
