@@ -301,6 +301,45 @@ function HotspotsOverlay({
                     {p.op ? ` • ${p.op}` : ""}
                     {typeof p.kw === "number" ? ` • max ${p.kw}kW` : ""}
                   </div>
+
+                  {/* Directions buttons (Apple Maps + Google Maps) */}
+                  <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                    <a
+                      href={`https://maps.apple.com/?daddr=${encodeURIComponent(`${p.lat},${p.lng}`)}&dirflg=d`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: "inline-block",
+                        padding: "6px 10px",
+                        background: "#111827",
+                        color: "#fff",
+                        borderRadius: 6,
+                        textDecoration: "none",
+                        fontWeight: 600
+                      }}
+                      title="Open directions in Apple Maps"
+                    >
+                      Apple Maps
+                    </a>
+
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${p.lat},${p.lng}`)}&travelmode=driving`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: "inline-block",
+                        padding: "6px 10px",
+                        background: "#1a73e8",
+                        color: "#fff",
+                        borderRadius: 6,
+                        textDecoration: "none",
+                        fontWeight: 600
+                      }}
+                      title="Open directions in Google Maps"
+                    >
+                      Google Maps
+                    </a>
+                  </div>
                 </div>
               </Popup>
             </CircleMarker>
