@@ -1,4 +1,6 @@
 // pages/api/ev-points.ts
+export const runtime = "nodejs"; // ensure Node runtime on Vercel
+
 import type { NextApiRequest, NextApiResponse } from "next";
 
 type OCMConn = {
@@ -28,12 +30,11 @@ type OCM = {
   StatusType?: { IsOperational?: boolean } | null;
 };
 
-// Map OCM ConnectionTypeID -> family
 const CTID: Record<number, "CCS" | "CHAdeMO" | "Type 2" | "Tesla"> = {
   32: "CCS", 33: "CCS", 1030: "CCS", 1031: "CCS",
   2: "CHAdeMO",
   28: "Type 2", 30: "Type 2",
-  25: "Tesla", 27: "Tesla", 1036: "Tesla" // NACS
+  25: "Tesla", 27: "Tesla", 1036: "Tesla",
 };
 
 function detectType(c: OCMConn): string | null {
@@ -53,84 +54,75 @@ function detectType(c: OCMConn): string | null {
   return null;
 }
 
-function mapSites(data: OCM[]) {
-  return (data || [])
-    .map((site) => {
-      const info = site.AddressInfo || {};
-      const la = info.Latitude;
-      const ln = info.Longitude;
-      if (typeof la !== "number" || typeof ln !== "number") return null;
+function mapSites(raw: unknown) {
+  const data: OCM[] = Array.isArray(raw) ? raw : [];
+  return data.map((site) => {
+    const info = site.AddressInfo || {};
+    const la = info.Latitude;
+    const ln = info.Longitude;
+    if (typeof la !== "number" || typeof ln !== "number") return null;
 
-      const conns = site.Connections ?? [];
-      const typeSet = new Set<string>();
-      let maxKW = 0;
-      let anyDC = false;
+    const typeSet = new Set<string>();
+    let maxKW = 0;
+    let anyDC = false;
 
-      for (const c of conns) {
-        const fam = detectType(c);
-        if (fam) typeSet.add(fam);
+    for (const c of site.Connections ?? []) {
+      const fam = detectType(c);
+      if (fam) typeSet.add(fam);
+      const kw = Number(c?.PowerKW ?? 0);
+      if (kw > maxKW) maxKW = kw;
+      const lvl = (c?.Level?.Title || "").toLowerCase();
+      const cur = (c?.CurrentType?.Title || "").toLowerCase();
+      if (c?.LevelID === 3 || lvl.includes("dc") || lvl.includes("rapid") || cur.includes("dc")) anyDC = true;
+    }
 
-        const kw = Number(c?.PowerKW ?? 0);
-        if (kw > maxKW) maxKW = kw;
+    const connectors = (site.Connections?.length ?? site.NumberOfPoints ?? 0) || 0;
+    const operational = site.StatusType?.IsOperational === true ? 1.0 : 0.6;
+    const score = Math.max(0.01, Math.log1p(connectors) * operational);
 
-        const lvlTitle = (c?.Level?.Title || "").toLowerCase();
-        const curTitle = (c?.CurrentType?.Title || "").toLowerCase();
-        if (c?.LevelID === 3 || lvlTitle.includes("dc") || lvlTitle.includes("rapid") || curTitle.includes("dc")) {
-          anyDC = true;
-        }
-      }
+    const addrParts = [info.AddressLine1, info.AddressLine2, info.Town, info.StateOrProvince].filter(Boolean);
+    const addr = addrParts.join(", ");
+    const postcode = info.Postcode || null;
 
-      const connectors = (conns?.length ?? site.NumberOfPoints ?? 0) || 0;
-      const operational = site.StatusType?.IsOperational === true ? 1.0 : 0.6;
-      const score = Math.max(0.01, Math.log1p(connectors) * operational);
-
-      const addrParts = [info.AddressLine1, info.AddressLine2, info.Town, info.StateOrProvince].filter(Boolean);
-      const addr = addrParts.join(", ");
-      const postcode = info.Postcode || null;
-
-      return {
-        id: site.ID ?? null,
-        name: info.Title ?? null,
-        addr: addr || null,
-        postcode,
-        lat: la,
-        lng: ln,
-        value: score,
-        breakdown: { reports: 0, downtime: 0, connectors: Math.max(0.1, connectors) },
-        op: site.OperatorInfo?.Title ?? null,
-        dc: anyDC,
-        kw: maxKW || null,
-        conn: connectors,
-        types: Array.from(typeSet),
-      };
-    })
-    .filter(Boolean);
+    return {
+      id: site.ID ?? null,
+      name: info.Title ?? null,
+      addr: addr || null,
+      postcode,
+      lat: la, lng: ln,
+      value: score,
+      breakdown: { reports: 0, downtime: 0, connectors: Math.max(0.1, connectors) },
+      op: site.OperatorInfo?.Title ?? null,
+      dc: anyDC,
+      kw: maxKW || null,
+      conn: connectors,
+      types: Array.from(typeSet),
+    };
+  }).filter(Boolean) as any[];
 }
 
-async function fetchOCM(cc: string | null, lat: number, lon: number, distKm: number) {
-  const params = new URLSearchParams({
+async function tryFetch(params: { cc?: string | null; lat: number; lon: number; distKm: number }) {
+  const q = new URLSearchParams({
     output: "json",
-    latitude: String(lat),
-    longitude: String(lon),
-    distance: String(Math.max(10, Math.min(650, Math.round(distKm)))),
+    latitude: String(params.lat),
+    longitude: String(params.lon),
+    distance: String(Math.max(10, Math.min(650, Math.round(params.distKm)))),
     distanceunit: "KM",
     maxresults: "5000",
     compact: "true",
     verbose: "false",
   });
-  if (cc) params.set("countrycode", cc);
-  if (process.env.OCM_API_KEY) params.set("key", process.env.OCM_API_KEY);
+  if (params.cc) q.set("countrycode", params.cc);
+  if (process.env.OCM_API_KEY) q.set("key", process.env.OCM_API_KEY);
 
-  const url = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
-  const headers: Record<string, string> = {
-    "User-Agent": "ev-hotspots/1.0 (vercel)",
-  };
+  const url = `https://api.openchargemap.io/v3/poi/?${q.toString()}`;
+  const headers: Record<string, string> = { "User-Agent": "ev-hotspots/1.0 (vercel)" };
   if (process.env.OCM_API_KEY) headers["X-API-Key"] = process.env.OCM_API_KEY;
 
   const r = await fetch(url, { headers, cache: "no-store" });
   if (!r.ok) throw new Error(`OCM ${r.status}`);
-  const data: OCM[] = await r.json();
-  return mapSites(data);
+  const json = await r.json().catch(() => []);
+  return mapSites(json);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -140,14 +132,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const distKm = Number(req.query.distKm ?? 400);
 
   try {
-    // Try with country + requested radius
-    let out = await fetchOCM(cc, lat, lon, distKm);
-    // If empty, widen search and try again with country
-    if (out.length === 0) out = await fetchOCM(cc, lat, lon, distKm * 1.8);
-    // If still empty, try without country filter (some OCM mirrors don’t honor countrycode)
-    if (out.length === 0) out = await fetchOCM(null, lat, lon, distKm * 1.8);
-    // Final fallback: no cc, wide radius
-    if (out.length === 0) out = await fetchOCM(null, lat, lon, 650);
+    // Progressive widening + country-less fallbacks
+    let out = await tryFetch({ cc, lat, lon, distKm });
+    if (out.length === 0) out = await tryFetch({ cc, lat, lon, distKm: distKm * 1.8 });
+    if (out.length === 0) out = await tryFetch({ cc: null, lat, lon, distKm: distKm * 1.8 });
+    if (out.length === 0) out = await tryFetch({ cc: null, lat, lon, distKm: 650 });
 
     res.status(200).json(out);
   } catch (e: any) {
