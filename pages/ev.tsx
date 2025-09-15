@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
-import InstallPrompt from "@/components/InstallPrompt"; // harmless with Plan A
+import InstallPrompt from "@/components/InstallPrompt"; // harmless with Plan A (no SW)
 
 // Client-only React-Leaflet parts (avoid SSR touching leaflet)
 const MapContainer = dynamic(
@@ -27,9 +27,88 @@ const Tooltip = dynamic(
 );
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Demo data (replace with your real dataset later)
+// Types and helpers
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
+function toNum(v: any): number | null {
+  const n = typeof v === "string" ? parseFloat(v) : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Heuristic: find likely lat/lon/weight keys
+const LAT_KEYS = ["lat", "latitude", "y"];
+const LON_KEYS = ["lon", "lng", "long", "longitude", "x"];
+const W_KEYS = ["w", "weight", "intensity", "count", "value", "metric"];
+
+// Parse JSON: either [[lat,lng,w], ...] or [{lat, lon, weight}, ...]
+function parseJsonToHeat(json: any): HeatPoint[] | null {
+  if (Array.isArray(json) && json.length) {
+    // array of arrays?
+    if (Array.isArray(json[0])) {
+      const out: HeatPoint[] = [];
+      for (const row of json as any[]) {
+        const [a, b, c] = row as any[];
+        const lat = toNum(a),
+          lng = toNum(b),
+          w = toNum(c ?? 1);
+        if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
+      }
+      return out.length ? out : null;
+    }
+    // array of objects?
+    if (typeof json[0] === "object") {
+      const out: HeatPoint[] = [];
+      for (const obj of json as any[]) {
+        const lat = LAT_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null);
+        const lng = LON_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null);
+        const w =
+          W_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null) ?? 1;
+        if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
+      }
+      return out.length ? out : null;
+    }
+  }
+  return null;
+}
+
+// Tiny CSV parser (simple, no quotes/commas inside fields). Good enough for clean data.
+function simpleCsvParse(text: string): { headers: string[]; rows: string[][] } {
+  const lines = text.trim().split(/\r?\n/);
+  const headers = lines.shift()!.split(",").map((h) => h.trim().toLowerCase());
+  const rows = lines.map((ln) => ln.split(",").map((c) => c.trim()));
+  return { headers, rows };
+}
+
+function parseCsvToHeat(csvText: string): HeatPoint[] | null {
+  const { headers, rows } = simpleCsvParse(csvText);
+  const latIdx = headers.findIndex((h) => LAT_KEYS.includes(h));
+  const lonIdx = headers.findIndex((h) => LON_KEYS.includes(h));
+  let wIdx = headers.findIndex((h) => W_KEYS.includes(h));
+  if (latIdx === -1 || lonIdx === -1) return null;
+
+  const out: HeatPoint[] = [];
+  for (const r of rows) {
+    const lat = toNum(r[latIdx]);
+    const lng = toNum(r[lonIdx]);
+    const w = wIdx !== -1 ? toNum(r[wIdx]) : 1;
+    if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
+  }
+  return out.length ? out : null;
+}
+
+function normalizeIntensity(points: HeatPoint[]): HeatPoint[] {
+  // If weights look already 0..1, keep as-is
+  const ws = points.map((p) => p[2]);
+  const min = Math.min(...ws);
+  const max = Math.max(...ws);
+  if (min >= 0 && max <= 1) return points;
+
+  const range = max - min || 1;
+  return points.map(([lat, lng, w]) => [lat, lng, (w - min) / range]);
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Demo fallback data (used only if no real file found)
 const DEMO_HEAT: HeatPoint[] = [
   [51.5079, -0.1281, 0.9],
   [51.507, -0.12, 0.8],
@@ -51,7 +130,7 @@ const DEMO_MARKERS: Array<{ lat: number; lng: number; name: string }> = [
 ];
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Legend
+// UI helpers
 function Legend() {
   return (
     <div
@@ -96,7 +175,6 @@ function Legend() {
   );
 }
 
-// Layer toggles
 function LayerToggles({
   showHeat,
   setShowHeat,
@@ -147,7 +225,6 @@ function LayerToggles({
   );
 }
 
-// Map buttons: Locate me + Reset view
 function MapButtons({
   onLocate,
   onReset,
@@ -184,13 +261,40 @@ function MapButtons({
       <button style={btn} onClick={onLocate} disabled={locating}>
         {locating ? "Locating…" : "Use my location"}
       </button>
-      <button style={btn} onClick={onReset}>Reset view</button>
+      <button style={btn} onClick={onReset}>
+        Reset view
+      </button>
     </div>
   );
 }
 
+function DataBadge({ source, count }: { source: string; count: number }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: 14,
+        bottom: 14,
+        zIndex: 1000,
+        background: "#0b1220",
+        color: "#e6e8ee",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 10,
+        padding: "8px 10px",
+        boxShadow: "0 8px 20px rgba(0,0,0,.25)",
+      }}
+    >
+      <span style={{ opacity: 0.85, fontSize: 12 }}>
+        Data: <strong>{source}</strong> · {count} points
+      </span>
+    </div>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────────────
+
 export default function EVPage() {
-  // NOTE: Plan A — no service worker registration here
+  // PLAN A: No service worker registration here
   const center: [number, number] = [51.5074, -0.1278]; // London
 
   const gradient = useMemo<Record<number, string>>(
@@ -214,12 +318,67 @@ export default function EVPage() {
   const [userPos, setUserPos] = useState<[number, number] | null>(null);
   const [locating, setLocating] = useState(false);
 
+  const [heatPoints, setHeatPoints] = useState<HeatPoint[] | null>(null);
+  const [dataSource, setDataSource] = useState<string>("demo");
+
+  // === Load REAL heat data if present ===
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadData() {
+      // Try JSON first
+      try {
+        const r = await fetch("/data/ev_heat.json", { cache: "no-cache" });
+        if (r.ok) {
+          const j = await r.json();
+          const arr = parseJsonToHeat(j);
+          if (arr && arr.length) {
+            const norm = normalizeIntensity(arr);
+            if (!ignore) {
+              setHeatPoints(norm);
+              setDataSource("ev_heat.json");
+            }
+            return;
+          }
+        }
+      } catch {}
+
+      // Then try CSV
+      try {
+        const r = await fetch("/data/ev_heat.csv", { cache: "no-cache" });
+        if (r.ok) {
+          const text = await r.text();
+          const arr = parseCsvToHeat(text);
+          if (arr && arr.length) {
+            const norm = normalizeIntensity(arr);
+            if (!ignore) {
+              setHeatPoints(norm);
+              setDataSource("ev_heat.csv");
+            }
+            return;
+          }
+        }
+      } catch {}
+
+      // Fallback to demo
+      if (!ignore) {
+        setHeatPoints(DEMO_HEAT);
+        setDataSource("demo");
+      }
+    }
+
+    loadData();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   // Build/remove heat layer only in the browser
   useEffect(() => {
     let cancelled = false;
 
     async function mountHeat() {
-      if (!map || !showHeat) return;
+      if (!map || !showHeat || !heatPoints) return;
 
       const L = (await import("leaflet")).default as any;
       await import("leaflet.heat"); // adds L.heatLayer
@@ -233,7 +392,7 @@ export default function EVPage() {
         heatRef.current = null;
       }
 
-      const layer = (L as any).heatLayer(DEMO_HEAT, {
+      const layer = (L as any).heatLayer(heatPoints, {
         radius: 55,
         blur: 35,
         maxZoom: 17,
@@ -257,7 +416,7 @@ export default function EVPage() {
     return () => {
       cancelled = true;
     };
-  }, [map, showHeat, gradient]);
+  }, [map, showHeat, gradient, heatPoints]);
 
   // Locate me handler
   const handleLocate = () => {
@@ -368,6 +527,7 @@ export default function EVPage() {
           />
           <MapButtons onLocate={handleLocate} onReset={handleReset} locating={locating} />
           <Legend />
+          <DataBadge source={dataSource} count={heatPoints?.length ?? 0} />
         </div>
       </main>
 
