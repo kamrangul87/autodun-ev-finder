@@ -4,8 +4,11 @@ import Head from "next/head";
 import dynamic from "next/dynamic";
 import InstallPrompt from "@/components/InstallPrompt";
 
+// ✅ Import LayersControl + useMap statically so .BaseLayer/.Overlay exist
+import { LayersControl, useMap } from "react-leaflet";
+
 // ───────────────────────────────────────────────────────────────────────────────
-// React-Leaflet pieces (client-only to avoid SSR issues)
+// Client-only pieces (avoid SSR issues for Leaflet map itself)
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -26,13 +29,9 @@ const Tooltip = dynamic(
   () => import("react-leaflet").then((m) => m.Tooltip),
   { ssr: false }
 );
-const LayersControl = dynamic(
-  () => import("react-leaflet").then((m) => m.LayersControl),
-  { ssr: false }
-);
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Service Worker registration (keep as-is; you already had this)
+// Service Worker registration (keep this if you use /public/sw.js)
 function registerSW() {
   if (typeof window === "undefined") return;
   if ("serviceWorker" in navigator) {
@@ -45,23 +44,19 @@ function registerSW() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Types & demo data (replace with your real data fetch later if you want)
+// Demo data (replace with your API later)
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
-  // Central London cluster
   [51.5079, -0.1281, 0.9],
   [51.5070, -0.12, 0.8],
   [51.506, -0.11, 0.7],
   [51.51, -0.14, 0.8],
   [51.509, -0.132, 1.0],
-  // Canary Wharf
   [51.505, -0.0235, 0.85],
   [51.502, -0.020, 0.7],
-  // West London
   [51.514, -0.275, 0.6],
   [51.520, -0.30, 0.5],
-  // South
   [51.45, -0.10, 0.55],
   [51.44, -0.12, 0.4],
 ];
@@ -73,9 +68,7 @@ const DEMO_MARKERS: Array<{ lat: number; lng: number; name: string }> = [
 ];
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Heatmap layer as a tiny React-Leaflet compatible component
-// (leaflet.heat has no TS types; we lazy-load it on the client)
-import { useMap } from "react-leaflet";
+// Heatmap layer helper (loads leaflet.heat only in the browser)
 function HeatmapLayer({
   points,
   radius = 28,
@@ -96,7 +89,7 @@ function HeatmapLayer({
     let mounted = true;
     (async () => {
       const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat"); // patches L.heatLayer
+      await import("leaflet.heat"); // adds L.heatLayer
       if (!mounted) return;
       heat = (L as any).heatLayer(points, {
         radius,
@@ -174,7 +167,6 @@ export default function EVPage() {
 
   const center: [number, number] = [51.5074, -0.1278]; // London
 
-  // Same gradient used in Legend
   const gradient = useMemo<Record<number, string>>(
     () => ({
       0.0: "#2c7bb6",
@@ -216,7 +208,6 @@ export default function EVPage() {
           </div>
         </header>
 
-        {/* Map area */}
         <div
           style={{
             position: "relative",
@@ -240,7 +231,6 @@ export default function EVPage() {
               </LayersControl.BaseLayer>
 
               <LayersControl.Overlay checked name="Heatmap">
-                {/* Heatmap overlay */}
                 <HeatmapLayer
                   points={DEMO_HEAT}
                   radius={28}
@@ -267,12 +257,11 @@ export default function EVPage() {
             </LayersControl>
           </MapContainer>
 
-          {/* Heat legend (fixed overlay) */}
           <Legend />
         </div>
       </main>
 
-      {/* PWA install banner at page root */}
+      {/* PWA install banner */}
       <InstallPrompt />
     </>
   );
