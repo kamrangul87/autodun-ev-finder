@@ -4,10 +4,7 @@ import Head from "next/head";
 import dynamic from "next/dynamic";
 import InstallPrompt from "@/components/InstallPrompt";
 
-// Leaflet CSS (safe to import in Next.js pages)
-import "leaflet/dist/leaflet.css";
-
-// ---- Client-only react-leaflet components (avoid SSR issues) ----
+// ---- Client-only react-leaflet pieces (avoid SSR) ----
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -29,11 +26,10 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
-// ---- Service worker registration (you already had this; included here) ----
+// ---- Service worker registration (leave as is if you already have this) ----
 function registerSW() {
   if (typeof window === "undefined") return;
   if ("serviceWorker" in navigator) {
-    // Optional: remove 'load' listener if you prefer immediate registration.
     window.addEventListener("load", () => {
       navigator.serviceWorker
         .register("/sw.js", { scope: "/" })
@@ -47,15 +43,13 @@ export default function EVPage() {
     registerSW();
   }, []);
 
-  // Example map center: London (change as you like)
-  const center: [number, number] = [51.5074, -0.1278];
+  const center: [number, number] = [51.5074, -0.1278]; // London
 
   return (
     <>
       <Head>
         <title>EV | Autodun</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        {/* manifest is already linked in _document.tsx */}
       </Head>
 
       <main
@@ -67,7 +61,6 @@ export default function EVPage() {
           color: "#e6e8ee",
         }}
       >
-        {/* Top bar / filters (placeholder) */}
         <header
           style={{
             padding: "10px 14px",
@@ -78,20 +71,19 @@ export default function EVPage() {
             Autodun EV Map
           </h1>
           <div style={{ fontSize: 13, opacity: 0.8 }}>
-            Explore EV hotspots & charging insights
+            Explore EV hotspots &amp; charging insights
           </div>
         </header>
 
-        {/* Map area */}
+        {/* Give the map a HARD height so Leaflet paints for sure */}
         <div
           style={{
             position: "relative",
-            flex: 1,
-            // Give the map a height on mobile; 100dvh minus header estimate
-            minHeight: "calc(100dvh - 60px)",
+            width: "100%",
+            height: "80vh",          // <— explicit height
+            maxHeight: "calc(100dvh - 64px)",
           }}
         >
-          {/* Only renders client-side */}
           <MapContainer
             center={center}
             zoom={11}
@@ -103,7 +95,6 @@ export default function EVPage() {
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
 
-            {/* Example marker (replace with your real points/heatmap layers) */}
             <CircleMarker center={center} radius={10}>
               <Popup>
                 <strong>Central London</strong>
@@ -116,7 +107,7 @@ export default function EVPage() {
         </div>
       </main>
 
-      {/* 👉 Install prompt should live at page root so its fixed banner overlays everything */}
+      {/* PWA install banner */}
       <InstallPrompt />
     </>
   );
