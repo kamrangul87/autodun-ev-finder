@@ -16,9 +16,9 @@ const withPWA = nextPwa({
   disable: process.env.NODE_ENV === 'development',
   runtimeCaching: [],
   buildExcludes: [/middleware-manifest\.json$/],
-  fallback: {
-    document: '/offline',
-  },
+  // Provide a custom offline page for uncached document requests.  The
+  // `fallbacks` option defines which routes should fall back when the
+  // service worker cannot retrieve a resource from the cache or network.
   fallbacks: {
     document: '/offline',
   },
