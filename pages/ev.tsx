@@ -4,7 +4,7 @@ import Head from "next/head";
 import dynamic from "next/dynamic";
 import InstallPrompt from "@/components/InstallPrompt";
 
-// All react-leaflet parts are client-only to avoid SSR touching leaflet
+// Client-only React-Leaflet parts (avoid SSR touching leaflet)
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -26,31 +26,34 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
+// ---- Service worker registration (fixed) ----
 function registerSW() {
   if (typeof window === "undefined") return;
   if (!("serviceWorker" in navigator)) return;
 
-  // Register the NEW filename so Chrome treats it as a new worker
-  navigator.serviceWorker.register("/sw-v4.js", { scope: "/" })
-    .then(reg => {
-      // Ask the browser to check for updates right away
-      reg.update().catch(() => {});
-      // Auto-reload once when the new worker takes control
+  const url = "/sw-v4.js"; // new filename to bust old workers
+
+  navigator.serviceWorker
+    .register(url, { scope: "/" })
+    .then((reg) => {
+      // check for updates
+      try {
+        reg.update();
+      } catch {}
+      // auto-reload once when the new worker takes control
       let refreshing = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
         if (refreshing) return;
         refreshing = true;
         window.location.reload();
       });
     })
-    .catch(err => console.error("SW registration failed:", err));
-}
-
+    .catch((err) => {
+      console.error("SW registration failed:", err);
     });
-  }
 }
 
-// --- Demo data (replace with real dataset later)
+// ---- Demo data (replace with real dataset later) ----
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
@@ -73,7 +76,7 @@ const DEMO_MARKERS: Array<{ lat: number; lng: number; name: string }> = [
   { lat: 51.514, lng: -0.275, name: "Ealing" },
 ];
 
-// --- Legend
+// ---- Legend ----
 function Legend() {
   return (
     <div
@@ -118,7 +121,7 @@ function Legend() {
   );
 }
 
-// --- Simple toggles UI
+// ---- Simple toggles UI ----
 function LayerToggles({
   showHeat,
   setShowHeat,
@@ -214,8 +217,8 @@ export default function EVPage() {
       }
 
       const layer = (L as any).heatLayer(DEMO_HEAT, {
-        radius: 45,
-        blur: 25,
+        radius: 55,
+        blur: 35,
         maxZoom: 17,
         max: 1.0,
         minOpacity: 0.35,
@@ -283,9 +286,7 @@ export default function EVPage() {
             zoom={12}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
-            // v4: whenReady expects () => void (no args).
-            // We grab the map from the ref once it's ready.
-            whenReady={() => setMap(mapRef.current)}
+            whenReady={() => setMap(mapRef.current)} // v4: no args
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
@@ -306,7 +307,6 @@ export default function EVPage() {
               ))}
           </MapContainer>
 
-          {/* UI */}
           <LayerToggles
             showHeat={showHeat}
             setShowHeat={setShowHeat}
