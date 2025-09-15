@@ -35,47 +35,60 @@ function toNum(v: any): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// Heuristic: find likely lat/lon/weight keys
+// Prefer first non-null value for a list of candidate keys
+function pickFirst(obj: any, keys: string[]): number | null {
+  for (const k of keys) {
+    const n = toNum(obj?.[k]);
+    if (n !== null) return n;
+  }
+  return null;
+}
+
+// Heuristic: likely keys
 const LAT_KEYS = ["lat", "latitude", "y"];
 const LON_KEYS = ["lon", "lng", "long", "longitude", "x"];
 const W_KEYS = ["w", "weight", "intensity", "count", "value", "metric"];
 
 // Parse JSON: either [[lat,lng,w], ...] or [{lat, lon, weight}, ...]
 function parseJsonToHeat(json: any): HeatPoint[] | null {
-  if (Array.isArray(json) && json.length) {
-    // array of arrays?
-    if (Array.isArray(json[0])) {
-      const out: HeatPoint[] = [];
-      for (const row of json as any[]) {
-        const [a, b, c] = row as any[];
-        const lat = toNum(a),
-          lng = toNum(b),
-          w = toNum(c ?? 1);
-        if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
-      }
-      return out.length ? out : null;
+  if (!Array.isArray(json) || json.length === 0) return null;
+
+  // array of arrays?
+  if (Array.isArray(json[0])) {
+    const out: HeatPoint[] = [];
+    for (const row of json as any[]) {
+      const [a, b, c] = row as any[];
+      const lat = toNum(a);
+      const lng = toNum(b);
+      const w = toNum(c);
+      if (lat !== null && lng !== null) out.push([lat, lng, w ?? 1]);
     }
-    // array of objects?
-    if (typeof json[0] === "object") {
-      const out: HeatPoint[] = [];
-      for (const obj of json as any[]) {
-        const lat = LAT_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null);
-        const lng = LON_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null);
-        const w =
-          W_KEYS.map((k) => toNum(obj?.[k])).find((v) => v !== null) ?? 1;
-        if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
-      }
-      return out.length ? out : null;
-    }
+    return out.length ? out : null;
   }
+
+  // array of objects?
+  if (typeof json[0] === "object" && json[0] !== null) {
+    const out: HeatPoint[] = [];
+    for (const obj of json as any[]) {
+      const lat = pickFirst(obj, LAT_KEYS);
+      const lng = pickFirst(obj, LON_KEYS);
+      const w = pickFirst(obj, W_KEYS) ?? 1; // default to 1
+      if (lat !== null && lng !== null) out.push([lat, lng, w]);
+    }
+    return out.length ? out : null;
+  }
+
   return null;
 }
 
-// Tiny CSV parser (simple, no quotes/commas inside fields). Good enough for clean data.
+// Tiny CSV parser (simple, no quotes/commas inside fields).
 function simpleCsvParse(text: string): { headers: string[]; rows: string[][] } {
   const lines = text.trim().split(/\r?\n/);
+  if (!lines.length) return { headers: [], rows: [] };
   const headers = lines.shift()!.split(",").map((h) => h.trim().toLowerCase());
-  const rows = lines.map((ln) => ln.split(",").map((c) => c.trim()));
+  const rows = lines
+    .filter((ln) => ln.trim().length)
+    .map((ln) => ln.split(",").map((c) => c.trim()));
   return { headers, rows };
 }
 
@@ -83,21 +96,21 @@ function parseCsvToHeat(csvText: string): HeatPoint[] | null {
   const { headers, rows } = simpleCsvParse(csvText);
   const latIdx = headers.findIndex((h) => LAT_KEYS.includes(h));
   const lonIdx = headers.findIndex((h) => LON_KEYS.includes(h));
-  let wIdx = headers.findIndex((h) => W_KEYS.includes(h));
+  const wIdx = headers.findIndex((h) => W_KEYS.includes(h));
   if (latIdx === -1 || lonIdx === -1) return null;
 
   const out: HeatPoint[] = [];
   for (const r of rows) {
     const lat = toNum(r[latIdx]);
     const lng = toNum(r[lonIdx]);
-    const w = wIdx !== -1 ? toNum(r[wIdx]) : 1;
-    if (lat !== null && lng !== null && w !== null) out.push([lat, lng, w]);
+    const w = wIdx !== -1 ? toNum(r[wIdx]) ?? 1 : 1;
+    if (lat !== null && lng !== null) out.push([lat, lng, w]);
   }
   return out.length ? out : null;
 }
 
 function normalizeIntensity(points: HeatPoint[]): HeatPoint[] {
-  // If weights look already 0..1, keep as-is
+  // If weights already 0..1, keep as-is
   const ws = points.map((p) => p[2]);
   const min = Math.min(...ws);
   const max = Math.max(...ws);
