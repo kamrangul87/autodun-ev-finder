@@ -5,7 +5,6 @@
  * service worker and precache assets when building for production.
  * See https://github.com/shadowwalker/next-pwa for details.
  */
-
 // Import the default export from next-pwa.  The CommonJS module does not
 // provide named exports, so we destructure the default.  Then call
 // nextPwa() with the plugin options to obtain the withPWA higher-order
@@ -30,7 +29,12 @@ const nextConfig = {
   experimental: { typedRoutes: true },
   async redirects() {
     return [
-      { source: '/', destination: '/ev', permanent: false },
+      // Route the site root to the new dynamic heatmap page so users see
+      // live EV data on first load.
+      { source: '/', destination: '/model1-heatmap', permanent: false },
+      // Backwards compatibility: route the legacy `/ev` path to the heatmap
+      // page so that old bookmarks still work.
+      { source: '/ev', destination: '/model1-heatmap', permanent: false },
     ];
   },
 };
