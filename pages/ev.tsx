@@ -1,14 +1,10 @@
 // pages/ev.tsx
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
 import InstallPrompt from "@/components/InstallPrompt";
 
-// ✅ Import LayersControl + useMap statically so .BaseLayer/.Overlay exist
-import { LayersControl, useMap } from "react-leaflet";
-
-// ───────────────────────────────────────────────────────────────────────────────
-// Client-only pieces (avoid SSR issues for Leaflet map itself)
+// All react-leaflet components are client-only to avoid SSR touching leaflet
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -30,8 +26,7 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Service Worker registration (keep this if you use /public/sw.js)
+// --- SW registration (kept minimal)
 function registerSW() {
   if (typeof window === "undefined") return;
   if ("serviceWorker" in navigator) {
@@ -43,8 +38,7 @@ function registerSW() {
   }
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Demo data (replace with your API later)
+// --- Demo data (replace with real dataset later)
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
@@ -67,53 +61,7 @@ const DEMO_MARKERS: Array<{ lat: number; lng: number; name: string }> = [
   { lat: 51.514, lng: -0.275, name: "Ealing" },
 ];
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Heatmap layer helper (loads leaflet.heat only in the browser)
-function HeatmapLayer({
-  points,
-  radius = 28,
-  blur = 20,
-  maxZoom = 17,
-  gradient,
-}: {
-  points: HeatPoint[];
-  radius?: number;
-  blur?: number;
-  maxZoom?: number;
-  gradient?: Record<number, string>;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    let heat: any;
-    let mounted = true;
-    (async () => {
-      const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat"); // adds L.heatLayer
-      if (!mounted) return;
-      heat = (L as any).heatLayer(points, {
-        radius,
-        blur,
-        maxZoom,
-        gradient,
-      });
-      heat.addTo(map);
-    })();
-
-    return () => {
-      mounted = false;
-      if (heat) {
-        try {
-          map.removeLayer(heat);
-        } catch {}
-      }
-    };
-  }, [map, points, radius, blur, maxZoom, gradient]);
-
-  return null;
-}
-
-// Legend UI
+// --- Legend
 function Legend() {
   return (
     <div
@@ -158,7 +106,56 @@ function Legend() {
   );
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
+// --- Simple toggles UI
+function LayerToggles({
+  showHeat,
+  setShowHeat,
+  showMarkers,
+  setShowMarkers,
+}: {
+  showHeat: boolean;
+  setShowHeat: (v: boolean) => void;
+  showMarkers: boolean;
+  setShowMarkers: (v: boolean) => void;
+}) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        right: 14,
+        top: 78,
+        zIndex: 1000,
+        background: "#0b1220",
+        color: "#e6e8ee",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 10,
+        padding: "10px 12px",
+        boxShadow: "0 8px 20px rgba(0,0,0,.25)",
+        width: 220,
+      }}
+    >
+      <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 13 }}>
+        Layers
+      </div>
+      <label style={{ display: "flex", gap: 8, fontSize: 13, marginBottom: 6 }}>
+        <input
+          type="checkbox"
+          checked={showHeat}
+          onChange={(e) => setShowHeat(e.target.checked)}
+        />
+        Heatmap
+      </label>
+      <label style={{ display: "flex", gap: 8, fontSize: 13 }}>
+        <input
+          type="checkbox"
+          checked={showMarkers}
+          onChange={(e) => setShowMarkers(e.target.checked)}
+        />
+        Stations (demo)
+      </label>
+    </div>
+  );
+}
 
 export default function EVPage() {
   useEffect(() => {
@@ -177,6 +174,57 @@ export default function EVPage() {
     }),
     []
   );
+
+  // map + heat layer refs (avoid importing leaflet/server)
+  const [map, setMap] = useState<any | null>(null);
+  const heatRef = useRef<any | null>(null);
+
+  const [showHeat, setShowHeat] = useState(true);
+  const [showMarkers, setShowMarkers] = useState(true);
+
+  // Build/remove heat layer only in the browser
+  useEffect(() => {
+    let cancelled = false;
+
+    async function mountHeat() {
+      if (!map || !showHeat) return;
+
+      const L = (await import("leaflet")).default as any;
+      await import("leaflet.heat"); // patches L.heatLayer
+
+      if (cancelled) return;
+      // remove previous heat layer if exists
+      if (heatRef.current) {
+        try {
+          map.removeLayer(heatRef.current);
+        } catch {}
+        heatRef.current = null;
+      }
+
+      const layer = (L as any).heatLayer(DEMO_HEAT, {
+        radius: 28,
+        blur: 20,
+        maxZoom: 17,
+        gradient,
+      });
+      layer.addTo(map);
+      heatRef.current = layer;
+    }
+
+    if (showHeat) {
+      mountHeat();
+    } else if (map && heatRef.current) {
+      try {
+        map.removeLayer(heatRef.current);
+      } catch {}
+      heatRef.current = null;
+    }
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, showHeat, gradient]);
 
   return (
     <>
@@ -221,42 +269,34 @@ export default function EVPage() {
             zoom={11}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
+            whenCreated={(m) => setMap(m)} // capture map instance safely on client
           >
-            <LayersControl position="topright">
-              <LayersControl.BaseLayer checked name="OpenStreetMap">
-                <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                />
-              </LayersControl.BaseLayer>
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
 
-              <LayersControl.Overlay checked name="Heatmap">
-                <HeatmapLayer
-                  points={DEMO_HEAT}
-                  radius={28}
-                  blur={20}
-                  maxZoom={17}
-                  gradient={gradient}
-                />
-              </LayersControl.Overlay>
-
-              <LayersControl.Overlay name="Stations (demo)">
-                <>
-                  {DEMO_MARKERS.map((m) => (
-                    <CircleMarker key={m.name} center={[m.lat, m.lng]} radius={8}>
-                      <Popup>
-                        <strong>{m.name}</strong>
-                        <br />
-                        Demo POI
-                      </Popup>
-                      <Tooltip>{m.name}</Tooltip>
-                    </CircleMarker>
-                  ))}
-                </>
-              </LayersControl.Overlay>
-            </LayersControl>
+            {/* Demo markers */}
+            {showMarkers &&
+              DEMO_MARKERS.map((m) => (
+                <CircleMarker key={m.name} center={[m.lat, m.lng]} radius={8}>
+                  <Popup>
+                    <strong>{m.name}</strong>
+                    <br />
+                    Demo POI
+                  </Popup>
+                  <Tooltip>{m.name}</Tooltip>
+                </CircleMarker>
+              ))}
           </MapContainer>
 
+          {/* UI */}
+          <LayerToggles
+            showHeat={showHeat}
+            setShowHeat={setShowHeat}
+            showMarkers={showMarkers}
+            setShowMarkers={setShowMarkers}
+          />
           <Legend />
         </div>
       </main>
