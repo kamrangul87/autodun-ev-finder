@@ -202,9 +202,11 @@ export default function EVPage() {
       }
 
       const layer = (L as any).heatLayer(DEMO_HEAT, {
-        radius: 28,
-        blur: 20,
+        radius: 45,
+        blur: 25,
         maxZoom: 17,
+        max: 1.0,
+        minOpacity: 0.35,
         gradient,
       });
       layer.addTo(map);
