@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
-import InstallPrompt from "@/components/InstallPrompt";
+import InstallPrompt from "@/components/InstallPrompt"; // keep; it won't show w/o SW, which is fine
 
 // Client-only React-Leaflet parts (avoid SSR touching leaflet)
 const MapContainer = dynamic(
@@ -26,34 +26,8 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
-// ---- Service worker registration (fixed) ----
-function registerSW() {
-  if (typeof window === "undefined") return;
-  if (!("serviceWorker" in navigator)) return;
-
-  const url = "/sw-v4.js"; // new filename to bust old workers
-
-  navigator.serviceWorker
-    .register(url, { scope: "/" })
-    .then((reg) => {
-      // check for updates
-      try {
-        reg.update();
-      } catch {}
-      // auto-reload once when the new worker takes control
-      let refreshing = false;
-      navigator.serviceWorker.addEventListener("controllerchange", () => {
-        if (refreshing) return;
-        refreshing = true;
-        window.location.reload();
-      });
-    })
-    .catch((err) => {
-      console.error("SW registration failed:", err);
-    });
-}
-
-// ---- Demo data (replace with real dataset later) ----
+// ───────────────────────────────────────────────────────────────────────────────
+// Demo data (replace with real dataset later)
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
@@ -76,7 +50,8 @@ const DEMO_MARKERS: Array<{ lat: number; lng: number; name: string }> = [
   { lat: 51.514, lng: -0.275, name: "Ealing" },
 ];
 
-// ---- Legend ----
+// ───────────────────────────────────────────────────────────────────────────────
+// Legend
 function Legend() {
   return (
     <div
@@ -121,7 +96,7 @@ function Legend() {
   );
 }
 
-// ---- Simple toggles UI ----
+// Layer toggles
 function LayerToggles({
   showHeat,
   setShowHeat,
@@ -173,9 +148,7 @@ function LayerToggles({
 }
 
 export default function EVPage() {
-  useEffect(() => {
-    registerSW();
-  }, []);
+  // NOTE: No service worker registration here (Plan A)
 
   const center: [number, number] = [51.5074, -0.1278]; // London
 
@@ -317,7 +290,7 @@ export default function EVPage() {
         </div>
       </main>
 
-      {/* PWA install banner */}
+      {/* PWA install banner component is harmless even without SW */}
       <InstallPrompt />
     </>
   );
