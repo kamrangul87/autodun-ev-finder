@@ -17,13 +17,6 @@
     "react-dom": "18.2.0",
     "react-leaflet": "4.2.1",
     "react-leaflet-cluster": "^3.1.0",
-    /*
-     * Add next‑pwa to enable automatic service‑worker and offline support.
-     * The version pinned here is compatible with Next.js&nbsp;14. When
-     * building for production the plugin will generate a service worker
-     * under the `public/` directory with sensible defaults. During local
-     * development the service worker is disabled to avoid caching issues.
-     */
     "next-pwa": "^5.6.0"
   },
   "devDependencies": {
