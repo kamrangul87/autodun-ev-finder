@@ -175,6 +175,7 @@ export default function EVPage() {
     []
   );
 
+  const mapRef = useRef<any>(null);
   const [map, setMap] = useState<any | null>(null);
   const heatRef = useRef<any | null>(null);
 
@@ -263,12 +264,14 @@ export default function EVPage() {
           }}
         >
           <MapContainer
+            ref={mapRef}
             center={center}
             zoom={11}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
-            // v4: use whenReady; get the Map from event.target
-            whenReady={(e: any) => setMap(e.target)}
+            // v4: whenReady expects () => void (no args).
+            // We grab the map from the ref once it's ready.
+            whenReady={() => setMap(mapRef.current)}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
