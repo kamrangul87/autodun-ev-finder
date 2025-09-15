@@ -268,7 +268,7 @@ export default function EVPage() {
           <MapContainer
             ref={mapRef}
             center={center}
-            zoom={11}
+            zoom={12}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
             // v4: whenReady expects () => void (no args).
