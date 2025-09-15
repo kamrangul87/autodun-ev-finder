@@ -4,7 +4,7 @@ import Head from "next/head";
 import dynamic from "next/dynamic";
 import InstallPrompt from "@/components/InstallPrompt";
 
-// All react-leaflet components are client-only to avoid SSR touching leaflet
+// All react-leaflet parts are client-only to avoid SSR touching leaflet
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -26,7 +26,7 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
-// --- SW registration (kept minimal)
+// --- SW registration
 function registerSW() {
   if (typeof window === "undefined") return;
   if ("serviceWorker" in navigator) {
@@ -43,15 +43,15 @@ type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
   [51.5079, -0.1281, 0.9],
-  [51.5070, -0.12, 0.8],
+  [51.507, -0.12, 0.8],
   [51.506, -0.11, 0.7],
   [51.51, -0.14, 0.8],
   [51.509, -0.132, 1.0],
   [51.505, -0.0235, 0.85],
-  [51.502, -0.020, 0.7],
+  [51.502, -0.02, 0.7],
   [51.514, -0.275, 0.6],
-  [51.520, -0.30, 0.5],
-  [51.45, -0.10, 0.55],
+  [51.52, -0.3, 0.5],
+  [51.45, -0.1, 0.55],
   [51.44, -0.12, 0.4],
 ];
 
@@ -175,7 +175,6 @@ export default function EVPage() {
     []
   );
 
-  // map + heat layer refs (avoid importing leaflet/server)
   const [map, setMap] = useState<any | null>(null);
   const heatRef = useRef<any | null>(null);
 
@@ -190,10 +189,10 @@ export default function EVPage() {
       if (!map || !showHeat) return;
 
       const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat"); // patches L.heatLayer
+      await import("leaflet.heat"); // adds L.heatLayer
 
       if (cancelled) return;
-      // remove previous heat layer if exists
+
       if (heatRef.current) {
         try {
           map.removeLayer(heatRef.current);
@@ -223,7 +222,6 @@ export default function EVPage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, showHeat, gradient]);
 
   return (
@@ -269,7 +267,8 @@ export default function EVPage() {
             zoom={11}
             style={{ height: "100%", width: "100%" }}
             scrollWheelZoom
-            whenCreated={(m) => setMap(m)} // capture map instance safely on client
+            // v4: use whenReady; get the Map from event.target
+            whenReady={(e: any) => setMap(e.target)}
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
