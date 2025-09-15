@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import Head from "next/head";
 import dynamic from "next/dynamic";
-import InstallPrompt from "@/components/InstallPrompt"; // keep; it won't show w/o SW, which is fine
+import InstallPrompt from "@/components/InstallPrompt"; // harmless with Plan A
 
 // Client-only React-Leaflet parts (avoid SSR touching leaflet)
 const MapContainer = dynamic(
@@ -27,7 +27,7 @@ const Tooltip = dynamic(
 );
 
 // ───────────────────────────────────────────────────────────────────────────────
-// Demo data (replace with real dataset later)
+// Demo data (replace with your real dataset later)
 type HeatPoint = [number, number, number]; // [lat, lng, intensity 0..1]
 
 const DEMO_HEAT: HeatPoint[] = [
@@ -147,9 +147,50 @@ function LayerToggles({
   );
 }
 
-export default function EVPage() {
-  // NOTE: No service worker registration here (Plan A)
+// Map buttons: Locate me + Reset view
+function MapButtons({
+  onLocate,
+  onReset,
+  locating,
+}: {
+  onLocate: () => void;
+  onReset: () => void;
+  locating: boolean;
+}) {
+  const btn = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 36,
+    padding: "0 12px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "#0b1220",
+    color: "#e6e8ee",
+    cursor: "pointer",
+  } as const;
 
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: 14,
+        top: 78,
+        zIndex: 1000,
+        display: "flex",
+        gap: 8,
+      }}
+    >
+      <button style={btn} onClick={onLocate} disabled={locating}>
+        {locating ? "Locating…" : "Use my location"}
+      </button>
+      <button style={btn} onClick={onReset}>Reset view</button>
+    </div>
+  );
+}
+
+export default function EVPage() {
+  // NOTE: Plan A — no service worker registration here
   const center: [number, number] = [51.5074, -0.1278]; // London
 
   const gradient = useMemo<Record<number, string>>(
@@ -169,6 +210,9 @@ export default function EVPage() {
 
   const [showHeat, setShowHeat] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
+
+  const [userPos, setUserPos] = useState<[number, number] | null>(null);
+  const [locating, setLocating] = useState(false);
 
   // Build/remove heat layer only in the browser
   useEffect(() => {
@@ -214,6 +258,34 @@ export default function EVPage() {
       cancelled = true;
     };
   }, [map, showHeat, gradient]);
+
+  // Locate me handler
+  const handleLocate = () => {
+    if (!map || !("geolocation" in navigator)) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setUserPos([lat, lng]);
+        try {
+          map.flyTo([lat, lng], Math.max(13, map.getZoom() || 12), {
+            animate: true,
+            duration: 0.8,
+          });
+        } catch {}
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  };
+
+  // Reset view handler
+  const handleReset = () => {
+    if (!map) return;
+    map.flyTo(center, 12, { animate: true, duration: 0.6 });
+  };
 
   return (
     <>
@@ -278,19 +350,28 @@ export default function EVPage() {
                   <Tooltip>{m.name}</Tooltip>
                 </CircleMarker>
               ))}
+
+            {/* User location marker (if available) */}
+            {userPos && (
+              <CircleMarker center={userPos} radius={10} pathOptions={{ color: "#3b82f6" }}>
+                <Popup>You are here</Popup>
+              </CircleMarker>
+            )}
           </MapContainer>
 
+          {/* Overlays */}
           <LayerToggles
             showHeat={showHeat}
             setShowHeat={setShowHeat}
             showMarkers={showMarkers}
             setShowMarkers={setShowMarkers}
           />
+          <MapButtons onLocate={handleLocate} onReset={handleReset} locating={locating} />
           <Legend />
         </div>
       </main>
 
-      {/* PWA install banner component is harmless even without SW */}
+      {/* PWA install banner is inert without SW; keeping is fine */}
       <InstallPrompt />
     </>
   );
