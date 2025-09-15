@@ -26,14 +26,26 @@ const Tooltip = dynamic(
   { ssr: false }
 );
 
-// --- SW registration
 function registerSW() {
   if (typeof window === "undefined") return;
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", () => {
-      navigator.serviceWorker
-        .register("/sw.js", { scope: "/" })
-        .catch((err) => console.error("SW registration failed:", err));
+  if (!("serviceWorker" in navigator)) return;
+
+  // Register the NEW filename so Chrome treats it as a new worker
+  navigator.serviceWorker.register("/sw-v4.js", { scope: "/" })
+    .then(reg => {
+      // Ask the browser to check for updates right away
+      reg.update().catch(() => {});
+      // Auto-reload once when the new worker takes control
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
+    })
+    .catch(err => console.error("SW registration failed:", err));
+}
+
     });
   }
 }
