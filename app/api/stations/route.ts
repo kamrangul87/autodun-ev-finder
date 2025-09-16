@@ -1,14 +1,14 @@
 import { NextRequest } from 'next/server';
 
-// Force this route to always run dynamically.  Without this flag Next.js
-// might attempt to statically optimise the endpoint and therefore skip
-// runtime evaluation of search parameters.
+// Always run dynamically (don’t statically optimize this route)
 export const dynamic = 'force-dynamic';
+// Ensure Node runtime so process.env is available as expected on Vercel
+export const runtime = 'nodejs';
 
 // -----------------------------------------------------------------------------
 // Helper functions
 
-// Normalise a value into a lowercase, space‑normalised string.  Undefined
+// Normalise a value into a lowercase, space-normalised string.  Undefined
 // values become empty strings.
 const norm = (s: unknown) =>
   String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -35,10 +35,7 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   return Math.round(R * c * 10) / 10;
 }
 
-// Gather connector text across multiple fields to improve matching.  The
-// OpenChargeMap API returns various fields such as FormalName, Title,
-// Comments and Reference; we normalise all of them and join them with
-// separators so that simple substring matching can be used.
+// Gather connector text across multiple fields to improve matching.
 function connectorText(station: any): string {
   const parts: string[] = [];
   for (const c of station?.Connections ?? []) {
@@ -52,36 +49,26 @@ function connectorText(station: any): string {
   return parts.filter(Boolean).join(' | ');
 }
 
-// Match a station against a connector query.  The API uses this helper to
-// implement fuzzy matching for common connector names (CCS, Type 2,
-// CHAdeMO).  Unknown queries fall back to a simple includes search.
+// Fuzzy connector matching for CCS / Type 2 / CHAdeMO
 function matchesConnector(station: any, connQuery: string): boolean {
   const q = norm(connQuery);
   if (!q) return true; // “Any”
 
   const hay = connectorText(station);
 
-  // “Type 2” can be labelled as “Type 2”, “Mennekes”, “Type2”
   if (q === 'type 2' || q.includes('type 2')) {
     return /type\s*2|mennekes/.test(hay);
   }
-
-  // CCS appears as CCS / Combo / Combined Charging System / Type 2 Combo
   if (q === 'ccs' || q.includes('ccs')) {
     return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
   }
-
-  // CHAdeMO (sometimes spelled chademo)
   if (q === 'chademo' || q.includes('chademo')) {
     return /chade?mo/.test(hay);
   }
-
-  // Fallback: if a custom text is ever passed, do a simple includes
   return hay.includes(q);
 }
 
-// Determine whether a station has at least one connection with the
-// specified minimum power requirement.  A minimum power of 0 means “any”.
+// At least one connection >= minPower (kW)
 function hasMinPower(station: any, minPower: number): boolean {
   if (!minPower) return true;
   const powers = (station?.Connections ?? []).map((c: any) => toNum(c?.PowerKW, 0));
@@ -94,36 +81,27 @@ function hasMinPower(station: any, minPower: number): boolean {
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
-    // Parse optional bounding box parameters.  If all four are finite, we
-    // interpret the request as a bounding query; otherwise we fall back to
-    // lat/lon/dist (centre + radius) behaviour.
+
+    // Optional bounding box (if all four present)
     const north = toNum(sp.get('north'), NaN);
     const south = toNum(sp.get('south'), NaN);
     const east = toNum(sp.get('east'), NaN);
     const west = toNum(sp.get('west'), NaN);
     const hasBounds = [north, south, east, west].every((v) => Number.isFinite(v));
 
-    // Parse centre‑based parameters as a fallback or for backwards compatibility.
+    // Centre-based fallback / legacy params
     const latParam = toNum(sp.get('lat'), NaN);
     const lonParam = toNum(sp.get('lon'), NaN);
     const distParam = Math.max(1, toNum(sp.get('dist'), 10)); // km
     const minPower = Math.max(0, toNum(sp.get('minPower'), 0));
     const conn = sp.get('conn') ?? '';
 
-    // Determine desired data sources.  The default is to return both OpenChargeMap
-    // (OCM) stations and any council-provided stations that are bundled with
-    // this project.  Users can pass `source=ocm` or `source=council` to limit
-    // results to one dataset.  Any other value or absence of the parameter
-    // includes all sources.
+    // Source selection: ocm / council / all (default: all)
     const sourceParam = (sp.get('source') ?? '').toLowerCase();
     const includeOCM = !sourceParam || sourceParam === 'ocm' || sourceParam === 'all';
     const includeCouncil = !sourceParam || sourceParam === 'council' || sourceParam === 'all';
 
-    // Determine which mode we are operating in and compute a suitable centre
-    // point and search radius.  If bounds are specified, compute the centre
-    // as the midpoint of the bounding box and choose a radius large enough
-    // to cover all four corners.  Otherwise, require that lat/lon are
-    // provided (with a reasonable default distance).
+    // Compute centre + radius
     let lat: number;
     let lon: number;
     let dist: number;
@@ -131,11 +109,8 @@ export async function GET(req: NextRequest) {
     if (hasBounds) {
       lat = (north + south) / 2;
       lon = (east + west) / 2;
-      // Compute the maximum distance from the centre to any corner of the
-      // bounding box to ensure the OCM query encompasses the entire area.  We
-      // evaluate all four corners to handle arbitrary orderings of north/south
-      // and east/west (e.g. west could be greater than east when crossing
-      // the antimeridian).
+
+      // radius sufficient to reach all 4 corners
       const corners = [
         [north, east],
         [north, west],
@@ -147,8 +122,6 @@ export async function GET(req: NextRequest) {
         const d = haversineKm(lat, lon, cLat, cLon);
         if (d > maxCornerDist) maxCornerDist = d;
       }
-      // If the box is extremely small the distance could be zero; set a
-      // minimum of 1 km to avoid errors with the OCM API.
       dist = Math.max(1, maxCornerDist);
     } else {
       lat = latParam;
@@ -159,10 +132,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Build verbose OCM request so we get ConnectionType names.  The API
-    // parameters are the same regardless of whether we computed the centre via
-    // bounds or via direct lat/lon.  We always restrict to UK data (GB) and
-    // request verbose output.
+    // -------- OpenChargeMap fetch --------
     const params = new URLSearchParams({
       output: 'json',
       countrycode: 'GB',
@@ -176,37 +146,40 @@ export async function GET(req: NextRequest) {
       includecomments: 'false',
     });
 
-    // Optional API key (either var name works)
+    // API key from either env name
     const key = process.env.OPENCHARGEMAP_API_KEY || process.env.OCM_API_KEY;
     if (key) params.set('key', String(key));
 
     const url = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
 
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
-      },
-      cache: 'no-store',
-    });
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+      'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
+    };
+    // Also send in header (some deployments prefer header auth)
+    if (key) headers['X-API-Key'] = String(key);
+
+    const res = await fetch(url, { headers, cache: 'no-store' });
 
     if (!res.ok) {
-      // Fail soft so UI shows “no results” rather than crashing
-      return new Response(JSON.stringify([]), { status: 200 });
+      const detail = await res.text().catch(() => '');
+      // Return an informative payload (client can show this)
+      return new Response(
+        JSON.stringify({ error: `OCM ${res.status}`, detail, url }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
     }
 
     const raw = (await res.json().catch(() => [])) as any[];
     const items = Array.isArray(raw) ? raw : [];
 
-    // Apply connector and power filters to the OpenChargeMap data.  Bounding
-    // box filtering is also applied here because the OCM API itself only
-    // supports radius-based selection.  After the OCM records are trimmed we
-    // will optionally append council-provided data.
+    // OCM filters + optional bbox clipping
     const ocmFiltered = items.filter((s) => {
       if (!includeOCM) return false;
       const matchConn = matchesConnector(s, conn);
       const matchPower = hasMinPower(s, minPower);
       if (!matchConn || !matchPower) return false;
+
       if (hasBounds) {
         const ai = s?.AddressInfo ?? {};
         const sLat = toNum(ai?.Latitude, NaN);
@@ -222,8 +195,7 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // Load council stations from the bundled JSON file.  The file is read
-    // synchronously on first request and cached for subsequent calls.
+    // -------- Council data (local JSON) --------
     let councilStations: any[] = [];
     if (includeCouncil) {
       try {
@@ -234,21 +206,19 @@ export async function GET(req: NextRequest) {
           const json = await readFile(dataPath, 'utf-8');
           globalAny.__councilStationsCache = JSON.parse(json);
         }
-        councilStations = globalAny.__councilStationsCache as any[];
+        councilStations = (globalThis as any).__councilStationsCache as any[];
       } catch (err) {
         console.error('Failed to read council stations', err);
         councilStations = [];
       }
     }
 
-    // Apply the same connector/power/bounding filters to council data.  Note
-    // that council stations are stored in a simplified format already
-    // containing AddressInfo, Connections and StatusType.
     const councilFiltered = councilStations.filter((s) => {
       if (!includeCouncil) return false;
       const matchConn = matchesConnector(s, conn);
       const matchPower = hasMinPower(s, minPower);
       if (!matchConn || !matchPower) return false;
+
       if (hasBounds) {
         const ai = s?.AddressInfo ?? {};
         const sLat = toNum(ai?.Latitude, NaN);
@@ -264,19 +234,12 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // Trim payload and add a distance field relative to the computed centre for
-    // both OCM and council data.  Council records may not include an
-    // `_distanceKm` property, so we compute it here.  We also mark the
-    // `DataSource` on each record.
+    // -------- Trim & annotate --------
     function trimRecord(s: any): any {
       const ai = s?.AddressInfo ?? {};
       const sLat = toNum(ai?.Latitude, NaN);
       const sLon = toNum(ai?.Longitude, NaN);
 
-      // Compute distance using either OCM provided distance or fallback to
-      // haversine.  Note: this distance is relative to the centre point
-      // (computed from bounds or provided lat/lon), not necessarily to the
-      // original lat/lon in the query if bounds were used.
       const distanceKm =
         Number.isFinite(toNum(ai?.Distance, NaN))
           ? Math.round(toNum(ai?.Distance) * 10) / 10
@@ -305,9 +268,10 @@ export async function GET(req: NextRequest) {
         })),
         StatusType: {
           Title: s?.StatusType?.Title ?? null,
-          IsOperational: typeof s?.StatusType?.IsOperational === 'boolean'
-            ? s?.StatusType?.IsOperational
-            : null,
+          IsOperational:
+            typeof s?.StatusType?.IsOperational === 'boolean'
+              ? s?.StatusType?.IsOperational
+              : null,
         },
         Feedback: (() => {
           const globalAny = globalThis as any;
@@ -329,8 +293,7 @@ export async function GET(req: NextRequest) {
 
     const out = [...trimmedOCM, ...trimmedCouncil];
 
-    // Optionally, sort by distance ascending when distance is available.  Null
-    // distances are placed at the end of the list.
+    // Sort by distance (nulls last)
     out.sort((a: any, b: any) => {
       const dA = a._distanceKm;
       const dB = b._distanceKm;
@@ -346,6 +309,10 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error(e);
-    return new Response(JSON.stringify([]), { status: 200 });
+    // Return a visible error payload so client can display it
+    return new Response(JSON.stringify({ error: 'stations_route_exception', items: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 }
