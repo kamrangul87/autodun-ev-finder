@@ -483,7 +483,7 @@ export default function Model1HeatmapClient() {
           scrollWheelZoom
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}
-          whenCreated={(map) => {
+          whenReady={(event) => {
             mapRef.current = map;
           }}
         >
