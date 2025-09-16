@@ -1,236 +1,88 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+import { NextResponse } from "next/server";
 
-import { NextRequest } from 'next/server';
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-export const dynamic = 'force-dynamic';
+const OCM_BASE = "https://api.openchargemap.io/v3/poi";
 
-// -------- helpers ------------------------------------------------------------
-
-const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
-const toNum = (v: unknown, fb = 0) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : fb;
-};
-
-function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
-  const R = 6371;
-  const dLat = ((bLat - aLat) * Math.PI) / 180;
-  const dLon = ((bLon - aLon) * Math.PI) / 180;
-  const la1 = (aLat * Math.PI) / 180;
-  const la2 = (bLat * Math.PI) / 180;
-  const x = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(la1) * Math.cos(la2);
-  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
-  return Math.round(R * c * 10) / 10;
+function getOCMKey(): string | undefined {
+  const k = process.env.OCM_API_KEY || process.env.OPENCHARGEMAP_API_KEY;
+  return k && k.trim() ? k.trim() : undefined;
 }
 
-function connectorText(station: any): string {
-  const parts: string[] = [];
-  for (const c of station?.Connections ?? []) {
-    parts.push(
-      norm(c?.ConnectionType?.FormalName),
-      norm(c?.ConnectionType?.Title),
-      norm(c?.Comments),
-      norm(c?.Reference),
-    );
-  }
-  return parts.filter(Boolean).join(' | ');
-}
-function matchesConnector(station: any, qRaw: string): boolean {
-  const q = norm(qRaw);
-  if (!q) return true;
-  const hay = connectorText(station);
-  if (q.includes('type 2')) return /type\s*2|mennekes/.test(hay);
-  if (q.includes('ccs')) return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
-  if (q.includes('chademo')) return /chade?mo/.test(hay);
-  return hay.includes(q);
-}
-function hasMinPower(station: any, minPower: number): boolean {
-  if (!minPower) return true;
-  const powers = (station?.Connections ?? []).map((c: any) => toNum(c?.PowerKW, 0));
-  return powers.some((p: number) => p >= minPower);
-}
+export async function GET(req: Request) {
+  const urlIn = new URL(req.url);
+  const sp = urlIn.searchParams;
+  const debug = sp.get("debug") === "1";
+  const source = (sp.get("source") || "ocm").toLowerCase();
 
-// -------- handler ------------------------------------------------------------
+  // bbox OR center+radius (center provided by /api/sites)
+  const north = sp.get("north");
+  const south = sp.get("south");
+  const east = sp.get("east");
+  const west = sp.get("west");
+  const center = sp.get("center");     // "lat,lon"
+  const radiusKm = sp.get("radiusKm"); // number as string
 
-export async function GET(req: NextRequest) {
-  try {
-    const sp = req.nextUrl.searchParams;
+  const conn = sp.get("conn") || undefined;
+  const minPower = sp.get("minPower") || undefined;
 
-    // Accept either explicit bounds (north/south/east/west) or center+dist
-    const north = toNum(sp.get('north'), NaN);
-    const south = toNum(sp.get('south'), NaN);
-    const east  = toNum(sp.get('east'),  NaN);
-    const west  = toNum(sp.get('west'),  NaN);
-    const hasBounds = [north, south, east, west].every((v) => Number.isFinite(v));
+  let out: any[] = [];
+  let ocmStatus = 0;
+  let authed = false;
 
-    const latParam = toNum(sp.get('lat'), NaN);
-    const lonParam = toNum(sp.get('lon'), NaN);
-    const distParam = Math.max(1, toNum(sp.get('dist'), 10));
-    const minPower = Math.max(0, toNum(sp.get('minPower'), 0));
-    const conn = sp.get('conn') ?? '';
-    const debug = sp.get('debug') === '1';
+  if (source === "ocm") {
+    const ocmUrl = new URL(OCM_BASE);
+    ocmUrl.searchParams.set("output", "json");
+    ocmUrl.searchParams.set("countrycode", "GB");
+    ocmUrl.searchParams.set("compact", "true");
+    ocmUrl.searchParams.set("verbose", "false");
+    ocmUrl.searchParams.set("maxresults", "250");
 
-    const sourceParam = (sp.get('source') ?? '').toLowerCase();
-    const includeOCM = !sourceParam || sourceParam === 'ocm' || sourceParam === 'all';
-    const includeCouncil = !sourceParam || sourceParam === 'council' || sourceParam === 'all';
-
-    // Minimum radius for bbox → OCM radius
-    const envMin = Number(process.env.OCM_MIN_RADIUS_KM);
-    const MIN_RADIUS = Number.isFinite(envMin) ? Math.max(1, envMin) : 8; // default 8km
-    const overrideMin = toNum(sp.get('minRadius'), NaN);
-    const EFFECTIVE_MIN_RADIUS = Number.isFinite(overrideMin) ? Math.max(1, overrideMin) : MIN_RADIUS;
-
-    let lat: number, lon: number, dist: number;
-
-    if (hasBounds) {
-      lat = (north + south) / 2;
-      lon = (east + west) / 2;
-      let maxCorner = 0;
-      for (const [cLat, cLon] of [[north, east], [north, west], [south, east], [south, west]] as [number,number][]) {
-        const d = haversineKm(lat, lon, cLat, cLon);
-        if (d > maxCorner) maxCorner = d;
-      }
-      dist = Math.max(EFFECTIVE_MIN_RADIUS, maxCorner);
-    } else {
-      lat = latParam;
-      lon = lonParam;
-      dist = distParam;
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-        return new Response(JSON.stringify({ error: 'Missing lat/lon' }), { status: 400 });
-      }
+    if (center && radiusKm) {
+      const [latStr, lonStr] = center.split(",").map((s) => s.trim());
+      ocmUrl.searchParams.set("latitude", latStr);
+      ocmUrl.searchParams.set("longitude", lonStr);
+      ocmUrl.searchParams.set("distance", radiusKm);
+      ocmUrl.searchParams.set("distanceunit", "KM");
+    } else if (south && west && north && east) {
+      // OCM expects "south,west,north,east"
+      ocmUrl.searchParams.set("boundingbox", `${south},${west},${north},${east}`);
     }
 
-    // Build OCM request (UK only)
-    const params = new URLSearchParams({
-      output: 'json',
-      countrycode: 'GB',
-      latitude: String(lat),
-      longitude: String(lon),
-      distance: String(dist),
-      distanceunit: 'KM',
-      maxresults: '500',
-      compact: 'false',
-      verbose: 'true',
-      includecomments: 'false',
-    });
+    if (conn) ocmUrl.searchParams.set("connectiontypeid", conn);
+    if (minPower) ocmUrl.searchParams.set("minpowerkw", minPower);
 
-    const apiKey = process.env.OPENCHARGEMAP_API_KEY || process.env.OCM_API_KEY || '';
-    if (apiKey) params.set('key', apiKey); // keep ?key
-    const ocmUrl = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
-
-    const ocmRes = await fetch(ocmUrl, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
-        ...(apiKey ? { 'X-API-Key': apiKey } : {}), // add header for reliability
-      },
-      cache: 'no-store',
-    });
-
-    let items: any[] = [];
-    let status = ocmRes.status;
-    if (ocmRes.ok) {
-      const raw = (await ocmRes.json().catch(() => [])) as any[];
-      items = Array.isArray(raw) ? raw : [];
+    const apiKey = getOCMKey();
+    const headers: HeadersInit = { "User-Agent": "Autodun/1.0" };
+    if (apiKey) {
+      headers["X-API-Key"] = apiKey;
+      authed = true;
     }
 
-    // Filter OCM to bbox + connector + min power
-    let minLat = Math.min(north, south), maxLat = Math.max(north, south);
-    let minLon = Math.min(east, west),   maxLon = Math.max(east, west);
-
-    const ocmFiltered = items.filter((s) => {
-      if (!includeOCM) return false;
-      if (!matchesConnector(s, conn)) return false;
-      if (!hasMinPower(s, minPower)) return false;
-      if (hasBounds) {
-        const ai = s?.AddressInfo ?? {};
-        const sLat = toNum(ai?.Latitude, NaN);
-        const sLon = toNum(ai?.Longitude, NaN);
-        if (!Number.isFinite(sLat) || !Number.isFinite(sLon)) return false;
-        if (sLat > maxLat || sLat < minLat) return false;
-        if (sLon > maxLon || sLon < minLon) return false;
-      }
-      return true;
-    });
-
-    // Council data (optional)
-    let council: any[] = [];
-    if (includeCouncil) {
-      try {
-        const g: any = globalThis;
-        if (!g.__councilStationsCache) {
-          const { readFile } = await import('fs/promises');
-          const fp = process.cwd() + '/data/councilStations.json';
-          const json = await readFile(fp, 'utf-8');
-          g.__councilStationsCache = JSON.parse(json);
+    try {
+      const res = await fetch(ocmUrl.toString(), { headers, cache: "no-store" });
+      ocmStatus = res.status;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        return NextResponse.json(
+          { error: "OCM request failed", ocmStatus, authed, text },
+          { status: 502 }
+        );
         }
-        council = (globalThis as any).__councilStationsCache as any[];
-      } catch {
-        council = [];
-      }
-    }
-
-    const councilFiltered = council.filter((s) => {
-      if (!includeCouncil) return false;
-      if (!matchesConnector(s, conn)) return false;
-      if (!hasMinPower(s, minPower)) return false;
-      if (hasBounds) {
-        const ai = s?.AddressInfo ?? {};
-        const sLat = toNum(ai?.Latitude, NaN);
-        const sLon = toNum(ai?.Longitude, NaN);
-        if (!Number.isFinite(sLat) || !Number.isFinite(sLon)) return false;
-        if (sLat > maxLat || sLat < minLat) return false;
-        if (sLon > maxLon || sLon < minLon) return false;
-      }
-      return true;
-    });
-
-    const trim = (s: any) => {
-      const ai = s?.AddressInfo ?? {};
-      return {
-        ID: s?.ID,
-        AddressInfo: {
-          Title: ai?.Title ?? null,
-          AddressLine1: ai?.AddressLine1 ?? null,
-          Town: ai?.Town ?? null,
-          Postcode: ai?.Postcode ?? null,
-          Latitude: Number.isFinite(toNum(ai?.Latitude, NaN)) ? Number(ai.Latitude) : null,
-          Longitude: Number.isFinite(toNum(ai?.Longitude, NaN)) ? Number(ai.Longitude) : null,
-        },
-        Connections: (s?.Connections ?? []).map((c: any) => ({
-          PowerKW: toNum(c?.PowerKW, null as any),
-          ConnectionType: { Title: c?.ConnectionType?.Title ?? null, FormalName: c?.ConnectionType?.FormalName ?? null },
-        })),
-        StatusType: {
-          Title: s?.StatusType?.Title ?? null,
-          IsOperational: typeof s?.StatusType?.IsOperational === 'boolean' ? s?.StatusType?.IsOperational : null,
-        },
-        DataSource: s?.DataSource ?? 'OCM',
-      };
-    };
-
-    const out = [...ocmFiltered.map(trim), ...councilFiltered.map((r) => ({ ...trim(r), DataSource: 'Council' }))];
-
-    if (debug) {
-      return new Response(
-        JSON.stringify({
-          items: out,
-          debug: {
-            ocmUrl,
-            ocmStatus: status,
-            authed: Boolean(apiKey),
-            counts: { raw: items.length, ocm: ocmFiltered.length, council: councilFiltered.length, out: out.length },
-            radiusKm: dist,
-          },
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } }
+      const data = await res.json();
+      out = Array.isArray(data) ? data : [];
+    } catch (e: any) {
+      return NextResponse.json(
+        { error: "OCM fetch threw", ocmStatus, authed, message: String(e) },
+        { status: 502 }
       );
     }
-
-    return new Response(JSON.stringify(out), { status: 200, headers: { 'content-type': 'application/json' } });
-  } catch (e) {
-    console.error(e);
-    return new Response(JSON.stringify([]), { status: 200 });
   }
+
+  // TODO: keep your existing council merge if source includes it
+
+  const payload: any = { out };
+  if (debug) payload.debug = { ocmStatus, authed, count: out.length };
+  return NextResponse.json(payload);
 }
