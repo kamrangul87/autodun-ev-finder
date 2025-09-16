@@ -1,3 +1,6 @@
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 import { NextRequest } from 'next/server';
 // Import the GET handler from the stations API.  We do not import
 // anything else from the stations module to keep this file lean.  The
