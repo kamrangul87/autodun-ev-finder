@@ -477,14 +477,13 @@ export default function Model1HeatmapClient() {
 
       {/* Map */}
       <main style={{ height: "100%", width: "100%" }}>
-        <MapContainer
-          center={mapCenter}
-          zoom={13}
-          scrollWheelZoom
-          ref={mapRef}
-          style={{ height: "100%", width: "100%" }}
-          whenReady={(event) => {
-            //mapRef.current = map;
+      <MapContainer
+  center={mapCenter}
+  zoom={13}
+  scrollWheelZoom
+  ref={mapRef}
+  style={{ height: "100%", width: "100%" }}
+>
           }}
         >
           <TileLayer
