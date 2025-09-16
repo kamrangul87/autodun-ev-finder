@@ -1,17 +1,14 @@
 import { NextRequest } from 'next/server';
 
-// Always run dynamically
 export const dynamic = 'force-dynamic';
 
-// ----- helpers ---------------------------------------------------------------
-
+// helpers
 const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const toNum = (v: unknown, fallback = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 };
 
-// Haversine (km), rounded to 0.1 km for compatibility
 function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   const R = 6371;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
@@ -41,9 +38,9 @@ function matchesConnector(station: any, connQuery: string): boolean {
   if (!q) return true;
   const hay = connectorText(station);
 
-  if (q === 'type 2' || q.includes('type 2')) return /type\s*2|mennekes/.test(hay);
-  if (q === 'ccs' || q.includes('ccs')) return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
-  if (q === 'chademo' || q.includes('chademo')) return /chade?mo/.test(hay);
+  if (q.includes('type 2')) return /type\s*2|mennekes/.test(hay);
+  if (q.includes('ccs')) return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
+  if (q.includes('chademo')) return /chade?mo/.test(hay);
   return hay.includes(q);
 }
 
@@ -53,13 +50,11 @@ function hasMinPower(station: any, minPower: number): boolean {
   return powers.some((p: number) => p >= minPower);
 }
 
-// ----- handler ---------------------------------------------------------------
-
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
 
-    // Accept either explicit bbox (north/south/east/west) or center+radius
+    // inputs
     const north = toNum(sp.get('north'), NaN);
     const south = toNum(sp.get('south'), NaN);
     const east = toNum(sp.get('east'), NaN);
@@ -68,21 +63,20 @@ export async function GET(req: NextRequest) {
 
     const latParam = toNum(sp.get('lat'), NaN);
     const lonParam = toNum(sp.get('lon'), NaN);
-    const distParam = Math.max(1, toNum(sp.get('dist'), 10)); // km
+    const distParam = Math.max(1, toNum(sp.get('dist'), 10));
     const minPower = Math.max(0, toNum(sp.get('minPower'), 0));
     const conn = sp.get('conn') ?? '';
+    const debug = sp.get('debug') === '1';
 
     const sourceParam = (sp.get('source') ?? '').toLowerCase();
     const includeOCM = !sourceParam || sourceParam === 'ocm' || sourceParam === 'all';
     const includeCouncil = !sourceParam || sourceParam === 'council' || sourceParam === 'all';
 
-    // NEW: configurable minimum radius when a bbox is provided (prevents tiny queries)
-    const minRadiusFromEnv = Number(process.env.OCM_MIN_RADIUS_KM);
-    const MIN_RADIUS_KM = Number.isFinite(minRadiusFromEnv) ? Math.max(1, minRadiusFromEnv) : 5;
-    const minRadiusOverride = toNum(sp.get('minRadius'), NaN); // optional query override for testing
-    const EFFECTIVE_MIN_RADIUS = Number.isFinite(minRadiusOverride)
-      ? Math.max(1, minRadiusOverride)
-      : MIN_RADIUS_KM;
+    // min radius for bbox → OCM radius
+    const envMin = Number(process.env.OCM_MIN_RADIUS_KM);
+    const MIN_RADIUS = Number.isFinite(envMin) ? Math.max(1, envMin) : 5;
+    const overrideMin = toNum(sp.get('minRadius'), NaN);
+    const EFFECTIVE_MIN_RADIUS = Number.isFinite(overrideMin) ? Math.max(1, overrideMin) : MIN_RADIUS;
 
     let lat: number;
     let lon: number;
@@ -91,21 +85,18 @@ export async function GET(req: NextRequest) {
     if (hasBounds) {
       lat = (north + south) / 2;
       lon = (east + west) / 2;
-
       const corners: [number, number][] = [
         [north, east],
         [north, west],
         [south, east],
         [south, west],
       ];
-      let maxCornerDist = 0;
+      let maxCorner = 0;
       for (const [cLat, cLon] of corners) {
         const d = haversineKm(lat, lon, cLat, cLon);
-        if (d > maxCornerDist) maxCornerDist = d;
+        if (d > maxCorner) maxCorner = d;
       }
-
-      // 👇 key fix: enforce a larger minimum radius (default 5 km)
-      dist = Math.max(EFFECTIVE_MIN_RADIUS, maxCornerDist);
+      dist = Math.max(EFFECTIVE_MIN_RADIUS, maxCorner);
     } else {
       lat = latParam;
       lon = lonParam;
@@ -115,7 +106,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Build OCM request
+    // OCM request
     const params = new URLSearchParams({
       output: 'json',
       countrycode: 'GB',
@@ -132,9 +123,9 @@ export async function GET(req: NextRequest) {
     const key = process.env.OPENCHARGEMAP_API_KEY || process.env.OCM_API_KEY;
     if (key) params.set('key', String(key));
 
-    const url = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
+    const ocmUrl = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
 
-    const res = await fetch(url, {
+    const ocmRes = await fetch(ocmUrl, {
       headers: {
         Accept: 'application/json',
         'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
@@ -142,15 +133,17 @@ export async function GET(req: NextRequest) {
       cache: 'no-store',
     });
 
-    if (!res.ok) {
-      // Fail soft but surface a hint for the client banner
-      return new Response(JSON.stringify({ error: `OCM ${res.status}`, items: [] }), {
+    if (!ocmRes.ok) {
+      const text = await ocmRes.text().catch(() => '');
+      const payload: any = { error: `OCM ${ocmRes.status}`, items: [], ocmUrl };
+      if (debug) payload.body = text?.slice(0, 500);
+      return new Response(JSON.stringify(payload), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     }
 
-    const raw = (await res.json().catch(() => [])) as any[];
+    const raw = (await ocmRes.json().catch(() => [])) as any[];
     const items = Array.isArray(raw) ? raw : [];
 
     const ocmFiltered = items.filter((s) => {
@@ -173,24 +166,24 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // Council data (optional)
-    let councilStations: any[] = [];
+    // Council (optional)
+    let council: any[] = [];
     if (includeCouncil) {
       try {
         const globalAny = globalThis as any;
         if (!globalAny.__councilStationsCache) {
           const { readFile } = await import('fs/promises');
-          const dataPath = process.cwd() + '/data/councilStations.json';
-          const json = await readFile(dataPath, 'utf-8');
+          const fp = process.cwd() + '/data/councilStations.json';
+          const json = await readFile(fp, 'utf-8');
           globalAny.__councilStationsCache = JSON.parse(json);
         }
-        councilStations = (globalThis as any).__councilStationsCache as any[];
+        council = (globalThis as any).__councilStationsCache as any[];
       } catch {
-        councilStations = [];
+        council = [];
       }
     }
 
-    const councilFiltered = councilStations.filter((s) => {
+    const councilFiltered = council.filter((s) => {
       if (!includeCouncil) return false;
       if (!matchesConnector(s, conn)) return false;
       if (!hasMinPower(s, minPower)) return false;
@@ -230,8 +223,6 @@ export async function GET(req: NextRequest) {
           Postcode: ai?.Postcode ?? null,
           Latitude: Number.isFinite(sLat) ? sLat : null,
           Longitude: Number.isFinite(sLon) ? sLon : null,
-          ContactTelephone1: ai?.ContactTelephone1 ?? null,
-          RelatedURL: ai?.RelatedURL ?? null,
         },
         Connections: (s?.Connections ?? []).map((c: any) => ({
           PowerKW: toNum(c?.PowerKW, null as any),
@@ -259,10 +250,7 @@ export async function GET(req: NextRequest) {
       };
     }
 
-    const trimmedOCM = ocmFiltered.map(trimRecord);
-    const trimmedCouncil = councilFiltered.map((r) => ({ ...trimRecord(r), DataSource: 'Council' }));
-
-    const out = [...trimmedOCM, ...trimmedCouncil];
+    const out = [...ocmFiltered.map(trimRecord), ...councilFiltered.map((r) => ({ ...trimRecord(r), DataSource: 'Council' }))];
 
     out.sort((a: any, b: any) => {
       const dA = a._distanceKm;
@@ -273,13 +261,27 @@ export async function GET(req: NextRequest) {
       return dA - dB;
     });
 
+    if (debug) {
+      return new Response(
+        JSON.stringify({
+          items: out,
+          debug: {
+            ocmUrl,
+            input: { hasBounds, lat, lon, dist, EFFECTIVE_MIN_RADIUS },
+            counts: { ocm: ocmFiltered.length, council: councilFiltered.length, out: out.length },
+            authed: Boolean(process.env.OPENCHARGEMAP_API_KEY || process.env.OCM_API_KEY),
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } }
+      );
+    }
+
     return new Response(JSON.stringify(out), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
   } catch (e) {
     console.error(e);
-    // Fail soft to keep UI responsive
     return new Response(JSON.stringify({ error: 'Server error', items: [] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
