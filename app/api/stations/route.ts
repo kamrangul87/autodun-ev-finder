@@ -14,7 +14,12 @@ export async function GET(req: Request) {
   const urlIn = new URL(req.url);
   const sp = urlIn.searchParams;
   const debug = sp.get("debug") === "1";
-  const source = (sp.get("source") || "ocm").toLowerCase();
+
+  // ----- source selection (FIX) -----
+  const sourceParam = (sp.get("source") || "").toLowerCase().trim();
+  const useOCM =
+    sourceParam === "" || sourceParam === "ocm" || sourceParam === "all" || sourceParam === "*";
+  const useCouncil = sourceParam === "council" || sourceParam === "all" || sourceParam === "*";
 
   // bbox OR center+radius (center provided by /api/sites)
   const north = sp.get("north");
@@ -22,7 +27,7 @@ export async function GET(req: Request) {
   const east = sp.get("east");
   const west = sp.get("west");
   const center = sp.get("center");     // "lat,lon"
-  const radiusKm = sp.get("radiusKm"); // number as string
+  const radiusKm = sp.get("radiusKm"); // "1.23"
 
   const conn = sp.get("conn") || undefined;
   const minPower = sp.get("minPower") || undefined;
@@ -31,7 +36,8 @@ export async function GET(req: Request) {
   let ocmStatus = 0;
   let authed = false;
 
-  if (source === "ocm") {
+  // ----- OCM block (runs when useOCM = true) -----
+  if (useOCM) {
     const ocmUrl = new URL(OCM_BASE);
     ocmUrl.searchParams.set("output", "json");
     ocmUrl.searchParams.set("countrycode", "GB");
@@ -46,7 +52,7 @@ export async function GET(req: Request) {
       ocmUrl.searchParams.set("distance", radiusKm);
       ocmUrl.searchParams.set("distanceunit", "KM");
     } else if (south && west && north && east) {
-      // OCM expects "south,west,north,east"
+      // OCM expects order: south,west,north,east
       ocmUrl.searchParams.set("boundingbox", `${south},${west},${north},${east}`);
     }
 
@@ -66,23 +72,27 @@ export async function GET(req: Request) {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         return NextResponse.json(
-          { error: "OCM request failed", ocmStatus, authed, text },
+          { error: "OCM request failed", ocmStatus, authed, text, where: "ocm" },
           { status: 502 }
         );
-        }
+      }
       const data = await res.json();
       out = Array.isArray(data) ? data : [];
     } catch (e: any) {
       return NextResponse.json(
-        { error: "OCM fetch threw", ocmStatus, authed, message: String(e) },
+        { error: "OCM fetch threw", ocmStatus, authed, message: String(e), where: "ocm" },
         { status: 502 }
       );
     }
   }
 
-  // TODO: keep your existing council merge if source includes it
+  // ----- (Optional) Council merge if you have it -----
+  if (useCouncil) {
+    // const councilData = await fetchCouncil(...);
+    // out = merge(out, councilData);
+  }
 
   const payload: any = { out };
-  if (debug) payload.debug = { ocmStatus, authed, count: out.length };
+  if (debug) payload.debug = { ocmStatus, authed, count: out.length, useOCM, useCouncil, sourceParam };
   return NextResponse.json(payload);
 }
