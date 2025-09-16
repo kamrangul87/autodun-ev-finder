@@ -1,11 +1,75 @@
-"use client";
+// app/borough-gap/page.tsx
+//
+// Borough-level gap index view for the app router.
 
-// Borough gap index page for the app router.  This wrapper imports
-// the existing implementation from the pages directory and renders
-// it as a client component so that React hooks execute on the client.
+'use client';
 
-import BoroughGapPage from '../../pages/borough-gap';
+import React, { useEffect, useState } from 'react';
 
-export default function AppBoroughGapPage() {
-  return <BoroughGapPage />;
+interface BoroughStat {
+  borough: string;
+  stationCount: number;
+  connectorCount: number;
+  evRegistrations: number;
+  gapIndex: number | null;
+}
+
+export default function BoroughGapPage() {
+  const [data, setData] = useState<BoroughStat[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    async function fetchData() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch('/api/borough', { cache: 'no-cache' });
+        if (!res.ok) throw new Error(`API responded ${res.status}`);
+        const json = await res.json();
+        setData(json as BoroughStat[]);
+      } catch (err: any) {
+        setError(err?.message || 'Failed to load data');
+        setData([]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
+  return (
+    <div style={{ minHeight: '100vh', background: '#0b1220', color: '#f9fafb', padding: '1rem' }}>
+      <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Borough Gap Index</h1>
+      <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
+        A higher gap index indicates more EV registrations per available connector, signalling areas with insufficient
+        charging infrastructure. Data combines OpenChargeMap and council‑provided stations. EV registration counts
+        are illustrative.
+      </p>
+      {loading && <p style={{ marginTop: '0.5rem', color: '#9ca3af' }}>Loading…</p>}
+      {error && <p style={{ marginTop: '0.5rem', color: '#f87171' }}>{error}</p>}
+      {!loading && !error && (
+        <table style={{ width: '100%', marginTop: '1rem', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+          <thead>
+            <tr>
+              <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Borough</th>
+              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Connectors</th>
+              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>EV Registrations</th>
+              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Gap Index</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((row) => (
+              <tr key={row.borough} style={{ borderBottom: '1px solid #1f2937' }}>
+                <td style={{ padding: '0.5rem' }}>{row.borough}</td>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>{row.connectorCount}</td>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>{row.evRegistrations}</td>
+                <td style={{ padding: '0.5rem', textAlign: 'right' }}>
+                  {row.gapIndex != null ? row.gapIndex.toFixed(2) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
 }

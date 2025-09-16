@@ -49,12 +49,7 @@ function FeedbackForm({ stationId, onSubmitted }: { stationId: number; onSubmitt
     if (submitting || submitted) return;
     setSubmitting(true);
     try {
-      // Use the publicly exposed API base rather than hard‑coding `/api`.  This
-      // allows deployments behind a custom base path or separate domain.  When
-      // `NEXT_PUBLIC_API_BASE` is empty the empty string falls back to the
-      // current origin.  See next.config.mjs for details.
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
-      await fetch(`${apiBase}/api/feedback`, {
+      await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ stationId, rating, comment }),
@@ -207,14 +202,106 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
 }
 
 // -----------------------------------------------------------------------------
-/*
- * Legacy duplicate of the FeedbackForm component.  This version hard‑coded
- * calls to `/api/feedback` and has been removed in favour of the version
- * defined near the top of this file which respects the NEXT_PUBLIC_API_BASE
- * environment variable.  Leaving this comment here as a reminder to avoid
- * duplicate component definitions in future.  The implementation below has
- * been intentionally deleted.
- */
+// FeedbackForm component
+//
+// Renders a simple form allowing users to submit feedback for a specific
+// station.  Users can select a rating between 1 and 5 and optionally leave
+// a comment.  When the form is submitted it sends a POST request to the
+// `/api/feedback` endpoint.  Once submitted the form disables further
+// submissions and displays a thank‑you message.  An `onSubmitted` callback
+// can be provided to refresh parent state (e.g. refetch station data).
+function FeedbackForm({ stationId, onSubmitted }: { stationId: number; onSubmitted?: () => void }) {
+  const [rating, setRating] = useState<number>(5);
+  const [comment, setComment] = useState<string>('');
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitted, setSubmitted] = useState<boolean>(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting || submitted) return;
+    setSubmitting(true);
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stationId, rating, comment }),
+      });
+      setSubmitted(true);
+      if (onSubmitted) onSubmitted();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (submitted) {
+    return <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#6ee7b7' }}>Thank you for your feedback!</p>;
+  }
+
+  return (
+    <form onSubmit={handleSubmit} style={{ marginTop: '0.5rem' }}>
+      <label style={{ display: 'block', fontSize: '0.8rem', color: '#f9fafb', marginBottom: '0.25rem' }}>
+        Rating:
+        <select
+          value={rating}
+          onChange={(e) => setRating(Number(e.target.value))}
+          style={{
+            marginLeft: '0.25rem',
+            padding: '0.15rem 0.3rem',
+            fontSize: '0.8rem',
+            border: '1px solid #374151',
+            borderRadius: '0.25rem',
+            background: '#1f2937',
+            color: '#f9fafb',
+            cursor: 'pointer',
+          }}
+        >
+          {[5, 4, 3, 2, 1, 0].map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label style={{ display: 'block', fontSize: '0.8rem', color: '#f9fafb', marginBottom: '0.25rem' }}>
+        Comment:
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          rows={2}
+          style={{
+            display: 'block',
+            width: '100%',
+            padding: '0.25rem',
+            marginTop: '0.15rem',
+            fontSize: '0.8rem',
+            border: '1px solid #374151',
+            borderRadius: '0.25rem',
+            background: '#1f2937',
+            color: '#f9fafb',
+            resize: 'vertical',
+          }}
+        />
+      </label>
+      <button
+        type='submit'
+        disabled={submitting}
+        style={{
+          padding: '0.25rem 0.5rem',
+          fontSize: '0.8rem',
+          border: '1px solid #374151',
+          borderRadius: '0.25rem',
+          background: submitting ? '#374151' : '#2563eb',
+          color: '#f9fafb',
+          cursor: submitting ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {submitting ? 'Submitting…' : 'Submit'}
+      </button>
+    </form>
+  );
+}
 
 // -----------------------------------------------------------------------------
 // Main page component
@@ -279,15 +366,11 @@ export default function Model1HeatmapPage() {
       setError(null);
       try {
         let url = '';
-        // Base URL for API calls.  See the comment above on NEXT_PUBLIC_API_BASE.
-        const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
         if (bounds) {
           const { north, south, east, west } = bounds;
-          url = `${apiBase}/api/sites?bbox=${west},${south},${east},${north}`;
+          url = `/api/stations?north=${north}&south=${south}&east=${east}&west=${west}`;
         } else {
-          // Fall back to lat/lon/dist if no bounds are known.  The `stations` endpoint
-          // continues to support centre‑based queries for backwards compatibility.
-          url = `${apiBase}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
+          url = `/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
         }
         // Append connector filter if provided.  We encode the value to ensure
         // spaces (e.g. "Type 2") are sent correctly.  The API interprets
@@ -295,6 +378,8 @@ export default function Model1HeatmapPage() {
         if (connFilter) {
           url += `&conn=${encodeURIComponent(connFilter)}`;
         }
+        // Append source filter if it isn't 'all'.  The API interprets
+        // 'ocm' and 'council' values to limit results.
         if (sourceFilter && sourceFilter !== 'all') {
           url += `&source=${encodeURIComponent(sourceFilter)}`;
         }
@@ -591,27 +676,6 @@ export default function Model1HeatmapPage() {
               <span>Low</span>
               <span>High</span>
             </div>
-          </div>
-        )}
-        {/* Empty state overlay: shown when there are no stations and not loading */}
-        {!loading && !error && stations.length === 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              padding: '1rem',
-              background: 'rgba(0,0,0,0.7)',
-              borderRadius: '0.5rem',
-              color: '#f9fafb',
-              fontSize: '0.875rem',
-              zIndex: 1000,
-              textAlign: 'center',
-              maxWidth: '80%',
-            }}
-          >
-            No stations found in this area. Try zooming out or moving the map.
           </div>
         )}
       </main>

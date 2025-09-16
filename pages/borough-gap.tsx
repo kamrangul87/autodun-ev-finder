@@ -27,11 +27,7 @@ export default function BoroughGapPage() {
       setLoading(true);
       setError(null);
       try {
-        // Use the configured public API base to build the request URL.  When the
-        // environment variable is undefined this falls back to the current
-        // origin.
-        const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
-        const res = await fetch(`${apiBase}/api/borough`, { cache: 'no-cache' });
+        const res = await fetch('/api/borough', { cache: 'no-cache' });
         if (!res.ok) throw new Error(`API responded ${res.status}`);
         const json = await res.json();
         setData(json as BoroughStat[]);
