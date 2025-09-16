@@ -1,11 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
 /**
- * /api/sites (Pages API)
- * - Accepts: bbox=west,south,east,north (+ source, conn, minPower, radiusKm, debug=1)
- * - Calls OpenChargeMap (header + ?key=). If empty or fails, RETURNS A LONDON FALLBACK SAMPLE.
- * - Returns exactly what the UI expects: { sites: [...] }
- * - Also includes { counts: { out } } so badges can update regardless of UI shape.
+ * /api/sites  (Pages API)
+ * - Works even if App Router APIs aren’t mounted
+ * - Calls OpenChargeMap with key in header AND ?key=
+ * - Uses center+radius (generous min); widens once if empty
+ * - If OCM fails or is empty, returns a small London fallback
+ * - Returns data in multiple aliases so legacy clients work:
+ *     { sites: [...] , stations: [...], out: [...], data: [...],
+ *       counts: { out, sites, stations }, count }
  */
 
 export const config = { api: { externalResolver: true } };
@@ -29,25 +32,17 @@ function bboxToCenterAndRadiusKm(w: number, s: number, e: number, n: number) {
   const radiusKm = Math.max(rLatKm, rLonKm);
   return { latC, lonC, radiusKm };
 }
-
-function coerceRadiusKm(input: string | null | undefined, minKm: number): number {
+function coerceRadiusKm(input: string | null | undefined, minKm: number) {
   const n = input ? Number(input) : NaN;
-  if (!isFinite(n) || n <= 0) return minKm;
-  return Math.max(n, minKm);
+  return !isFinite(n) || n <= 0 ? minKm : Math.max(n, minKm);
 }
 
 function normalizeSource(v: string | null | undefined) {
   const raw = (v || "").toLowerCase().trim();
   const useOCM =
-    raw === "" ||
-    raw === "ocm" ||
-    raw === "openchargemap" ||
-    raw === "open charge map" ||
-    raw === "open-charge-map" ||
-    raw === "opencharge" ||
-    raw === "open-charge" ||
-    raw === "all" ||
-    raw === "*";
+    raw === "" || raw === "ocm" || raw === "openchargemap" || raw === "open charge map" ||
+    raw === "open-charge-map" || raw === "opencharge" || raw === "open-charge" ||
+    raw === "all" || raw === "*";
   return { raw, useOCM: useOCM || raw === "" };
 }
 
@@ -74,7 +69,7 @@ function mapOcmToSite(poi: any) {
   };
 }
 
-/** Minimal London sample so the UI never shows 0 if OCM fails/empty */
+/** Small built-in sample so the UI never shows zero */
 const LONDON_SAMPLE = [
   { id: 9000001, lat: 51.523, lon: -0.128, name: "Russell Sq (sample)", addr: "WC1", postcode: "WC1B", status: "up", connectors: 2, maxPowerKw: 22, source: "sample" },
   { id: 9000002, lat: 51.516, lon: -0.142, name: "Soho (sample)",        addr: "W1",  postcode: "W1D",  status: "up", connectors: 4, maxPowerKw: 50, source: "sample" },
@@ -82,117 +77,104 @@ const LONDON_SAMPLE = [
 ];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { bbox, source, conn, minPower, radiusKm, debug } = req.query as Record<string, string>;
-  const { raw: sourceParam, useOCM } = normalizeSource(source);
+  const q = req.query as Record<string, string>;
+  const { raw: sourceParam, useOCM } = normalizeSource(q.source);
 
   // Derive center + radius (or default to central London)
   let latC: number | null = null;
   let lonC: number | null = null;
-  let radius = 4.5; // generous city minimum (km)
-
-  if (bbox) {
-    const parts = String(bbox).split(",").map((x) => Number(x.trim()));
+  let radius = 5.5; // generous minimum (km)
+  if (q.bbox) {
+    const parts = String(q.bbox).split(",").map((x) => Number(x.trim()));
     if (parts.length === 4 && parts.every(Number.isFinite)) {
       const [w, s, e, n] = parts as [number, number, number, number];
       const r = bboxToCenterAndRadiusKm(w, s, e, n);
       latC = r.latC;
       lonC = r.lonC;
-      radius = coerceRadiusKm(radiusKm, Math.max(4.5, r.radiusKm));
+      radius = coerceRadiusKm(q.radiusKm, Math.max(5.5, r.radiusKm));
     }
   }
-  if (latC == null || lonC == null) {
-    latC = 51.5074;  // central London fallback
-    lonC = -0.1278;
-  }
+  if (latC == null || lonC == null) { latC = 51.5074; lonC = -0.1278; }
 
   const apiKey = getOCMKey();
   const headers: HeadersInit = { "User-Agent": "Autodun/1.0" };
   if (apiKey) (headers as any)["X-API-Key"] = apiKey;
 
+  let sites: any[] = [];
   let ocmUrlUsed: string | null = null;
   let ocmStatus = 0;
   let fallbackUsed = false;
 
+  const buildUrl = (lat: number, lon: number, distKm: number) => {
+    const u = new URL(OCM_BASE);
+    u.searchParams.set("output", "json");
+    u.searchParams.set("compact", "true");
+    u.searchParams.set("verbose", "false");
+    u.searchParams.set("maxresults", "1000");
+    u.searchParams.set("latitude", String(lat));
+    u.searchParams.set("longitude", String(lon));
+    u.searchParams.set("distance", String(distKm));
+    u.searchParams.set("distanceunit", "KM");
+    if (apiKey) u.searchParams.set("key", apiKey);
+    if (q.conn) u.searchParams.set("connectiontypeid", q.conn);
+    if (q.minPower) u.searchParams.set("minpowerkw", q.minPower);
+    return u;
+  };
+
+  const fetchOnce = async (u: URL) => {
+    ocmUrlUsed = u.toString();
+    const r = await fetch(ocmUrlUsed, { headers, cache: "no-store" });
+    ocmStatus = r.status;
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      throw new Error(`OCM ${r.status}: ${text?.slice(0, 300)}`);
+    }
+    const data = await r.json();
+    const arr = Array.isArray(data) ? data : [];
+    return arr.map(mapOcmToSite).filter((s) => s.lat != null && s.lon != null);
+  };
+
   try {
-    let sites: any[] = [];
-
     if (useOCM) {
-      const buildUrl = (lat: number, lon: number, distKm: number) => {
-        const u = new URL(OCM_BASE);
-        u.searchParams.set("output", "json");
-        u.searchParams.set("compact", "true");
-        u.searchParams.set("verbose", "false");
-        u.searchParams.set("maxresults", "1000");
-        u.searchParams.set("latitude", String(lat));
-        u.searchParams.set("longitude", String(lon));
-        u.searchParams.set("distance", String(distKm));
-        u.searchParams.set("distanceunit", "KM");
-        if (apiKey) u.searchParams.set("key", apiKey); // query as well as header
-        if (conn) u.searchParams.set("connectiontypeid", conn);
-        if (minPower) u.searchParams.set("minpowerkw", minPower);
-        return u;
-      };
-
-      const fetchOnce = async (u: URL) => {
-        ocmUrlUsed = u.toString();
-        const r = await fetch(ocmUrlUsed, { headers, cache: "no-store" });
-        ocmStatus = r.status;
-        if (!r.ok) {
-          const text = await r.text().catch(() => "");
-          throw new Error(`OCM ${r.status}: ${text?.slice(0, 300)}`);
-        }
-        const data = await r.json();
-        const arr = Array.isArray(data) ? data : [];
-        return arr.map(mapOcmToSite).filter((s) => s.lat != null && s.lon != null);
-      };
-
-      // Try computed/min radius
-      sites = await fetchOnce(buildUrl(latC, lonC, radius));
-      // If zero, widen once to 8km
+      sites = await fetchOnce(buildUrl(latC!, lonC!, radius));
       if (sites.length === 0) {
-        sites = await fetchOnce(buildUrl(latC, lonC, Math.max(radius, 8)));
+        sites = await fetchOnce(buildUrl(latC!, lonC!, Math.max(radius, 9)));
       }
     }
-
-    // Fallback: always return some data so the UI stops saying "0"
-    if (!Array.isArray(sites) || sites.length === 0) {
-      sites = LONDON_SAMPLE;
-      fallbackUsed = true;
-    }
-
-    const payload: any = {
-      sites,
-      counts: { out: sites.length },
-    };
-
-    if (String(debug) === "1") {
-      payload.debug = {
-        count: sites.length,
-        authed: !!apiKey,
-        ocmStatus,
-        ocmUrlUsed,
-        fallbackUsed,
-        sourceParam,
-        center: { latC, lonC, radiusTriedKm: radius },
-        sample: sites.slice(0, 3),
-      };
-    }
-
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json(payload);
-  } catch (err: any) {
-    // Even on exception, return fallback so UI has markers
-    const sites = LONDON_SAMPLE;
-    return res.status(200).json({
-      sites,
-      counts: { out: sites.length },
-      debug: {
-        error: String(err),
-        fallbackUsed: true,
-        authed: !!apiKey,
-        ocmStatus,
-        ocmUrlUsed,
-      },
-    });
+  } catch {
+    // ignore, we'll fall back
   }
+
+  if (!Array.isArray(sites) || sites.length === 0) {
+    sites = LONDON_SAMPLE;
+    fallbackUsed = true;
+  }
+
+  // Provide multiple aliases so any client shape works
+  const payload: any = {
+    ok: true,
+    sites,
+    stations: sites,
+    out: sites,
+    data: sites,
+    count: sites.length,
+    counts: { out: sites.length, sites: sites.length, stations: sites.length },
+  };
+
+  if (q.debug === "1") {
+    payload.debug = {
+      count: sites.length,
+      authed: !!apiKey,
+      ocmStatus,
+      ocmUrlUsed,
+      fallbackUsed,
+      sourceParam,
+      center: { latC, lonC, radiusTriedKm: radius },
+      sample: sites.slice(0, 3),
+    };
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", "*"); // harmless on same-origin; helpful if proxied
+  return res.status(200).json(payload);
 }
