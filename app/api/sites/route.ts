@@ -32,15 +32,15 @@ export async function GET(req: NextRequest) {
     if (parts.length === 4 && parts.every(Number.isFinite)) {
       const [w, s, e, n] = parts as [number, number, number, number];
 
-      // keep bbox as-is for downstream
+      // keep bbox for downstream (the stations handler can try bbox first)
       passthrough.set("west", String(w));
       passthrough.set("south", String(s));
       passthrough.set("east", String(e));
       passthrough.set("north", String(n));
 
-      // derive center+radius and enforce a minimum
+      // also derive center+radius and enforce a minimum
       const { latC, lonC, radiusKm } = bboxToCenterAndRadiusKm(w, s, e, n);
-      const MIN_RADIUS_KM = 1.2;
+      const MIN_RADIUS_KM = 1.8;
       const effRadiusKm = Math.max(radiusKm, MIN_RADIUS_KM);
       passthrough.set("center", `${latC},${lonC}`);
       passthrough.set("radiusKm", effRadiusKm.toFixed(2));
@@ -53,17 +53,15 @@ export async function GET(req: NextRequest) {
   const forwardedReq = new Request(fwd.toString(), { method: "GET", headers: req.headers });
   const resp = await stationsGET(forwardedReq as any);
 
-  // augment when debug=1
+  // when debug=1, wrap to include counts + pass through debug fields
   if (sp.get("debug") === "1") {
     const data = await (resp as Response).json();
     const out = data?.out ?? [];
-    const ocmStatus = data?.debug?.ocmStatus ?? null;
-    const authed = data?.debug?.authed ?? null;
+    const dbg = data?.debug ?? {};
     return NextResponse.json({
       ...data,
       counts: { out: Array.isArray(out) ? out.length : 0 },
-      ocmStatus,
-      authed,
+      ...dbg,
     });
   }
   return resp as NextResponse;
