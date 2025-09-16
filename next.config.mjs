@@ -22,6 +22,11 @@ const withPWA = nextPwa({
   fallbacks: {
     document: '/offline',
   },
+  // Bump the cache version whenever the service worker should invalidate
+  // previously cached assets.  This helps ensure that clients fetch a
+  // fresh build after deploying new code.  Use a date string so that
+  // successive deployments automatically update the cache ID.
+  cacheId: `autodun-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}`,
 });
 
 const nextConfig = {
@@ -29,11 +34,9 @@ const nextConfig = {
   experimental: { typedRoutes: true },
   async redirects() {
     return [
-      // Route the site root to the new dynamic heatmap page so users see
-      // live EV data on first load.
-      { source: '/', destination: '/model1-heatmap', permanent: false },
       // Backwards compatibility: route the legacy `/ev` path to the heatmap
-      // page so that old bookmarks still work.
+      // page so that old bookmarks still work.  The root page now exists
+      // (`app/page.tsx`), so we no longer redirect `/`.
       { source: '/ev', destination: '/model1-heatmap', permanent: false },
     ];
   },

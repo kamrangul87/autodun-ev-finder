@@ -1,68 +1,84 @@
-// lib/model1.ts
-export type OCMConnection = {
-  PowerKW?: number | null;
-  ConnectionType?: { Title?: string | null; FormalName?: string | null } | null;
-};
+/**
+ * Model‑1 feature extraction and scoring functions.
+ *
+ * These helpers compute simple numeric features from an OpenChargeMap
+ * station record and combine them into a single score.  The score is
+ * designed to reflect the overall charging capacity at a site by
+ * weighting total power, maximum individual connector power and the
+ * number of connectors equally.
+ */
 
-export type OCMStation = {
+// Type definitions for an OpenChargeMap station.  Only the fields
+// required by the scoring logic are declared here.  Additional fields
+// present in the API response are ignored.
+export interface OCMStation {
   ID: number;
-  AddressInfo?: {
+  AddressInfo: {
+    Latitude: number;
+    Longitude: number;
     Title?: string | null;
     AddressLine1?: string | null;
     Town?: string | null;
     Postcode?: string | null;
-    Latitude?: number | null;
-    Longitude?: number | null;
-    ContactTelephone1?: string | null;
-    RelatedURL?: string | null;
-  } | null;
-  Connections?: OCMConnection[] | null;
+  };
+  Connections: Array<{
+    PowerKW: number | null;
+    ConnectionType: {
+      Title: string | null;
+      FormalName: string | null;
+    };
+  }>;
+  StatusType?: {
+    Title: string | null;
+    IsOperational: boolean | null;
+  };
+  Feedback?: {
+    count: number;
+    averageRating: number | null;
+    reliability: number | null;
+  };
+  DataSource?: string;
+}
+
+/**
+ * Numeric features derived from a station.  TotalKW is the sum of all
+ * connector powers, maxKW is the highest individual connector power and
+ * numConnectors is the number of connectors available.
+ */
+export type StationFeatures = {
+  totalKW: number;
+  maxKW: number;
+  numConnectors: number;
 };
 
-export type Features = { totalKW: number; maxKW: number; numConnectors: number };
-
-export function featuresFor(s: OCMStation): Features {
-  const conns = Array.isArray(s?.Connections) ? s!.Connections! : [];
-  const kw = conns.map(c => Number(c?.PowerKW) || 0);
-  return {
-    totalKW: kw.reduce((a, b) => a + b, 0),
-    maxKW: kw.reduce((m, v) => (v > m ? v : m), 0),
-    numConnectors: conns.length,
-  };
+/**
+ * Compute feature metrics for a given station.  Undefined or null
+ * connector powers are treated as zero.  If no connections are
+ * provided, all metrics default to zero.
+ */
+export function featuresFor(s: Partial<OCMStation> | any): StationFeatures {
+  const connections: any[] = Array.isArray(s?.Connections) ? s.Connections : [];
+  const powers = connections.map((c: any) => {
+    const p = Number(c?.PowerKW);
+    return Number.isFinite(p) ? p : 0;
+  });
+  const totalKW = powers.reduce((acc, v) => acc + v, 0);
+  const maxKW = powers.length ? Math.max(...powers) : 0;
+  const numConnectors = powers.length;
+  return { totalKW, maxKW, numConnectors };
 }
 
-export function scoreFor(f: Features): number {
-  const a = Math.log1p(f.totalKW);
-  const b = 0.15 * f.numConnectors;
-  const c = 0.002 * f.maxKW;
-  return Number((a + b + c).toFixed(3));
-}
-
-export function distanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371, toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-export function matchesConn(s: OCMStation, connQuery: string): boolean {
-  if (!connQuery) return true;
-  const q = connQuery.trim().toLowerCase();
-  const conns = Array.isArray(s?.Connections) ? s!.Connections! : [];
-  const text = conns
-    .map(c => (c?.ConnectionType?.FormalName || c?.ConnectionType?.Title || '').toLowerCase())
-    .join(' | ');
-  if (q.includes('type 2')) return /type\s*2|mennekes/.test(text);
-  if (q.includes('ccs')) return /ccs|combo|combined/.test(text);
-  if (q.includes('chademo')) return /chademo/.test(text);
-  return text.includes(q);
-}
-
-export function hasAtLeastPower(s: OCMStation, minPower: number): boolean {
-  if (!minPower || minPower <= 0) return true;
-  const conns = Array.isArray(s?.Connections) ? s!.Connections! : [];
-  return conns.some(c => (Number(c?.PowerKW) || 0) >= minPower);
+/**
+ * Produce a single score from feature metrics.  Each component is
+ * scaled to roughly similar ranges: totalKW is divided by 100 (so
+ * 100 kW total contributes 1.0), maxKW by 50 (so a 50 kW connector
+ * contributes 1.0) and numConnectors by 10.  The average of the
+ * scaled components is returned.  Scores are not capped at 1.0 but
+ * typical values fall within [0,1] for realistic station sizes.
+ */
+export function scoreFor(f: StationFeatures): number {
+  const scaledTotal = f.totalKW / 100;
+  const scaledMax = f.maxKW / 50;
+  const scaledCount = f.numConnectors / 10;
+  return (scaledTotal + scaledMax + scaledCount) / 3;
 }

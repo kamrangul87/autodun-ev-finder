@@ -1,13 +1,13 @@
-import Link from "next/link";
+"use client";
 
-export default function Home() {
-  return (
-    <div className="container py-12">
-      <div className="card">
-        <h1 className="text-4xl font-extrabold mb-3">Autodun — EV Charging Finder</h1>
-        <p className="text-gray-700 mb-6">Quickly locate EV charging points across the UK using postcode search or your current location.</p>
-        <Link href="/ev" className="btn bg-autodun-green text-white hover:opacity-90">Open EV Finder</Link>
-      </div>
-    </div>
-  );
+// Root page for the application.  The legacy heatmap is implemented as a
+// client component under the `pages` directory.  To expose it via the
+// app router (which uses files under `app/`), we import the default
+// export from that module and render it here.  This ensures that
+// navigating to `/` displays the interactive map rather than a 404.
+
+import Model1HeatmapPage from '../pages/model1-heatmap';
+
+export default function HomePage() {
+  return <Model1HeatmapPage />;
 }

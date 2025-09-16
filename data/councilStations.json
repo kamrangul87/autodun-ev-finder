@@ -1,0 +1,78 @@
+[
+  {
+    "ID": -1,
+    "AddressInfo": {
+      "Title": "York Council Car Park",
+      "AddressLine1": "St Leonard's Place",
+      "Town": "York",
+      "Postcode": "YO1 7ET",
+      "Latitude": 53.962,
+      "Longitude": -1.082,
+      "ContactTelephone1": "01904 551550"
+    },
+    "Connections": [
+      {
+        "ID": 1,
+        "ConnectionType": { "Title": "CCS", "FormalName": "CCS" },
+        "PowerKW": 50
+      },
+      {
+        "ID": 2,
+        "ConnectionType": { "Title": "Type 2", "FormalName": "Type 2" },
+        "PowerKW": 22
+      }
+    ],
+    "StatusType": { "Title": "Operational", "IsOperational": true },
+    "DataSource": "Council",
+    "Borough": "York"
+  },
+  {
+    "ID": -2,
+    "AddressInfo": {
+      "Title": "Leeds City Council Charger",
+      "AddressLine1": "Calverley Street",
+      "Town": "Leeds",
+      "Postcode": "LS1 3AD",
+      "Latitude": 53.8008,
+      "Longitude": -1.549,
+      "ContactTelephone1": "0113 222 4444"
+    },
+    "Connections": [
+      {
+        "ID": 3,
+        "ConnectionType": { "Title": "Type 2", "FormalName": "Type 2" },
+        "PowerKW": 7
+      }
+    ],
+    "StatusType": { "Title": "Operational", "IsOperational": true },
+    "DataSource": "Council",
+    "Borough": "Leeds"
+  },
+  {
+    "ID": -3,
+    "AddressInfo": {
+      "Title": "Birmingham Council Garage",
+      "AddressLine1": "Suffolk Street Queensway",
+      "Town": "Birmingham",
+      "Postcode": "B1 1TU",
+      "Latitude": 52.477,
+      "Longitude": -1.900,
+      "ContactTelephone1": "0121 303 1111"
+    },
+    "Connections": [
+      {
+        "ID": 4,
+        "ConnectionType": { "Title": "CCS", "FormalName": "CCS" },
+        "PowerKW": 150
+      },
+      {
+        "ID": 5,
+        "ConnectionType": { "Title": "Type 2", "FormalName": "Type 2" },
+        "PowerKW": 22
+      }
+    ],
+    "StatusType": { "Title": "Operational", "IsOperational": true },
+    "DataSource": "Council",
+    "Borough": "Birmingham"
+  }
+]
