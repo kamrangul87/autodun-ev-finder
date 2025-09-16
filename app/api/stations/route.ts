@@ -3,6 +3,15 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Stations API
+ * - Fetches from OpenChargeMap (OCM) and optionally council data (if you wire it).
+ * - Accepts either bbox (north/south/east/west) or center+radiusKm.
+ * - Always sends OCM API key via X-API-Key when present.
+ * - Robust `source` handling: treats "OpenChargeMap", "ocm", "all", "*" (and unknown) as OCM.
+ * - Debug mode: add `debug=1` to echo status and counts.
+ */
+
 const OCM_BASE = "https://api.openchargemap.io/v3/poi";
 
 function getOCMKey(): string | undefined {
@@ -15,13 +24,28 @@ export async function GET(req: Request) {
   const sp = urlIn.searchParams;
   const debug = sp.get("debug") === "1";
 
-  // ----- source selection (FIX) -----
-  const sourceParam = (sp.get("source") || "").toLowerCase().trim();
-  const useOCM =
-    sourceParam === "" || sourceParam === "ocm" || sourceParam === "all" || sourceParam === "*";
-  const useCouncil = sourceParam === "council" || sourceParam === "all" || sourceParam === "*";
+  // ---- source selection (accept multiple aliases) ----
+  const rawSource = (sp.get("source") || "").toLowerCase().trim();
 
-  // bbox OR center+radius (center provided by /api/sites)
+  const isOpenChargeMap = (s: string) =>
+    s === "" ||
+    s === "ocm" ||
+    s === "openchargemap" ||
+    s === "opencharge" ||
+    s === "open charge map" ||
+    s === "open-charge-map" ||
+    s === "open charge" ||
+    s === "open-charge" ||
+    s === "all" ||
+    s === "*";
+
+  const useOCM = isOpenChargeMap(rawSource);
+  const useCouncil = rawSource === "council" || rawSource === "all" || rawSource === "*";
+
+  // If neither recognized, default to OCM to avoid empty results
+  const fallbackToOcm = !useOCM && !useCouncil;
+
+  // ---- spatial inputs ----
   const north = sp.get("north");
   const south = sp.get("south");
   const east = sp.get("east");
@@ -29,6 +53,7 @@ export async function GET(req: Request) {
   const center = sp.get("center");     // "lat,lon"
   const radiusKm = sp.get("radiusKm"); // "1.23"
 
+  // ---- filters (pass-through) ----
   const conn = sp.get("conn") || undefined;
   const minPower = sp.get("minPower") || undefined;
 
@@ -36,8 +61,8 @@ export async function GET(req: Request) {
   let ocmStatus = 0;
   let authed = false;
 
-  // ----- OCM block (runs when useOCM = true) -----
-  if (useOCM) {
+  // ===================== O P E N C H A R G E M A P ===================== //
+  if (useOCM || fallbackToOcm) {
     const ocmUrl = new URL(OCM_BASE);
     ocmUrl.searchParams.set("output", "json");
     ocmUrl.searchParams.set("countrycode", "GB");
@@ -86,13 +111,25 @@ export async function GET(req: Request) {
     }
   }
 
-  // ----- (Optional) Council merge if you have it -----
+  // =========================== C O U N C I L =========================== //
   if (useCouncil) {
-    // const councilData = await fetchCouncil(...);
-    // out = merge(out, councilData);
+    // If you have council ingestion, merge it here.
+    // Example skeleton:
+    // const council = await getCouncilStations({ north, south, east, west, center, radiusKm, ...filters });
+    // out = mergeStations(out, council);
   }
 
   const payload: any = { out };
-  if (debug) payload.debug = { ocmStatus, authed, count: out.length, useOCM, useCouncil, sourceParam };
+  if (debug) {
+    payload.debug = {
+      sourceParam: rawSource,
+      useOCM: useOCM || fallbackToOcm,
+      useCouncil,
+      ocmStatus,
+      authed,
+      count: out.length,
+    };
+  }
+
   return NextResponse.json(payload);
 }
