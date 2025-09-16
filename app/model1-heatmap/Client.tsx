@@ -248,7 +248,7 @@ export default function Model1HeatmapClient() {
 
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [connFilter, setConnFilter] = useState<string>("");
-  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("ocm");
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState<number>(0);
 
