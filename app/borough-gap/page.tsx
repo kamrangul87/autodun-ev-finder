@@ -1,8 +1,10 @@
-// app/borough-gap/page.tsx
-//
-// Borough-level gap index view for the app router.
+"use client";
 
-'use client';
+// Borough‑level gap index page.  Displays a table of boroughs with
+// connector counts, EV registrations and a calculated gap index.  A
+// higher gap index indicates more EV registrations per available
+// connector, signalling areas with insufficient charging
+// infrastructure.
 
 import React, { useEffect, useState } from 'react';
 
@@ -18,12 +20,17 @@ export default function BoroughGapPage() {
   const [data, setData] = useState<BoroughStat[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch('/api/borough', { cache: 'no-cache' });
+        // Use the configured public API base to build the request URL.  When the
+        // environment variable is undefined this falls back to the current
+        // origin.
+        const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
+        const res = await fetch(`${apiBase}/api/borough`, { cache: 'no-cache' });
         if (!res.ok) throw new Error(`API responded ${res.status}`);
         const json = await res.json();
         setData(json as BoroughStat[]);
@@ -36,24 +43,48 @@ export default function BoroughGapPage() {
     }
     fetchData();
   }, []);
+
   return (
     <div style={{ minHeight: '100vh', background: '#0b1220', color: '#f9fafb', padding: '1rem' }}>
       <h1 style={{ fontSize: '1.5rem', fontWeight: 600 }}>Borough Gap Index</h1>
       <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
-        A higher gap index indicates more EV registrations per available connector, signalling areas with insufficient
-        charging infrastructure. Data combines OpenChargeMap and council‑provided stations. EV registration counts
-        are illustrative.
+        A higher gap index indicates more EV registrations per available connector, signalling areas with
+        insufficient charging infrastructure. Data combines OpenChargeMap and council‑provided stations. EV
+        registration counts are illustrative.
       </p>
       {loading && <p style={{ marginTop: '0.5rem', color: '#9ca3af' }}>Loading…</p>}
       {error && <p style={{ marginTop: '0.5rem', color: '#f87171' }}>{error}</p>}
       {!loading && !error && (
-        <table style={{ width: '100%', marginTop: '1rem', borderCollapse: 'collapse', fontSize: '0.875rem' }}>
+        <table
+          style={{
+            width: '100%',
+            marginTop: '1rem',
+            borderCollapse: 'collapse',
+            fontSize: '0.875rem',
+          }}
+        >
           <thead>
             <tr>
-              <th style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Borough</th>
-              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Connectors</th>
-              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>EV Registrations</th>
-              <th style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}>Gap Index</th>
+              <th
+                style={{ textAlign: 'left', padding: '0.5rem', borderBottom: '1px solid #374151' }}
+              >
+                Borough
+              </th>
+              <th
+                style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}
+              >
+                Connectors
+              </th>
+              <th
+                style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}
+              >
+                EV Registrations
+              </th>
+              <th
+                style={{ textAlign: 'right', padding: '0.5rem', borderBottom: '1px solid #374151' }}
+              >
+                Gap Index
+              </th>
             </tr>
           </thead>
           <tbody>

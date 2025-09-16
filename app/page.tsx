@@ -6,7 +6,10 @@
 // export from that module and render it here.  This ensures that
 // navigating to `/` displays the interactive map rather than a 404.
 
-import Model1HeatmapPage from '../pages/model1-heatmap';
+// Import the heatmap page from the app router.  Importing from the
+// pages directory is not necessary now that the component lives under
+// `app/model1-heatmap/page`.
+import Model1HeatmapPage from './model1-heatmap/page';
 
 export default function HomePage() {
   return <Model1HeatmapPage />;
