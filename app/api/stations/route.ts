@@ -1,27 +1,21 @@
 import { NextRequest } from 'next/server';
 
-// Always run dynamically (don’t statically optimize this route)
+// Always dynamic (don’t statically optimize this route)
 export const dynamic = 'force-dynamic';
-// Ensure Node runtime so process.env is available as expected on Vercel
+// Ensure Node runtime so process.env is available on Vercel
 export const runtime = 'nodejs';
 
 // -----------------------------------------------------------------------------
-// Helper functions
+// Helpers
 
-// Normalise a value into a lowercase, space-normalised string.  Undefined
-// values become empty strings.
 const norm = (s: unknown) =>
   String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-// Convert an arbitrary value into a number.  If the value isn't finite
-// (e.g. undefined, null, NaN), fall back to the provided default.
 const toNum = (v: unknown, fallback = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 };
 
-// Haversine distance (km) between two lat/lon pairs.  Note: this helper
-// returns a rounded result to one decimal place to match the original API.
 function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   const R = 6371;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
@@ -35,7 +29,6 @@ function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   return Math.round(R * c * 10) / 10;
 }
 
-// Gather connector text across multiple fields to improve matching.
 function connectorText(station: any): string {
   const parts: string[] = [];
   for (const c of station?.Connections ?? []) {
@@ -49,26 +42,20 @@ function connectorText(station: any): string {
   return parts.filter(Boolean).join(' | ');
 }
 
-// Fuzzy connector matching for CCS / Type 2 / CHAdeMO
 function matchesConnector(station: any, connQuery: string): boolean {
   const q = norm(connQuery);
-  if (!q) return true; // “Any”
+  if (!q) return true;
 
   const hay = connectorText(station);
 
-  if (q === 'type 2' || q.includes('type 2')) {
-    return /type\s*2|mennekes/.test(hay);
-  }
-  if (q === 'ccs' || q.includes('ccs')) {
+  if (q === 'type 2' || q.includes('type 2')) return /type\s*2|mennekes/.test(hay);
+  if (q === 'ccs' || q.includes('ccs'))
     return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
-  }
-  if (q === 'chademo' || q.includes('chademo')) {
-    return /chade?mo/.test(hay);
-  }
+  if (q === 'chademo' || q.includes('chademo')) return /chade?mo/.test(hay);
+
   return hay.includes(q);
 }
 
-// At least one connection >= minPower (kW)
 function hasMinPower(station: any, minPower: number): boolean {
   if (!minPower) return true;
   const powers = (station?.Connections ?? []).map((c: any) => toNum(c?.PowerKW, 0));
@@ -76,32 +63,32 @@ function hasMinPower(station: any, minPower: number): boolean {
 }
 
 // -----------------------------------------------------------------------------
-// GET handler
+// GET
 
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
 
-    // Optional bounding box (if all four present)
+    // Bbox inputs (optional)
     const north = toNum(sp.get('north'), NaN);
     const south = toNum(sp.get('south'), NaN);
     const east = toNum(sp.get('east'), NaN);
     const west = toNum(sp.get('west'), NaN);
     const hasBounds = [north, south, east, west].every((v) => Number.isFinite(v));
 
-    // Centre-based fallback / legacy params
+    // Center-based inputs (fallback / legacy)
     const latParam = toNum(sp.get('lat'), NaN);
     const lonParam = toNum(sp.get('lon'), NaN);
     const distParam = Math.max(1, toNum(sp.get('dist'), 10)); // km
     const minPower = Math.max(0, toNum(sp.get('minPower'), 0));
     const conn = sp.get('conn') ?? '';
 
-    // Source selection: ocm / council / all (default: all)
+    // Sources: ocm / council / all
     const sourceParam = (sp.get('source') ?? '').toLowerCase();
     const includeOCM = !sourceParam || sourceParam === 'ocm' || sourceParam === 'all';
     const includeCouncil = !sourceParam || sourceParam === 'council' || sourceParam === 'all';
 
-    // Compute centre + radius
+    // Compute center + radius
     let lat: number;
     let lon: number;
     let dist: number;
@@ -110,8 +97,8 @@ export async function GET(req: NextRequest) {
       lat = (north + south) / 2;
       lon = (east + west) / 2;
 
-      // radius sufficient to reach all 4 corners
-      const corners = [
+      // radius sufficient to reach all 4 corners + 20% buffer, with a 5km minimum
+      const corners: [number, number][] = [
         [north, east],
         [north, west],
         [south, east],
@@ -122,7 +109,7 @@ export async function GET(req: NextRequest) {
         const d = haversineKm(lat, lon, cLat, cLon);
         if (d > maxCornerDist) maxCornerDist = d;
       }
-      dist = Math.max(1, maxCornerDist);
+      dist = Math.max(5, Math.round(maxCornerDist * 1.2 * 10) / 10);
     } else {
       lat = latParam;
       lon = lonParam;
@@ -132,7 +119,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // -------- OpenChargeMap fetch --------
+    // -------- OCM fetch --------
     const params = new URLSearchParams({
       output: 'json',
       countrycode: 'GB',
@@ -146,7 +133,6 @@ export async function GET(req: NextRequest) {
       includecomments: 'false',
     });
 
-    // API key from either env name
     const key = process.env.OPENCHARGEMAP_API_KEY || process.env.OCM_API_KEY;
     if (key) params.set('key', String(key));
 
@@ -156,14 +142,12 @@ export async function GET(req: NextRequest) {
       Accept: 'application/json',
       'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
     };
-    // Also send in header (some deployments prefer header auth)
     if (key) headers['X-API-Key'] = String(key);
 
     const res = await fetch(url, { headers, cache: 'no-store' });
 
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
-      // Return an informative payload (client can show this)
       return new Response(
         JSON.stringify({ error: `OCM ${res.status}`, detail, url }),
         { status: 200, headers: { 'content-type': 'application/json' } }
@@ -173,29 +157,13 @@ export async function GET(req: NextRequest) {
     const raw = (await res.json().catch(() => [])) as any[];
     const items = Array.isArray(raw) ? raw : [];
 
-    // OCM filters + optional bbox clipping
+    // OCM filters (NO extra bbox clipping here to avoid accidentally removing everything)
     const ocmFiltered = items.filter((s) => {
       if (!includeOCM) return false;
-      const matchConn = matchesConnector(s, conn);
-      const matchPower = hasMinPower(s, minPower);
-      if (!matchConn || !matchPower) return false;
-
-      if (hasBounds) {
-        const ai = s?.AddressInfo ?? {};
-        const sLat = toNum(ai?.Latitude, NaN);
-        const sLon = toNum(ai?.Longitude, NaN);
-        if (!Number.isFinite(sLat) || !Number.isFinite(sLon)) return false;
-        const minLat = Math.min(north, south);
-        const maxLat = Math.max(north, south);
-        const minLon = Math.min(east, west);
-        const maxLon = Math.max(east, west);
-        if (sLat > maxLat || sLat < minLat) return false;
-        if (sLon > maxLon || sLon < minLon) return false;
-      }
-      return true;
+      return matchesConnector(s, conn) && hasMinPower(s, minPower);
     });
 
-    // -------- Council data (local JSON) --------
+    // -------- Council (local JSON) --------
     let councilStations: any[] = [];
     if (includeCouncil) {
       try {
@@ -213,11 +181,10 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Apply same connector/power checks; bbox clipping here is OK (the local set is small)
     const councilFiltered = councilStations.filter((s) => {
       if (!includeCouncil) return false;
-      const matchConn = matchesConnector(s, conn);
-      const matchPower = hasMinPower(s, minPower);
-      if (!matchConn || !matchPower) return false;
+      if (!(matchesConnector(s, conn) && hasMinPower(s, minPower))) return false;
 
       if (hasBounds) {
         const ai = s?.AddressInfo ?? {};
@@ -234,7 +201,7 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // -------- Trim & annotate --------
+    // Trim + annotate
     function trimRecord(s: any): any {
       const ai = s?.AddressInfo ?? {};
       const sLat = toNum(ai?.Latitude, NaN);
@@ -290,7 +257,6 @@ export async function GET(req: NextRequest) {
 
     const trimmedOCM = ocmFiltered.map(trimRecord);
     const trimmedCouncil = councilFiltered.map(trimRecord);
-
     const out = [...trimmedOCM, ...trimmedCouncil];
 
     // Sort by distance (nulls last)
@@ -309,7 +275,6 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error(e);
-    // Return a visible error payload so client can display it
     return new Response(JSON.stringify({ error: 'stations_route_exception', items: [] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
