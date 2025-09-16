@@ -1,58 +1,70 @@
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+import { NextRequest, NextResponse } from "next/server";
+import { GET as stationsGET } from "../stations/route";
 
-import { NextRequest } from 'next/server';
-// Import the GET handler from the stations API.  We do not import
-// anything else from the stations module to keep this file lean.  The
-// stations handler implements all bounding-box and centre-based
-// filtering logic.
-import { GET as stationsGET } from '../stations/route';
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// Always run dynamically; this ensures that bounding-box queries are
-// processed at runtime and are not statically optimised.
-export const dynamic = 'force-dynamic';
+const KM_PER_DEG_LAT = 111.32;
+const toRad = (d: number) => (d * Math.PI) / 180;
+function kmPerDegLon(lat: number) {
+  return KM_PER_DEG_LAT * Math.cos(toRad(lat));
+}
+function bboxToCenterAndRadiusKm(w: number, s: number, e: number, n: number) {
+  const latC = (s + n) / 2;
+  const lonC = (w + e) / 2;
+  const rLatKm = Math.abs(n - s) * 0.5 * KM_PER_DEG_LAT;
+  const rLonKm = Math.abs(e - w) * 0.5 * kmPerDegLon(latC);
+  const radiusKm = Math.max(rLatKm, rLonKm);
+  return { latC, lonC, radiusKm };
+}
 
-/**
- * Site wrapper around the stations API.  Accepts a `bbox` query
- * parameter in the form `west,south,east,north` and forwards the
- * request to the underlying stations handler after translating this
- * parameter into the individual north/south/east/west parameters
- * expected by the stations endpoint.  Any other query parameters
- * (e.g. `conn`, `minPower`, `source`) are passed through unchanged.
- */
 export async function GET(req: NextRequest) {
-  // Parse the incoming URL so we can manipulate search parameters.
   const url = new URL(req.url);
   const sp = url.searchParams;
-  // If a bbox is provided, split it into the four components and map
-  // them to the corresponding parameters.  The order is west,south,east,north.
-  const bbox = sp.get('bbox');
+
+  // forward all params except bbox; we expand bbox → center+radius
+  const passthrough = new URLSearchParams();
+  for (const [k, v] of sp.entries()) if (k !== "bbox") passthrough.set(k, v);
+
+  const bbox = sp.get("bbox");
   if (bbox) {
-    const parts = bbox.split(',').map((p) => p.trim());
-    if (parts.length === 4) {
-      const [west, south, east, north] = parts;
-      sp.set('west', west);
-      sp.set('south', south);
-      sp.set('east', east);
-      sp.set('north', north);
+    const parts = bbox.split(",").map((x) => Number(x.trim()));
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      const [w, s, e, n] = parts as [number, number, number, number];
+
+      // keep bbox as-is for downstream
+      passthrough.set("west", String(w));
+      passthrough.set("south", String(s));
+      passthrough.set("east", String(e));
+      passthrough.set("north", String(n));
+
+      // derive center+radius and enforce a minimum
+      const { latC, lonC, radiusKm } = bboxToCenterAndRadiusKm(w, s, e, n);
+      const MIN_RADIUS_KM = 1.2;
+      const effRadiusKm = Math.max(radiusKm, MIN_RADIUS_KM);
+      passthrough.set("center", `${latC},${lonC}`);
+      passthrough.set("radiusKm", effRadiusKm.toFixed(2));
     }
-    // Remove the bbox parameter so that the stations handler doesn't
-    // interpret it incorrectly.
-    sp.delete('bbox');
-    // Reconstruct the URL with the modified search parameters.
-    url.search = sp.toString();
   }
-  // Construct a new request object targeting the stations handler.  We
-  // explicitly set the pathname to the stations route so that the
-  // handler sees the correct endpoint.  All headers from the
-  // original request are preserved.
-  const proxiedUrl = new URL(url.toString());
-  proxiedUrl.pathname = proxiedUrl.pathname.replace(/\/sites$/, '/stations');
-  const proxyReq = new NextRequest(proxiedUrl.toString(), {
-    headers: req.headers,
-    method: req.method,
-  });
-  // Delegate to the stations GET handler.  Since the handler returns
-  // a Response object, we simply return it directly.
-  return stationsGET(proxyReq);
+
+  // call stations with expanded params
+  const fwd = new URL(req.url);
+  fwd.search = passthrough.toString();
+  const forwardedReq = new Request(fwd.toString(), { method: "GET", headers: req.headers });
+  const resp = await stationsGET(forwardedReq as any);
+
+  // augment when debug=1
+  if (sp.get("debug") === "1") {
+    const data = await (resp as Response).json();
+    const out = data?.out ?? [];
+    const ocmStatus = data?.debug?.ocmStatus ?? null;
+    const authed = data?.debug?.authed ?? null;
+    return NextResponse.json({
+      ...data,
+      counts: { out: Array.isArray(out) ? out.length : 0 },
+      ocmStatus,
+      authed,
+    });
+  }
+  return resp as NextResponse;
 }
