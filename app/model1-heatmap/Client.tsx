@@ -263,7 +263,7 @@ export default function Model1HeatmapClient() {
 
         if (bounds) {
           const { north, south, east, west } = bounds;
-          url = `${apiBase}/api/sites?bbox=${west},${south},${east},${north}`;
+          url = `${apiBase}/api/stations?north=${north}&south=${south}&east=${east}&west=${west}`;
         } else {
           url = `${apiBase}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
         }
