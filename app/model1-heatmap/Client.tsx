@@ -6,14 +6,14 @@
  * - Uses featuresFor/scoreFor from lib/model1.ts to compute scores.
  * - Renders Leaflet heat layer (leaflet.heat) or markers with popups.
  * - Includes connector/source filters and a lightweight feedback form.
- * - Surfaces backend errors (e.g., OCM key/rate-limit) to the UI.
+ * - Surfaces backend errors (e.g., OCM key/rate-limit) in the UI.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// Dynamically import Leaflet components to avoid SSR issues
+// Leaflet components (client-only)
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -29,12 +29,12 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
   ssr: false,
 });
 
-// Hooks (safe to import—they don't touch window at import time)
+// Hooks (safe – no window at import time)
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
-// ----------------------------- Feedback Form ------------------------------
-
+// ---------------------------------------------------------------------------
+// Feedback form
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -44,8 +44,8 @@ function FeedbackForm({
 }) {
   const [rating, setRating] = useState<number>(5);
   const [comment, setComment] = useState<string>("");
-  const [submitting, setSubmitting] = useState<boolean>(false);
-  const [submitted, setSubmitted] = useState<boolean>(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -145,8 +145,8 @@ function FeedbackForm({
   );
 }
 
-// ------------------------------- Types -------------------------------------
-
+// ---------------------------------------------------------------------------
+// Types
 type HeatPoint = [number, number, number];
 
 interface StationWithScore extends OCMStation {
@@ -163,8 +163,8 @@ interface StationWithScore extends OCMStation {
   DataSource?: string;
 }
 
-// ----------------------------- Heat Layer ----------------------------------
-
+// ---------------------------------------------------------------------------
+// Heat layer
 function HeatLayer({ points }: { points: HeatPoint[] }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -174,7 +174,6 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
 
     async function mount() {
       if (cancelled) return;
-
       const L = (await import("leaflet")).default as any;
       await import("leaflet.heat");
 
@@ -217,9 +216,9 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
   return null;
 }
 
-// ------------------------------- Page --------------------------------------
-
-export default function Model1HeatmapPage() {
+// ---------------------------------------------------------------------------
+// Page
+export default function Client() {
   // Read query params lazily (client only)
   const [params] = useState(() => {
     if (typeof window === "undefined") {
@@ -237,7 +236,7 @@ export default function Model1HeatmapPage() {
   });
 
   const [stations, setStations] = useState<StationWithScore[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [bounds, setBounds] = useState<{
@@ -247,12 +246,12 @@ export default function Model1HeatmapPage() {
     west: number;
   } | null>(null);
 
-  const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
-  const [connFilter, setConnFilter] = useState<string>("");
-  // 👇 default to OCM while we validate server responses
-  const [sourceFilter, setSourceFilter] = useState<string>("ocm");
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [connFilter, setConnFilter] = useState("");
+  // Default to OCM while validating data flow; you can switch to "all".
+  const [sourceFilter, setSourceFilter] = useState<"ocm" | "all" | "council">("ocm");
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
-  const [feedbackVersion, setFeedbackVersion] = useState<number>(0);
+  const [feedbackVersion, setFeedbackVersion] = useState(0);
 
   // Fetch stations when bbox/params/filters/feedback change
   useEffect(() => {
@@ -271,15 +270,17 @@ export default function Model1HeatmapPage() {
         }
 
         if (connFilter) url += `&conn=${encodeURIComponent(connFilter)}`;
-        if (sourceFilter && sourceFilter !== "all")
+        if (sourceFilter && sourceFilter !== "all") {
           url += `&source=${encodeURIComponent(sourceFilter)}`;
+        } else if (sourceFilter === "all") {
+          url += `&source=all`;
+        }
 
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) throw new Error(`API responded with ${res.status}`);
 
         const json = await res.json();
-
-        // Server may return either an array or { error, items, detail }
+        // API can return an array or { error, items, detail }
         let data: OCMStation[] = Array.isArray(json)
           ? json
           : Array.isArray(json?.items)
@@ -287,8 +288,7 @@ export default function Model1HeatmapPage() {
           : [];
 
         if (!Array.isArray(json) && json?.error) {
-          setError(String(json.error)); // show “OCM 401/429/…”
-          // keep going; if items exist we’ll still render them
+          setError(String(json.error)); // e.g. "OCM 401/429"
         }
 
         const scored: StationWithScore[] = (data ?? [])
@@ -298,7 +298,7 @@ export default function Model1HeatmapPage() {
             if (typeof lat !== "number" || typeof lon !== "number") return null;
             const f = featuresFor(s);
             const sc = scoreFor(f);
-            return Object.assign({}, s, { _score: sc });
+            return { ...(s as any), _score: sc } as StationWithScore;
           })
           .filter(Boolean) as StationWithScore[];
 
@@ -322,12 +322,12 @@ export default function Model1HeatmapPage() {
     feedbackVersion,
   ]);
 
-  // Normalise score to [0, 1] -> heat weight
+  // Heat points
   const heatPoints: HeatPoint[] = useMemo(() => {
     if (!stations.length) return [];
-    const values = stations.map((s) => s._score);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const vals = stations.map((s) => s._score);
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
     const denom = max - min || 1;
     return stations.map((s) => {
       const lat = s.AddressInfo!.Latitude as number;
@@ -337,7 +337,7 @@ export default function Model1HeatmapPage() {
     });
   }, [stations]);
 
-  // Map ref and bounds tracking
+  // Map ref + bounds tracking
   const mapRef = useRef<any>(null);
 
   useEffect(() => {
@@ -355,6 +355,7 @@ export default function Model1HeatmapPage() {
       });
     };
 
+    // initial + on move/zoom
     update();
     map.on?.("moveend", update);
     map.on?.("zoomend", update);
@@ -366,6 +367,7 @@ export default function Model1HeatmapPage() {
 
   const mapCenter: [number, number] = [params.lat, params.lon];
 
+  // -------------------------------------------------------------------------
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
       {/* Header / Controls */}
@@ -441,7 +443,7 @@ export default function Model1HeatmapPage() {
             style={{
               padding: "0.25rem",
               fontSize: "0.75rem",
-              border: "1px solid "#374151",
+              border: "1px solid #374151",
               borderRadius: "0.25rem",
               background: "#1f2937",
               color: "#f9fafb",
@@ -456,7 +458,9 @@ export default function Model1HeatmapPage() {
           {/* Data source filter */}
           <select
             value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
+            onChange={(e) =>
+              setSourceFilter(e.target.value as "ocm" | "all" | "council")
+            }
             style={{
               padding: "0.25rem",
               fontSize: "0.75rem",
@@ -489,7 +493,7 @@ export default function Model1HeatmapPage() {
         </div>
       </div>
 
-      {/* Small debug chip showing # of stations */}
+      {/* Small debug chip with station count */}
       <div
         style={{
           position: "absolute",
@@ -503,7 +507,7 @@ export default function Model1HeatmapPage() {
           fontSize: "0.75rem",
           border: "1px solid rgba(148,163,184,0.3)",
         }}
-        title="Number of stations returned by the API after filters"
+        title="Stations returned by the API after filters"
       >
         stations: {stations.length}
       </div>
@@ -537,7 +541,6 @@ export default function Model1HeatmapPage() {
                   ? s.StatusType?.IsOperational
                   : null;
 
-              // Build small colored dot markers via divIcon (client only)
               let icon: any = undefined;
               if (typeof window !== "undefined" && isOperational !== null) {
                 const L = require("leaflet");
@@ -580,8 +583,7 @@ export default function Model1HeatmapPage() {
                     {s.Feedback && s.Feedback.reliability != null && (
                       <>
                         <br />
-                        Reliability:{" "}
-                        {(s.Feedback.reliability * 100).toFixed(0)}% (
+                        Reliability: {(s.Feedback.reliability * 100).toFixed(0)}% (
                         {s.Feedback.count} feedback)
                       </>
                     )}
@@ -671,7 +673,7 @@ export default function Model1HeatmapPage() {
           </div>
         )}
 
-        {/* Error state */}
+        {/* Error banner (from API) */}
         {error && (
           <div
             style={{
