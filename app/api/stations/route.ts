@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
  * Stations API (server-only)
  * - Fetches from OpenChargeMap (OCM); council merge hook left in-place.
  * - Accepts bbox (north/south/east/west) OR center+radiusKm.
- * - Always sends API key via X-API-Key header AND ?key= query param.
+ * - Sends API key via X-API-Key header AND ?key= query param (safer on some hosts).
  * - Uses center+radius with a minimum radius; retries if a bbox yields 0.
  * - Robust `source` normalizer: "", "ocm", "openchargemap", "all", "*" -> OCM on.
  * - Debug: add `debug=1` to see status, count, and the exact OCM URL called.
@@ -43,16 +43,13 @@ function normalizeSource(v: string | null | undefined) {
     raw === "all" ||
     raw === "*";
   const isCouncil = raw === "council" || raw === "all" || raw === "*";
-  // Fallback: if unknown string, default to OCM to avoid empty results
   const fallbackToOcm = !isOCM && !isCouncil;
   return { raw, useOCM: isOCM || fallbackToOcm, useCouncil: isCouncil };
 }
 
-// Build a center+radius request URL for OCM.
 function buildOcmUrlPoint(lat: string, lon: string, radiusKm: string, key?: string) {
   const u = new URL(OCM_BASE);
   u.searchParams.set("output", "json");
-  // Important: do NOT set countrycode with bbox/radius to avoid exclusions (data quirks).
   u.searchParams.set("compact", "true");
   u.searchParams.set("verbose", "false");
   u.searchParams.set("maxresults", "250");
@@ -60,23 +57,21 @@ function buildOcmUrlPoint(lat: string, lon: string, radiusKm: string, key?: stri
   u.searchParams.set("longitude", lon);
   u.searchParams.set("distance", radiusKm);
   u.searchParams.set("distanceunit", "KM");
-  if (key) u.searchParams.set("key", key); // also pass as query to avoid header stripping
+  if (key) u.searchParams.set("key", key);
   return u;
 }
 
-// Build a bbox request URL for OCM (order must be south,west,north,east)
 function buildOcmUrlBbox(south: string, west: string, north: string, east: string, key?: string) {
   const u = new URL(OCM_BASE);
   u.searchParams.set("output", "json");
   u.searchParams.set("compact", "true");
   u.searchParams.set("verbose", "false");
   u.searchParams.set("maxresults", "250");
-  u.searchParams.set("boundingbox", `${south},${west},${north},${east}`);
+  u.searchParams.set("boundingbox", `${south},${west},${north},${east}`); // OCM order
   if (key) u.searchParams.set("key", key);
   return u;
 }
 
-// Optionally add filters
 function addFilterParams(u: URL, { conn, minPower }: { conn?: string; minPower?: string }) {
   if (conn) u.searchParams.set("connectiontypeid", conn);
   if (minPower) u.searchParams.set("minpowerkw", minPower);
@@ -95,24 +90,21 @@ export async function GET(req: Request) {
 
   const { raw: sourceParam, useOCM, useCouncil } = normalizeSource(sp.get("source"));
 
-  // spatial inputs
   const spatial: Spatial = {
     north: sp.get("north"),
     south: sp.get("south"),
     east: sp.get("east"),
     west: sp.get("west"),
-    center: sp.get("center"),     // "lat,lon"
-    radiusKm: sp.get("radiusKm"), // may be absent; we'll enforce a minimum
+    center: sp.get("center"),
+    radiusKm: sp.get("radiusKm"),
   };
 
-  // filters
   const conn = sp.get("conn") || undefined;
   const minPower = sp.get("minPower") || undefined;
 
   const apiKey = getOCMKey();
   const headers: HeadersInit = { "User-Agent": "Autodun/1.0" };
-  if (apiKey) headers["X-API-Key"] = apiKey; // send header
-  // (we also pass ?key= in the URL)
+  if (apiKey) headers["X-API-Key"] = apiKey; // header (plus ?key= in URL)
 
   let out: any[] = [];
   let ocmStatus = 0;
@@ -121,12 +113,6 @@ export async function GET(req: Request) {
 
   if (useOCM) {
     try {
-      // Strategy:
-      //  1) Prefer center+radius (with minimum radius)
-      //  2) Else, if bbox present, try bbox once; if it yields 0, auto-retry as center+radius
-      const tryPointFirst =
-        !!spatial.center && ensureMinRadiusKm(spatial.radiusKm) !== undefined;
-
       const fetchOnce = async (u: URL) => {
         ocmUrlUsed = u.toString();
         const res = await fetch(u.toString(), { headers, cache: "no-store" });
@@ -139,33 +125,30 @@ export async function GET(req: Request) {
         return Array.isArray(data) ? data : [];
       };
 
-      if (tryPointFirst) {
-        const [lat, lon] = spatial.center!.split(",").map((s) => s.trim());
-        const radius = ensureMinRadiusKm(spatial.radiusKm, 1.5);
+      if (spatial.center) {
+        const [lat, lon] = spatial.center.split(",").map((s) => s.trim());
+        const radius = ensureMinRadiusKm(spatial.radiusKm, 1.8);
         const u = buildOcmUrlPoint(lat, lon, radius, apiKey);
         addFilterParams(u, { conn, minPower });
         out = await fetchOnce(u);
       } else if (spatial.south && spatial.west && spatial.north && spatial.east) {
-        // 1) Try bbox
+        // Try bbox, then fallback to center+radius if zero results
         const uBBox = buildOcmUrlBbox(
           spatial.south, spatial.west, spatial.north, spatial.east, apiKey
         );
         addFilterParams(uBBox, { conn, minPower });
         out = await fetchOnce(uBBox);
 
-        // 2) If 0, retry as center+radius (derived)
         if (out.length === 0) {
-          const latC =
-            (Number(spatial.south) + Number(spatial.north)) / 2;
-          const lonC =
-            (Number(spatial.west) + Number(spatial.east)) / 2;
-          const radius = ensureMinRadiusKm(spatial.radiusKm, 1.8);
+          const latC = (Number(spatial.south) + Number(spatial.north)) / 2;
+          const lonC = (Number(spatial.west) + Number(spatial.east)) / 2;
+          const radius = ensureMinRadiusKm(spatial.radiusKm, 2.0);
           const uPoint = buildOcmUrlPoint(String(latC), String(lonC), radius, apiKey);
           addFilterParams(uPoint, { conn, minPower });
           out = await fetchOnce(uPoint);
         }
       } else {
-        // Last resort: London-ish default (should rarely happen)
+        // Last resort: central London
         const u = buildOcmUrlPoint("51.5074", "-0.1278", "2", apiKey);
         addFilterParams(u, { conn, minPower });
         out = await fetchOnce(u);
@@ -178,10 +161,9 @@ export async function GET(req: Request) {
     }
   }
 
-  // Council merge hook (keep your existing code here if/when enabled)
   if (useCouncil) {
-    // const council = await getCouncilStations(...);
-    // out = mergeStations(out, council);
+    // Merge your council data here if/when enabled.
+    // out = mergeStations(out, councilData);
   }
 
   const payload: any = { out };
