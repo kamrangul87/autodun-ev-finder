@@ -6,9 +6,8 @@ export const dynamic = "force-dynamic";
 
 const KM_PER_DEG_LAT = 111.32;
 const toRad = (d: number) => (d * Math.PI) / 180;
-function kmPerDegLon(lat: number) {
-  return KM_PER_DEG_LAT * Math.cos(toRad(lat));
-}
+const kmPerDegLon = (lat: number) => KM_PER_DEG_LAT * Math.cos(toRad(lat));
+
 function bboxToCenterAndRadiusKm(w: number, s: number, e: number, n: number) {
   const latC = (s + n) / 2;
   const lonC = (w + e) / 2;
@@ -18,13 +17,50 @@ function bboxToCenterAndRadiusKm(w: number, s: number, e: number, n: number) {
   return { latC, lonC, radiusKm };
 }
 
+/** Map a single OpenChargeMap record to the UI site schema */
+function mapOcmToSite(poi: any) {
+  const id = poi?.ID ?? poi?.id ?? null;
+  const ai = poi?.AddressInfo || {};
+  const lat = ai?.Latitude ?? null;
+  const lon = ai?.Longitude ?? null;
+  const name = ai?.Title ?? "EV charge point";
+  const addr = [ai?.AddressLine1, ai?.Town, ai?.Postcode].filter(Boolean).join(", ");
+
+  // connectors & power
+  const conns = Array.isArray(poi?.Connections) ? poi.Connections : [];
+  const connectors = conns.length;
+  const maxPower = conns.reduce((m: number, c: any) => {
+    const p = Number(c?.PowerKW ?? 0);
+    return isFinite(p) ? Math.max(m, p) : m;
+  }, 0);
+
+  const status = poi?.StatusType?.IsOperational === false ? "down" : "up";
+
+  return {
+    id,
+    lat,
+    lon,
+    name,
+    addr,
+    postcode: ai?.Postcode ?? null,
+    status,
+    connectors,
+    maxPowerKw: maxPower,
+    source: "ocm",
+  };
+}
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const sp = url.searchParams;
+  const debug = sp.get("debug") === "1";
 
-  // forward all params except bbox; we expand bbox → center+radius
+  // Forward all params except bbox; we’ll add derived center+radius
+  const fwd = new URL(req.url);
   const passthrough = new URLSearchParams();
-  for (const [k, v] of sp.entries()) if (k !== "bbox") passthrough.set(k, v);
+  for (const [k, v] of sp.entries()) {
+    if (k !== "bbox") passthrough.set(k, v);
+  }
 
   const bbox = sp.get("bbox");
   if (bbox) {
@@ -32,7 +68,7 @@ export async function GET(req: NextRequest) {
     if (parts.length === 4 && parts.every(Number.isFinite)) {
       const [w, s, e, n] = parts as [number, number, number, number];
 
-      // keep bbox for downstream (the stations handler can try bbox first)
+      // keep bbox as-is for downstream
       passthrough.set("west", String(w));
       passthrough.set("south", String(s));
       passthrough.set("east", String(e));
@@ -40,29 +76,34 @@ export async function GET(req: NextRequest) {
 
       // also derive center+radius and enforce a minimum
       const { latC, lonC, radiusKm } = bboxToCenterAndRadiusKm(w, s, e, n);
-      const MIN_RADIUS_KM = 1.8;
+      const MIN_RADIUS_KM = 2.0;
       const effRadiusKm = Math.max(radiusKm, MIN_RADIUS_KM);
       passthrough.set("center", `${latC},${lonC}`);
       passthrough.set("radiusKm", effRadiusKm.toFixed(2));
     }
   }
 
-  // call stations with expanded params
-  const fwd = new URL(req.url);
   fwd.search = passthrough.toString();
   const forwardedReq = new Request(fwd.toString(), { method: "GET", headers: req.headers });
-  const resp = await stationsGET(forwardedReq as any);
 
-  // when debug=1, wrap to include counts + pass through debug fields
-  if (sp.get("debug") === "1") {
-    const data = await (resp as Response).json();
-    const out = data?.out ?? [];
-    const dbg = data?.debug ?? {};
-    return NextResponse.json({
-      ...data,
-      counts: { out: Array.isArray(out) ? out.length : 0 },
-      ...dbg,
-    });
+  // Call the raw stations endpoint
+  const resp = await stationsGET(forwardedReq as any);
+  const raw = await (resp as Response).json();
+
+  const ocmList: any[] = Array.isArray(raw?.out) ? raw.out : [];
+  const sites = ocmList.map(mapOcmToSite).filter(s => s.lat != null && s.lon != null);
+
+  // By default return exactly what the client expects
+  const payload: any = { sites };
+
+  // When debugging, include counters + upstream debug
+  if (debug) {
+    payload.debug = {
+      count: sites.length,
+      upstream: raw?.debug ?? null,
+      sample: sites.slice(0, 3),
+    };
   }
-  return resp as NextResponse;
+
+  return NextResponse.json(payload, { headers: { "Cache-Control": "no-store" } });
 }
