@@ -484,7 +484,7 @@ export default function Model1HeatmapClient() {
           ref={mapRef}
           style={{ height: "100%", width: "100%" }}
           whenReady={(event) => {
-            mapRef.current = map;
+            //mapRef.current = map;
           }}
         >
           <TileLayer
