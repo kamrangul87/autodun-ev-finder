@@ -1,30 +1,24 @@
 import { NextRequest } from 'next/server';
 
-// Always dynamic (don’t statically optimize this route)
+// Always run dynamically
 export const dynamic = 'force-dynamic';
-// Ensure Node runtime so process.env is available on Vercel
-export const runtime = 'nodejs';
 
-// -----------------------------------------------------------------------------
-// Helpers
+// ----- helpers ---------------------------------------------------------------
 
-const norm = (s: unknown) =>
-  String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
-
+const norm = (s: unknown) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 const toNum = (v: unknown, fallback = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 };
 
+// Haversine (km), rounded to 0.1 km for compatibility
 function haversineKm(aLat: number, aLon: number, bLat: number, bLon: number) {
   const R = 6371;
   const dLat = ((bLat - aLat) * Math.PI) / 180;
   const dLon = ((bLon - aLon) * Math.PI) / 180;
   const la1 = (aLat * Math.PI) / 180;
   const la2 = (bLat * Math.PI) / 180;
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.sin(dLon / 2) ** 2 * Math.cos(la1) * Math.cos(la2);
+  const x = Math.sin(dLat / 2) ** 2 + Math.sin(dLon / 2) ** 2 * Math.cos(la1) * Math.cos(la2);
   const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   return Math.round(R * c * 10) / 10;
 }
@@ -36,7 +30,7 @@ function connectorText(station: any): string {
       norm(c?.ConnectionType?.FormalName),
       norm(c?.ConnectionType?.Title),
       norm(c?.Comments),
-      norm(c?.Reference)
+      norm(c?.Reference),
     );
   }
   return parts.filter(Boolean).join(' | ');
@@ -45,14 +39,11 @@ function connectorText(station: any): string {
 function matchesConnector(station: any, connQuery: string): boolean {
   const q = norm(connQuery);
   if (!q) return true;
-
   const hay = connectorText(station);
 
   if (q === 'type 2' || q.includes('type 2')) return /type\s*2|mennekes/.test(hay);
-  if (q === 'ccs' || q.includes('ccs'))
-    return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
+  if (q === 'ccs' || q.includes('ccs')) return /ccs|combo|combined(\s+charging\s+system)?|type\s*2\s*combo/.test(hay);
   if (q === 'chademo' || q.includes('chademo')) return /chade?mo/.test(hay);
-
   return hay.includes(q);
 }
 
@@ -62,33 +53,37 @@ function hasMinPower(station: any, minPower: number): boolean {
   return powers.some((p: number) => p >= minPower);
 }
 
-// -----------------------------------------------------------------------------
-// GET
+// ----- handler ---------------------------------------------------------------
 
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;
 
-    // Bbox inputs (optional)
+    // Accept either explicit bbox (north/south/east/west) or center+radius
     const north = toNum(sp.get('north'), NaN);
     const south = toNum(sp.get('south'), NaN);
     const east = toNum(sp.get('east'), NaN);
     const west = toNum(sp.get('west'), NaN);
     const hasBounds = [north, south, east, west].every((v) => Number.isFinite(v));
 
-    // Center-based inputs (fallback / legacy)
     const latParam = toNum(sp.get('lat'), NaN);
     const lonParam = toNum(sp.get('lon'), NaN);
     const distParam = Math.max(1, toNum(sp.get('dist'), 10)); // km
     const minPower = Math.max(0, toNum(sp.get('minPower'), 0));
     const conn = sp.get('conn') ?? '';
 
-    // Sources: ocm / council / all
     const sourceParam = (sp.get('source') ?? '').toLowerCase();
     const includeOCM = !sourceParam || sourceParam === 'ocm' || sourceParam === 'all';
     const includeCouncil = !sourceParam || sourceParam === 'council' || sourceParam === 'all';
 
-    // Compute center + radius
+    // NEW: configurable minimum radius when a bbox is provided (prevents tiny queries)
+    const minRadiusFromEnv = Number(process.env.OCM_MIN_RADIUS_KM);
+    const MIN_RADIUS_KM = Number.isFinite(minRadiusFromEnv) ? Math.max(1, minRadiusFromEnv) : 5;
+    const minRadiusOverride = toNum(sp.get('minRadius'), NaN); // optional query override for testing
+    const EFFECTIVE_MIN_RADIUS = Number.isFinite(minRadiusOverride)
+      ? Math.max(1, minRadiusOverride)
+      : MIN_RADIUS_KM;
+
     let lat: number;
     let lon: number;
     let dist: number;
@@ -97,7 +92,6 @@ export async function GET(req: NextRequest) {
       lat = (north + south) / 2;
       lon = (east + west) / 2;
 
-      // radius sufficient to reach all 4 corners + 20% buffer, with a 5km minimum
       const corners: [number, number][] = [
         [north, east],
         [north, west],
@@ -109,7 +103,9 @@ export async function GET(req: NextRequest) {
         const d = haversineKm(lat, lon, cLat, cLon);
         if (d > maxCornerDist) maxCornerDist = d;
       }
-      dist = Math.max(5, Math.round(maxCornerDist * 1.2 * 10) / 10);
+
+      // 👇 key fix: enforce a larger minimum radius (default 5 km)
+      dist = Math.max(EFFECTIVE_MIN_RADIUS, maxCornerDist);
     } else {
       lat = latParam;
       lon = lonParam;
@@ -119,7 +115,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // -------- OCM fetch --------
+    // Build OCM request
     const params = new URLSearchParams({
       output: 'json',
       countrycode: 'GB',
@@ -138,53 +134,29 @@ export async function GET(req: NextRequest) {
 
     const url = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
 
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-      'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
-    };
-    if (key) headers['X-API-Key'] = String(key);
-
-    const res = await fetch(url, { headers, cache: 'no-store' });
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Autodun-EV-Finder/1.0 (contact: info@autodun.com)',
+      },
+      cache: 'no-store',
+    });
 
     if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      return new Response(
-        JSON.stringify({ error: `OCM ${res.status}`, detail, url }),
-        { status: 200, headers: { 'content-type': 'application/json' } }
-      );
+      // Fail soft but surface a hint for the client banner
+      return new Response(JSON.stringify({ error: `OCM ${res.status}`, items: [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
     const raw = (await res.json().catch(() => [])) as any[];
     const items = Array.isArray(raw) ? raw : [];
 
-    // OCM filters (NO extra bbox clipping here to avoid accidentally removing everything)
     const ocmFiltered = items.filter((s) => {
       if (!includeOCM) return false;
-      return matchesConnector(s, conn) && hasMinPower(s, minPower);
-    });
-
-    // -------- Council (local JSON) --------
-    let councilStations: any[] = [];
-    if (includeCouncil) {
-      try {
-        const globalAny = globalThis as any;
-        if (!globalAny.__councilStationsCache) {
-          const { readFile } = await import('fs/promises');
-          const dataPath = process.cwd() + '/data/councilStations.json';
-          const json = await readFile(dataPath, 'utf-8');
-          globalAny.__councilStationsCache = JSON.parse(json);
-        }
-        councilStations = (globalThis as any).__councilStationsCache as any[];
-      } catch (err) {
-        console.error('Failed to read council stations', err);
-        councilStations = [];
-      }
-    }
-
-    // Apply same connector/power checks; bbox clipping here is OK (the local set is small)
-    const councilFiltered = councilStations.filter((s) => {
-      if (!includeCouncil) return false;
-      if (!(matchesConnector(s, conn) && hasMinPower(s, minPower))) return false;
+      if (!matchesConnector(s, conn)) return false;
+      if (!hasMinPower(s, minPower)) return false;
 
       if (hasBounds) {
         const ai = s?.AddressInfo ?? {};
@@ -201,7 +173,42 @@ export async function GET(req: NextRequest) {
       return true;
     });
 
-    // Trim + annotate
+    // Council data (optional)
+    let councilStations: any[] = [];
+    if (includeCouncil) {
+      try {
+        const globalAny = globalThis as any;
+        if (!globalAny.__councilStationsCache) {
+          const { readFile } = await import('fs/promises');
+          const dataPath = process.cwd() + '/data/councilStations.json';
+          const json = await readFile(dataPath, 'utf-8');
+          globalAny.__councilStationsCache = JSON.parse(json);
+        }
+        councilStations = (globalThis as any).__councilStationsCache as any[];
+      } catch {
+        councilStations = [];
+      }
+    }
+
+    const councilFiltered = councilStations.filter((s) => {
+      if (!includeCouncil) return false;
+      if (!matchesConnector(s, conn)) return false;
+      if (!hasMinPower(s, minPower)) return false;
+      if (hasBounds) {
+        const ai = s?.AddressInfo ?? {};
+        const sLat = toNum(ai?.Latitude, NaN);
+        const sLon = toNum(ai?.Longitude, NaN);
+        if (!Number.isFinite(sLat) || !Number.isFinite(sLon)) return false;
+        const minLat = Math.min(north, south);
+        const maxLat = Math.max(north, south);
+        const minLon = Math.min(east, west);
+        const maxLon = Math.max(east, west);
+        if (sLat > maxLat || sLat < minLat) return false;
+        if (sLon > maxLon || sLon < minLon) return false;
+      }
+      return true;
+    });
+
     function trimRecord(s: any): any {
       const ai = s?.AddressInfo ?? {};
       const sLat = toNum(ai?.Latitude, NaN);
@@ -236,14 +243,11 @@ export async function GET(req: NextRequest) {
         StatusType: {
           Title: s?.StatusType?.Title ?? null,
           IsOperational:
-            typeof s?.StatusType?.IsOperational === 'boolean'
-              ? s?.StatusType?.IsOperational
-              : null,
+            typeof s?.StatusType?.IsOperational === 'boolean' ? s?.StatusType?.IsOperational : null,
         },
         Feedback: (() => {
-          const globalAny = globalThis as any;
           const store: Record<number, { rating: number; comment?: string; timestamp: number }[]> =
-            globalAny.__feedbackStore ?? {};
+            (globalThis as any).__feedbackStore ?? {};
           const fb = store[s?.ID] ?? [];
           const count = fb.length;
           const avg = count ? fb.reduce((sum, f) => sum + f.rating, 0) / count : null;
@@ -256,10 +260,10 @@ export async function GET(req: NextRequest) {
     }
 
     const trimmedOCM = ocmFiltered.map(trimRecord);
-    const trimmedCouncil = councilFiltered.map(trimRecord);
+    const trimmedCouncil = councilFiltered.map((r) => ({ ...trimRecord(r), DataSource: 'Council' }));
+
     const out = [...trimmedOCM, ...trimmedCouncil];
 
-    // Sort by distance (nulls last)
     out.sort((a: any, b: any) => {
       const dA = a._distanceKm;
       const dB = b._distanceKm;
@@ -275,7 +279,8 @@ export async function GET(req: NextRequest) {
     });
   } catch (e) {
     console.error(e);
-    return new Response(JSON.stringify({ error: 'stations_route_exception', items: [] }), {
+    // Fail soft to keep UI responsive
+    return new Response(JSON.stringify({ error: 'Server error', items: [] }), {
       status: 200,
       headers: { 'content-type': 'application/json' },
     });
