@@ -2,10 +2,11 @@
 
 /**
  * Model-1 EV Heatmap page
- * - Fetches stations from /api/stations or /api/sites (bbox) based on map bounds.
+ * - Fetches stations from /api/stations (bbox or center+radius).
  * - Uses featuresFor/scoreFor from lib/model1.ts to compute scores.
  * - Renders Leaflet heat layer (leaflet.heat) or markers with popups.
  * - Includes connector/source filters and a lightweight feedback form.
+ * - Surfaces backend errors (e.g., OCM key/rate-limit) to the UI.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -216,9 +217,9 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
   return null;
 }
 
-// ------------------------------- Client Page -------------------------------
+// ------------------------------- Page --------------------------------------
 
-export default function Model1HeatmapClient() {
+export default function Model1HeatmapPage() {
   // Read query params lazily (client only)
   const [params] = useState(() => {
     if (typeof window === "undefined") {
@@ -248,6 +249,7 @@ export default function Model1HeatmapClient() {
 
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
   const [connFilter, setConnFilter] = useState<string>("");
+  // 👇 default to OCM while we validate server responses
   const [sourceFilter, setSourceFilter] = useState<string>("ocm");
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState<number>(0);
@@ -275,9 +277,21 @@ export default function Model1HeatmapClient() {
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) throw new Error(`API responded with ${res.status}`);
 
-        const data: OCMStation[] = await res.json();
+        const json = await res.json();
 
-        const scored: StationWithScore[] = data
+        // Server may return either an array or { error, items, detail }
+        let data: OCMStation[] = Array.isArray(json)
+          ? json
+          : Array.isArray(json?.items)
+          ? json.items
+          : [];
+
+        if (!Array.isArray(json) && json?.error) {
+          setError(String(json.error)); // show “OCM 401/429/…”
+          // keep going; if items exist we’ll still render them
+        }
+
+        const scored: StationWithScore[] = (data ?? [])
           .map((s) => {
             const lat = s?.AddressInfo?.Latitude;
             const lon = s?.AddressInfo?.Longitude;
@@ -427,7 +441,7 @@ export default function Model1HeatmapClient() {
             style={{
               padding: "0.25rem",
               fontSize: "0.75rem",
-              border: "1px solid #374151",
+              border: "1px solid "#374151",
               borderRadius: "0.25rem",
               background: "#1f2937",
               color: "#f9fafb",
@@ -452,8 +466,8 @@ export default function Model1HeatmapClient() {
               color: "#f9fafb",
             }}
           >
-            <option value="all">All sources</option>
             <option value="ocm">OpenChargeMap</option>
+            <option value="all">All sources</option>
             <option value="council">Council</option>
           </select>
 
@@ -475,14 +489,33 @@ export default function Model1HeatmapClient() {
         </div>
       </div>
 
+      {/* Small debug chip showing # of stations */}
+      <div
+        style={{
+          position: "absolute",
+          top: "0.75rem",
+          right: "0.75rem",
+          zIndex: 1000,
+          background: "rgba(15, 23, 42, 0.85)",
+          color: "#e5e7eb",
+          padding: "0.25rem 0.5rem",
+          borderRadius: "0.25rem",
+          fontSize: "0.75rem",
+          border: "1px solid rgba(148,163,184,0.3)",
+        }}
+        title="Number of stations returned by the API after filters"
+      >
+        stations: {stations.length}
+      </div>
+
       {/* Map */}
       <main style={{ height: "100%", width: "100%" }}>
-      <MapContainer
-  center={mapCenter}
-  zoom={13}
-  scrollWheelZoom
-  ref={mapRef}
-  style={{ height: "100%", width: "100%" }}
+        <MapContainer
+          center={mapCenter}
+          zoom={13}
+          scrollWheelZoom
+          ref={mapRef}
+          style={{ height: "100%", width: "100%" }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
