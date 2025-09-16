@@ -6,10 +6,9 @@ export const dynamic = "force-dynamic";
 /**
  * /api/sites
  * - Accepts bbox=west,south,east,north (+ source, conn, minPower, radiusKm)
- * - Computes center+radius (min 4.5km), retries at 8km if zero results
- * - Calls OpenChargeMap directly (header + ?key=)
- * - Returns { sites: [...] } that your UI expects
- * - Add &debug=1 to see ocmUrlUsed, status, authed, and count
+ * - Computes center+radius (min 4.5 km), retries at 8 km if 0 results
+ * - Calls OpenChargeMap directly (X-API-Key header + ?key=)
+ * - Returns { sites: [...] } for your UI; add &debug=1 for internals
  */
 
 const OCM_BASE = "https://api.openchargemap.io/v3/poi/";
@@ -36,6 +35,21 @@ function coerceRadiusKm(input: string | null, minKm: number): number {
   const n = input ? Number(input) : NaN;
   if (!isFinite(n) || n <= 0) return minKm;
   return Math.max(n, minKm);
+}
+
+function normalizeSource(v: string | null | undefined) {
+  const raw = (v || "").toLowerCase().trim();
+  const useOCM =
+    raw === "" ||
+    raw === "ocm" ||
+    raw === "openchargemap" ||
+    raw === "open charge map" ||
+    raw === "open-charge-map" ||
+    raw === "opencharge" ||
+    raw === "open-charge" ||
+    raw === "all" ||
+    raw === "*";
+  return { raw, useOCM: useOCM || raw === "" };
 }
 
 /** Map one OCM POI into our UI site schema */
@@ -66,11 +80,15 @@ export async function GET(req: NextRequest) {
   const sp = url.searchParams;
   const debug = sp.get("debug") === "1";
 
-  // 1) Parse bbox → center + radius
+  // 1) Health & input echo (easy debugging)
+  const rawSource = (sp.get("source") || "").toLowerCase().trim();
+  const { useOCM } = normalizeSource(rawSource);
+
+  // 2) Parse bbox → center+radius (generous defaults)
   const bbox = sp.get("bbox");
   let latC: number | null = null;
   let lonC: number | null = null;
-  let radiusKm = 4.5; // generous minimum
+  let radiusKm = 4.5;
 
   if (bbox) {
     const parts = bbox.split(",").map((x) => Number(x.trim()));
@@ -82,24 +100,11 @@ export async function GET(req: NextRequest) {
       radiusKm = coerceRadiusKm(sp.get("radiusKm"), Math.max(4.5, r.radiusKm));
     }
   }
-  // Fallback to central London if bbox invalid/missing
   if (latC == null || lonC == null) {
+    // Central London fallback
     latC = 51.5074;
     lonC = -0.1278;
   }
-
-  // 2) Source normalization (we currently wire OCM for "OpenChargeMap|ocm|all|*|")
-  const rawSource = (sp.get("source") || "").toLowerCase().trim();
-  const useOCM =
-    rawSource === "" ||
-    rawSource === "ocm" ||
-    rawSource === "openchargemap" ||
-    rawSource === "open charge map" ||
-    rawSource === "open-charge-map" ||
-    rawSource === "opencharge" ||
-    rawSource === "open-charge" ||
-    rawSource === "all" ||
-    rawSource === "*";
 
   // 3) Filters
   const conn = sp.get("conn") || undefined;
@@ -123,12 +128,12 @@ export async function GET(req: NextRequest) {
         u.searchParams.set("output", "json");
         u.searchParams.set("compact", "true");
         u.searchParams.set("verbose", "false");
-        u.searchParams.set("maxresults", "1000");  // bump results
+        u.searchParams.set("maxresults", "1000"); // wide result cap
         u.searchParams.set("latitude", String(lat));
         u.searchParams.set("longitude", String(lon));
         u.searchParams.set("distance", String(distKm));
         u.searchParams.set("distanceunit", "KM");
-        if (apiKey) u.searchParams.set("key", apiKey); // also as query param
+        if (apiKey) u.searchParams.set("key", apiKey);
         if (conn) u.searchParams.set("connectiontypeid", conn);
         if (minPower) u.searchParams.set("minpowerkw", minPower);
         return u;
@@ -147,10 +152,10 @@ export async function GET(req: NextRequest) {
         return arr.map(mapOcmToSite).filter(s => s.lat != null && s.lon != null);
       };
 
-      // Try at computed/min radius
+      // First try at computed/min radius
       sites = await fetchOnce(buildUrl(latC, lonC, radiusKm));
 
-      // If nothing, widen once to 8km (covers your screenshot area)
+      // If still nothing, widen once (8 km) to be generous
       if (sites.length === 0) {
         sites = await fetchOnce(buildUrl(latC, lonC, Math.max(radiusKm, 8)));
       }
@@ -164,6 +169,7 @@ export async function GET(req: NextRequest) {
         ocmStatus,
         ocmUrlUsed,
         sourceParam: rawSource,
+        center: { latC, lonC, radiusKmTried: radiusKm },
         sample: sites.slice(0, 3),
       };
     }
