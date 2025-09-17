@@ -315,11 +315,9 @@ export default function Model1HeatmapPage() {
           center={mapCenter}
           zoom={12}
           scrollWheelZoom
-          ref={mapRef}
           style={{ height: '100%', width: '100%' }}
-          whenReady={(e) => {
-            mapRef.current = e.target;
-          }}
+          // capture the Leaflet map instance without using whenReady’s event arg
+          ref={(m: any) => { mapRef.current = m; }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
