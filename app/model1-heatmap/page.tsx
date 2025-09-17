@@ -23,8 +23,6 @@ const Popup = dynamic(
   { ssr: false }
 );
 
-/* -------------------------- types & helpers -------------------------- */
-
 type HeatPoint = [number, number, number];
 
 interface StationWithScore extends OCMStation {
@@ -36,7 +34,11 @@ function isStationWithScore(x: any): x is StationWithScore {
   return !!x && typeof x === 'object' && typeof x._score === 'number';
 }
 
-/** Simple local error boundary so a bad child won't blank the page */
+function isMapAlive(m: any) {
+  return !!(m && typeof m._leaflet_id !== 'undefined');
+}
+
+/** Tiny error boundary so a misbehaving child can’t blank the page */
 class Boundary extends React.Component<{ children: React.ReactNode }, { err?: any }> {
   state = { err: undefined as any };
   static getDerivedStateFromError(err: any) {
@@ -55,7 +57,6 @@ class Boundary extends React.Component<{ children: React.ReactNode }, { err?: an
   }
 }
 
-/* -------------------------- heat layer helper -------------------------- */
 /** Attaches/removes a Leaflet.heat layer when `map` and `points` are ready */
 function useHeatLayer(map: any, points: HeatPoint[], enabled: boolean) {
   const layerRef = useRef<any>(null);
@@ -64,13 +65,13 @@ function useHeatLayer(map: any, points: HeatPoint[], enabled: boolean) {
     let cancelled = false;
 
     (async () => {
-      if (!enabled || !map) return;
+      if (!enabled || !isMapAlive(map)) return;
 
       const L = (await import('leaflet')).default as any;
       await import('leaflet.heat'); // side-effect plugin
 
       // remove previous
-      if (layerRef.current) {
+      if (layerRef.current && isMapAlive(map)) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
@@ -89,15 +90,13 @@ function useHeatLayer(map: any, points: HeatPoint[], enabled: boolean) {
 
     return () => {
       cancelled = true;
-      if (layerRef.current && map) {
+      if (layerRef.current && isMapAlive(map)) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
     };
   }, [map, enabled, points]);
 }
-
-/* ------------------------------ page ------------------------------ */
 
 export default function Model1HeatmapPage() {
   // default: London
@@ -114,19 +113,14 @@ export default function Model1HeatmapPage() {
     };
   });
 
-  // Leaflet map instance (set via ref callback — no hooks from react-leaflet)
   const [map, setMap] = useState<any>(null);
-
-  // current bbox
   const [bounds, setBounds] =
     useState<{ north: number; south: number; east: number; west: number } | null>(null);
 
-  // data state
   const [stations, setStations] = useState<StationWithScore[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // UI state
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -223,20 +217,38 @@ export default function Model1HeatmapPage() {
   // attach heat layer (only when map exists)
   useHeatLayer(map, heatPoints, showHeatmap);
 
-  // keep bounds in sync with map
+  // keep bounds in sync with map — attach once; detach only if map is still alive
   useEffect(() => {
-    if (!map) return;
+    if (!isMapAlive(map)) return;
+
+    let cancelled = false;
     const update = () => {
+      if (cancelled || !isMapAlive(map)) return;
       const b = map.getBounds?.();
       if (!b) return;
-      setBounds({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() });
+      setBounds({
+        north: b.getNorth(),
+        south: b.getSouth(),
+        east: b.getEast(),
+        west: b.getWest(),
+      });
     };
-    update();
-    map.on?.('moveend', update);
-    map.on?.('zoomend', update);
+
+    // initial + listeners
+    try {
+      update();
+      map.on('moveend', update);
+      map.on('zoomend', update);
+    } catch {}
+
     return () => {
-      map.off?.('moveend', update);
-      map.off?.('zoomend', update);
+      cancelled = true;
+      try {
+        if (isMapAlive(map)) {
+          map.off('moveend', update);
+          map.off('zoomend', update);
+        }
+      } catch {}
     };
   }, [map]);
 
@@ -250,7 +262,7 @@ export default function Model1HeatmapPage() {
       const g = await r.json();
       if (!r.ok) throw new Error(g?.error || 'Search failed');
       const lat = Number(g.lat), lon = Number(g.lon);
-      if (map && Number.isFinite(lat) && Number.isFinite(lon)) map.setView([lat, lon], 14);
+      if (isMapAlive(map) && Number.isFinite(lat) && Number.isFinite(lon)) map.setView([lat, lon], 14);
     } catch (e) {
       console.error(e);
     }
@@ -273,7 +285,7 @@ export default function Model1HeatmapPage() {
             if (!navigator.geolocation) return;
             navigator.geolocation.getCurrentPosition((pos) => {
               const { latitude, longitude } = pos.coords;
-              map?.setView([latitude, longitude], 13);
+              if (isMapAlive(map)) map.setView([latitude, longitude], 13);
             });
           }}
           style={{ padding: '0.35rem 0.6rem', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#fff' }}
@@ -281,7 +293,7 @@ export default function Model1HeatmapPage() {
           Use my location
         </button>
         <button
-          onClick={() => map?.setView(mapCenter, 12)}
+          onClick={() => isMapAlive(map) && map.setView(mapCenter, 12)}
           style={{ padding: '0.35rem 0.6rem', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#fff' }}
         >
           Reset view
@@ -314,7 +326,7 @@ export default function Model1HeatmapPage() {
         </div>
       </div>
 
-      {/* Map (inside local error boundary) */}
+      {/* Map */}
       <Boundary>
         <main style={{ height: '100%', width: '100%' }}>
           <MapContainer
@@ -322,7 +334,7 @@ export default function Model1HeatmapPage() {
             zoom={12}
             scrollWheelZoom
             style={{ height: '100%', width: '100%' }}
-            ref={setMap} // safe: ref callback runs when the real map exists
+            ref={setMap} // ref callback: gives us the real map instance
           >
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
