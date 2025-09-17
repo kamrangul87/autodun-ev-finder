@@ -1,104 +1,282 @@
-'use client';
+"use client";
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
-import 'leaflet/dist/leaflet.css';
-import { useMap, useMapEvents } from 'react-leaflet';
-import { featuresFor, scoreFor, type OCMStation } from '../../lib/model1';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  MutableRefObject,
+} from "react";
+import dynamic from "next/dynamic";
+import { type OCMStation, featuresFor, scoreFor } from "../../lib/model1";
+import "leaflet/dist/leaflet.css";
 
-const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
-const Marker        = dynamic(() => import('react-leaflet').then(m => m.Marker),        { ssr: false });
-const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
+// React-Leaflet (client only)
+const MapContainer = dynamic(
+  () => import("react-leaflet").then((m) => m.MapContainer),
+  { ssr: false }
+);
+const TileLayer = dynamic(
+  () => import("react-leaflet").then((m) => m.TileLayer),
+  { ssr: false }
+);
+const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), {
+  ssr: false,
+});
+const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
+  ssr: false,
+});
 
+// -----------------------------------------
+// Types
 type HeatPoint = [number, number, number];
-interface StationWithScore extends OCMStation { _score: number; DataSource?: string; }
-const isS = (x: any): x is StationWithScore => !!x && typeof x._score === 'number';
 
-function BoundsWatcher({ onChange }: { onChange: (b: { north: number; south: number; east: number; west: number }) => void }) {
-  const map = useMap();
-  const push = React.useCallback(() => {
-    const b = map.getBounds();
-    onChange({ north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() });
-  }, [map, onChange]);
+interface StationWithScore extends OCMStation {
+  _score: number;
+  DataSource?: string; // "ocm" | "council"
+  Feedback?: {
+    count: number;
+    averageRating: number | null;
+    reliability: number | null;
+  };
+}
 
-  useEffect(() => { push(); }, [push]);
-  useMapEvents({ moveend: push, zoomend: push });
+// -----------------------------------------
+// Utilities
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+function coerceArray<T>(x: unknown): T[] {
+  return Array.isArray(x) ? (x as T[]) : [];
+}
+
+// If /api/sites returns simplified objects, convert to an OCMStation-ish shape
+function normalizeToStation(obj: any): OCMStation | null {
+  if (obj && obj.AddressInfo && typeof obj.AddressInfo?.Latitude === "number") {
+    return obj as OCMStation; // already in OCM shape
+  }
+  if (obj && typeof obj.lat === "number" && typeof obj.lon === "number") {
+    return {
+      ID: obj.id ?? null,
+      AddressInfo: {
+        Title: obj.name ?? "EV charge point",
+        Latitude: obj.lat,
+        Longitude: obj.lon,
+        Postcode: obj.postcode ?? null,
+        AddressLine1: obj.addr ?? null,
+        Town: null,
+        StateOrProvince: null,
+        CountryID: null,
+        DistanceUnit: 0,
+        Distance: 0,
+        RelatedURL: null,
+        ContactEmail: null,
+        ContactTelephone1: null,
+      },
+      Connections: Array(
+        typeof obj.connectors === "number" ? obj.connectors : 1
+      ).fill({
+        PowerKW:
+          typeof obj.maxPowerKw === "number" ? obj.maxPowerKw : undefined,
+      }),
+      StatusType: {
+        IsOperational: obj.status ? obj.status !== "down" : null,
+        Title: obj.status ?? null,
+        IsUserSelectable: null,
+        ID: null,
+      } as any,
+    } as OCMStation;
+  }
   return null;
 }
 
-/** SAFE heat overlay: never crashes if plugin is missing. */
-function HeatOverlay({ points, enabled }: { points: HeatPoint[]; enabled: boolean }) {
-  const map = useMap();
+// -----------------------------------------
+// Heat layer (safe, no-throw)
+function HeatLayer({ points, mapRef }: { points: HeatPoint[]; mapRef: any }) {
   const layerRef = useRef<any>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    async function mount() {
-      // Remove previous
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-      if (!enabled || points.length === 0) return;
-
+    (async () => {
       try {
-        const L = (await import('leaflet')).default as any;
+        const map = mapRef?.current;
+        if (!map || !points.length) return;
 
-        // Try to ensure L.heatLayer is present; fall back silently if not.
-        let haveHeat = !!(L as any).heatLayer;
-        if (!haveHeat) {
+        // (re)load plugin every time to be safe; it’s tiny.
+        const L = (await import("leaflet")).default as any;
+        await import("leaflet.heat");
+
+        // remove old layer if any
+        if (layerRef.current) {
           try {
-            await import('leaflet.heat'); // requires `npm i leaflet.heat`
-            haveHeat = !!(L as any).heatLayer;
-          } catch (err) {
-            console.warn('[HeatOverlay] leaflet.heat not available; skipping heat layer.');
-            haveHeat = false;
+            map.removeLayer(layerRef.current);
+          } catch {
+            /* ignore */
           }
+          layerRef.current = null;
         }
-        if (!haveHeat || cancelled) return;
+
+        if (cancelled) return;
+
+        if (typeof (L as any).heatLayer !== "function") {
+          console.warn("[heat] leaflet.heat not available – skipping layer");
+          return;
+        }
 
         const layer = (L as any).heatLayer(points, {
-          radius: 45, blur: 25, maxZoom: 17, max: 1.0, minOpacity: 0.35,
+          radius: 45,
+          blur: 25,
+          maxZoom: 17,
+          max: 1.0,
+          minOpacity: 0.35,
         });
+
         layer.addTo(map);
         layerRef.current = layer;
       } catch (err) {
-        console.error('[HeatOverlay] failed to mount heat layer:', err);
-        // Don’t throw — just skip overlay so the app keeps running
+        console.error("[heat] mount failed", err);
       }
-    }
+    })();
 
-    mount();
     return () => {
       cancelled = true;
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
+      const map = mapRef?.current;
+      if (map && layerRef.current) {
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {
+          /* ignore */
+        }
       }
+      layerRef.current = null;
     };
-  }, [map, points, enabled]);
+  }, [points, mapRef]);
 
   return null;
 }
 
-function MapHandle({ mapRef }: { mapRef: React.MutableRefObject<any> }) {
-  const map = useMap();
-  useEffect(() => { mapRef.current = map; return () => { mapRef.current = null; }; }, [map, mapRef]);
-  return null;
+// -----------------------------------------
+// Feedback form (unchanged logic, made robust)
+function FeedbackForm({
+  stationId,
+  onSubmitted,
+}: {
+  stationId: number;
+  onSubmitted: () => void;
+}) {
+  const [rating, setRating] = useState<number>(5);
+  const [comment, setComment] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy || done) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stationId, rating, comment }),
+      });
+      if (!r.ok) throw new Error("feedback failed");
+      setDone(true);
+      onSubmitted();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (done) {
+    return (
+      <p style={{ color: "#22c55e", fontSize: "0.75rem", marginTop: "0.5rem" }}>
+        Thank you for your feedback!
+      </p>
+    );
+  }
+
+  return (
+    <form onSubmit={submit} style={{ marginTop: "0.5rem" }}>
+      <label style={{ display: "block", fontSize: "0.75rem" }}>
+        Rating (0–5)
+      </label>
+      <select
+        value={rating}
+        onChange={(e) => setRating(parseInt(e.target.value, 10))}
+        style={{
+          padding: "0.25rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: "0.25rem",
+          background: "#1f2937",
+          color: "#f9fafb",
+          width: "100%",
+          marginBottom: "0.25rem",
+        }}
+      >
+        {[5, 4, 3, 2, 1, 0].map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+      </select>
+
+      <label style={{ display: "block", fontSize: "0.75rem" }}>Comment</label>
+      <textarea
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        placeholder="Optional"
+        style={{
+          width: "100%",
+          height: "3rem",
+          padding: "0.25rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: "0.25rem",
+          background: "#0b1220",
+          color: "#f9fafb",
+          marginBottom: "0.25rem",
+          resize: "vertical",
+        }}
+      />
+
+      <button
+        type="submit"
+        disabled={busy}
+        style={{
+          padding: "0.25rem 0.5rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: "0.25rem",
+          background: busy ? "#374151" : "#1f2937",
+          color: "#f9fafb",
+          cursor: busy ? "not-allowed" : "pointer",
+          width: "100%",
+        }}
+      >
+        Submit
+      </button>
+    </form>
+  );
 }
+
+// -----------------------------------------
+// Page
 
 export default function Model1HeatmapPage() {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => { setMounted(true); }, []);
-
+  // default: London
   const [params] = useState(() => {
-    if (typeof window === 'undefined') return { lat: 51.5074, lon: -0.1278, dist: 25 };
+    if (typeof window === "undefined") {
+      return { lat: 51.5074, lon: -0.1278, dist: 25 };
+    }
     const sp = new URLSearchParams(window.location.search);
-    const lat = Number(sp.get('lat') || 51.5074);
-    const lon = Number(sp.get('lon') || -0.1278);
-    const dist = Number(sp.get('dist') || 25);
+    const lat = parseFloat(sp.get("lat") || "51.5074");
+    const lon = parseFloat(sp.get("lon") || "-0.1278");
+    const dist = parseFloat(sp.get("dist") || "25");
     return {
       lat: Number.isFinite(lat) ? lat : 51.5074,
       lon: Number.isFinite(lon) ? lon : -0.1278,
@@ -106,214 +284,339 @@ export default function Model1HeatmapPage() {
     };
   });
 
-  const [bounds, setBounds] =
-    useState<{ north: number; south: number; east: number; west: number } | null>(null);
-
   const [stations, setStations] = useState<StationWithScore[]>([]);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
 
-  const [showHeatmap, setShowHeatmap] = useState(false); // markers stay visible regardless
-  const [query, setQuery] = useState('');
+  const [bounds, setBounds] = useState<{
+    north: number;
+    south: number;
+    east: number;
+    west: number;
+  } | null>(null);
+
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [searchText, setSearchText] = useState("");
+
+  // Feedback refetch trigger
+  const [fbTick, setFbTick] = useState(0);
+
+  // Map ref (set safely)
   const mapRef = useRef<any>(null);
-
-  const [okIcon, offIcon] = useMemo(() => {
-    if (typeof window === 'undefined') return [undefined, undefined];
-    const L = require('leaflet');
-    const ok  = L.divIcon({ html:'<div style="width:14px;height:14px;background:#3b82f6;border-radius:50%;border:2px solid #fff;"></div>', iconSize:[18,18], className:'' });
-    const off = L.divIcon({ html:'<div style="width:14px;height:14px;background:#ef4444;border-radius:50%;border:2px solid #fff;"></div>', iconSize:[18,18], className:'' });
-    return [ok, off];
+  const setMapRef = useCallback((map: any) => {
+    mapRef.current = map;
   }, []);
 
+  // Attach map event handlers SAFELY
   useEffect(() => {
-    if (!mounted) return;
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
+    const map = mapRef.current;
+    if (!map) return;
 
-    (async () => {
-      setLoading(true); setError(null);
+    const update = () => {
       try {
-        let url = '';
+        const b = map.getBounds?.();
+        if (!b) return;
+        setBounds({
+          north: b.getNorth(),
+          south: b.getSouth(),
+          east: b.getEast(),
+          west: b.getWest(),
+        });
+      } catch (e) {
+        console.warn("[map] bounds read failed", e);
+      }
+    };
+
+    try {
+      // initial
+      update();
+      // subscribe
+      map.on?.("moveend", update);
+      map.on?.("zoomend", update);
+    } catch (e) {
+      console.warn("[map] attach failed", e);
+    }
+
+    return () => {
+      try {
+        map.off?.("moveend", update);
+        map.off?.("zoomend", update);
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [mapRef.current]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch stations whenever bbox or params change
+  useEffect(() => {
+    let abort = false;
+    (async () => {
+      setLoading(true);
+      setErrMsg(null);
+      try {
+        let url = "";
         if (bounds) {
-          const { north, south, east, west } = bounds;
-          url = `${apiBase}/api/sites?bbox=${west},${south},${east},${north}&source=ocm`;
+          const { west, south, east, north } = bounds;
+          url = `${API_BASE}/api/sites?bbox=${west},${south},${east},${north}`;
         } else {
-          url = `${apiBase}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}&source=ocm`;
+          url = `${API_BASE}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
         }
-        const r = await fetch(url, { cache: 'no-store' });
+
+        const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(`API ${r.status}`);
-        const data = await r.json();
-        const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.sites) ? data.sites : [];
+        const raw = await r.json() as any;
+        const arr =
+          Array.isArray(raw) ? raw : Array.isArray(raw?.sites) ? raw.sites : [];
 
-        const scored = arr
-          .map((s: any): StationWithScore | null => {
-            const lat = s?.AddressInfo?.Latitude ?? s?.lat;
-            const lon = s?.AddressInfo?.Longitude ?? s?.lon;
-            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-
-            if (!s.AddressInfo) {
-              s.AddressInfo = {
-                Latitude: lat, Longitude: lon,
-                Title: s.name ?? 'EV charge point',
-                Postcode: s.postcode ?? null,
-              };
-            }
-            s.DataSource = s.source ?? 'ocm';
-
-            const f = featuresFor(s as OCMStation);
+        // Normalize and score
+        const scored: StationWithScore[] = coerceArray<any>(arr)
+          .map((x) => normalizeToStation(x))
+          .filter(Boolean)
+          .map((s) => {
+            const f = featuresFor(s!);
             const sc = scoreFor(f);
-            return Object.assign({}, s, { _score: sc }) as StationWithScore;
-          })
-          .filter(isS);
+            return Object.assign({}, s!, { _score: sc }) as StationWithScore;
+          });
 
-        setStations(scored);
+        if (!abort) setStations(scored);
       } catch (e: any) {
         console.error(e);
-        setError(e?.message || 'Failed to load stations');
-        setStations([]);
+        if (!abort) {
+          setStations([]);
+          setErrMsg(e?.message || "Failed to load stations");
+        }
       } finally {
-        setLoading(false);
+        if (!abort) setLoading(false);
       }
     })();
-  }, [mounted, bounds, params.lat, params.lon, params.dist]);
+    return () => {
+      abort = true;
+    };
+  }, [bounds, params.lat, params.lon, params.dist, fbTick]);
 
+  // Heat points
   const heatPoints: HeatPoint[] = useMemo(() => {
     if (!stations.length) return [];
-    const vals = stations.map(s => s._score);
-    const min = Math.min(...vals), max = Math.max(...vals), span = max - min || 1;
-    return stations.map(s => {
-      const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
-      const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
-      return [lat as number, lon as number, (s._score - min) / span] as HeatPoint;
+    const values = stations.map((s) => s._score);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const denom = max - min || 1;
+    return stations.map((s) => {
+      const lat = s.AddressInfo?.Latitude as number;
+      const lon = s.AddressInfo?.Longitude as number;
+      return [lat, lon, (s._score - min) / denom] as HeatPoint;
     });
   }, [stations]);
 
-  async function doSearch() {
-    const q = query.trim();
+  // marker icons (safe)
+  const [operationalIcon, offlineIcon] = useMemo(() => {
+    if (typeof window === "undefined") return [undefined, undefined];
+    const L = require("leaflet");
+    const ops = L.divIcon({
+      html:
+        '<div style="width: 14px; height: 14px; background: #22c55e; border-radius: 50%; border: 2px solid #ffffff;"></div>',
+      iconSize: [18, 18],
+      className: "",
+    });
+    const off = L.divIcon({
+      html:
+        '<div style="width: 14px; height: 14px; background: #ef4444; border-radius: 50%; border: 2px solid #ffffff;"></div>',
+      iconSize: [18, 18],
+      className: "",
+    });
+    return [ops, off];
+  }, []);
+
+  // Search (Nominatim)
+  const runSearch = async () => {
+    const q = searchText.trim();
     if (!q) return;
     try {
-      const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
-      const r = await fetch(`${apiBase}/api/geocode?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
-      const g = await r.json();
-      if (!r.ok) throw new Error(g?.error || 'Search failed');
-      const lat = Number(g.lat), lon = Number(g.lon);
-      if (mapRef.current && Number.isFinite(lat) && Number.isFinite(lon)) {
-        mapRef.current.setView([lat, lon], 14);
+      const u = new URL("https://nominatim.openstreetmap.org/search");
+      u.searchParams.set("q", q);
+      u.searchParams.set("format", "jsonv2");
+      u.searchParams.set("limit", "1");
+      const r = await fetch(u.toString(), {
+        headers: { "User-Agent": "Autodun/1.0 (search)" },
+      });
+      const rows = (await r.json()) as any[];
+      if (rows?.length) {
+        const lat = parseFloat(rows[0].lat);
+        const lon = parseFloat(rows[0].lon);
+        if (Number.isFinite(lat) && Number.isFinite(lon) && mapRef.current) {
+          mapRef.current.setView([lat, lon], 13);
+        }
       }
     } catch (e) {
-      console.error(e);
+      console.warn("search failed", e);
     }
-  }
+  };
 
-  const center: [number, number] = [params.lat, params.lon];
+  const mapCenter: [number, number] = [params.lat, params.lon];
 
   return (
-    <div style={{ height:'100vh', width:'100vw', position:'relative' }}>
-      <div style={{
-        position:'absolute', top:'0.75rem', left:'0.75rem', zIndex:1000,
-        background:'rgba(12,19,38,0.92)', padding:'0.75rem', borderRadius:8,
-        color:'#f9fafb', display:'flex', gap:8, alignItems:'center', flexWrap:'wrap'
-      }}>
-        <button
-          onClick={() => navigator.geolocation?.getCurrentPosition(pos => {
-            mapRef.current?.setView([pos.coords.latitude, pos.coords.longitude], 13);
-          })}
-          style={{ padding:'0.35rem 0.6rem', background:'#1f2937', border:'1px solid #374151', borderRadius:6, color:'#fff' }}>
-          Use my location
-        </button>
-        <button
-          onClick={() => mapRef.current?.setView(center, 12)}
-          style={{ padding:'0.35rem 0.6rem', background:'#1f2937', border:'1px solid #374151', borderRadius:6, color:'#fff' }}>
-          Reset view
-        </button>
-        <button
-          onClick={() => setShowHeatmap(v => !v)}
-          style={{ padding:'0.35rem 0.6rem', background:'#1f2937', border:'1px solid #374151', borderRadius:6, color:'#fff' }}>
-          {showHeatmap ? 'Hide heatmap' : 'Heatmap'}
-        </button>
+    <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
+      {/* Controls */}
+      <div
+        style={{
+          position: "absolute",
+          top: "0.5rem",
+          left: "0.5rem",
+          zIndex: 1000,
+          background: "rgba(12,19,38,0.95)",
+          padding: "0.75rem",
+          borderRadius: "0.5rem",
+          color: "#f9fafb",
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}>
+          Autodun EV Map
+        </h1>
+        <div style={{ marginTop: "0.5rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+          <button
+            onClick={() => {
+              if (!navigator.geolocation) return;
+              navigator.geolocation.getCurrentPosition((pos) => {
+                const { latitude, longitude } = pos.coords;
+                mapRef.current?.setView([latitude, longitude], 13);
+              });
+            }}
+            style={btn}
+          >
+            Use my location
+          </button>
+          <button onClick={() => mapRef.current?.setView(mapCenter, 13)} style={btn}>
+            Reset view
+          </button>
+          <button onClick={() => setShowHeatmap((v) => !v)} style={btn}>
+            {showHeatmap ? "Markers" : "Heatmap"}
+          </button>
 
-        <input
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && doSearch()}
-          placeholder="Search postcode or area (e.g. EC1A, Westminster)"
-          style={{
-            width: 320, padding:'0.4rem 0.5rem', background:'#0b1220',
-            border:'1px solid #374151', borderRadius:6, color:'#f9fafb', fontSize:13
-          }}
-        />
-        <button
-          onClick={doSearch}
-          style={{ padding:'0.35rem 0.6rem', background:'#1f2937', border:'1px solid #374151', borderRadius:6, color:'#fff' }}>
-          Search
-        </button>
+          <input
+            placeholder="Search postcode or area (e.g. EC1A, Westminster)"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch()}
+            style={input}
+          />
+          <button onClick={runSearch} style={btn}>
+            Search
+          </button>
+        </div>
       </div>
 
-      {mounted && (
-        <main style={{ height:'100%', width:'100%' }}>
-          <MapContainer center={center} zoom={12} scrollWheelZoom style={{ height:'100%', width:'100%' }}>
-            <MapHandle mapRef={mapRef} />
-            <BoundsWatcher onChange={setBounds} />
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
+      {/* Map */}
+      <main style={{ height: "100%", width: "100%" }}>
+        <MapContainer
+          center={mapCenter}
+          zoom={13}
+          scrollWheelZoom
+          // **SAFE ref callback** – avoids the “_leaflet_events” crash
+          ref={setMapRef as unknown as MutableRefObject<any>}
+          style={{ height: "100%", width: "100%" }}
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
 
-            {/* Safe heat overlay */}
-            <HeatOverlay points={heatPoints} enabled={showHeatmap} />
+          {/* Heat layer */}
+          {showHeatmap && heatPoints.length > 0 && (
+            <HeatLayer points={heatPoints} mapRef={mapRef} />
+          )}
 
-            {stations.map((s, i) => {
-              const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
-              const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
-              if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
-
-              const title    = (s as any).AddressInfo?.Title ?? (s as any).name ?? 'EV charge point';
-              const postcode = (s as any).AddressInfo?.Postcode ?? (s as any).postcode ?? '';
-
-              const maxPowerKw = Array.isArray((s as any).Connections)
-                ? Math.max(0, ...((s as any).Connections.map((c: any) => Number(c?.PowerKW ?? 0)) as number[]))
-                : (s as any).maxPowerKw ?? null;
-
-              const isOperational =
-                typeof (s as any).StatusType?.IsOperational === 'boolean'
-                  ? (s as any).StatusType.IsOperational
-                  : null;
-
+          {/* Markers */}
+          {!showHeatmap &&
+            stations.map((s, i) => {
+              const lat = s.AddressInfo?.Latitude as number;
+              const lon = s.AddressInfo?.Longitude as number;
+              const op = s?.StatusType?.IsOperational;
               return (
                 <Marker
-                  key={i}
-                  position={[lat as number, lon as number]}
-                  icon={isOperational === null ? undefined : isOperational ? okIcon : offIcon}
+                  key={`${s.ID ?? i}-${lat}-${lon}`}
+                  position={[lat, lon]}
+                  icon={
+                    op == null
+                      ? undefined
+                      : op
+                      ? (operationalIcon as any)
+                      : (offlineIcon as any)
+                  }
                 >
                   <Popup>
-                    <strong>{title}</strong>
+                    <strong>{s.AddressInfo?.Title || "EV site"}</strong>
                     <br />
-                    Postcode: {postcode || '—'}
+                    {s.AddressInfo?.Postcode ?? ""}
                     <br />
-                    Connectors:{' '}
-                    {Array.isArray((s as any).Connections)
-                      ? (s as any).Connections.length
-                      : (s as any).connectors ?? '—'}
-                    <br />
-                    Max power: {maxPowerKw != null ? `${maxPowerKw} kW` : '—'}
+                    Max power:{" "}
+                    {s.Connections?.reduce(
+                      (m: number, c: any) =>
+                        Math.max(m, Number(c?.PowerKW || 0)),
+                      0
+                    ) || "—"}{" "}
+                    kW
                     <br />
                     Score: {s._score.toFixed(2)}
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <FeedbackForm
+                        stationId={(s.ID as number) ?? i}
+                        onSubmitted={() => setFbTick((x) => x + 1)}
+                      />
+                    </div>
                   </Popup>
                 </Marker>
               );
             })}
-          </MapContainer>
+        </MapContainer>
 
-          {!loading && !error && stations.length === 0 && (
-            <div style={{
-              position:'absolute', top:'50%', left:'50%', transform:'translate(-50%, -50%)',
-              padding:'1rem', background:'rgba(0,0,0,0.7)', borderRadius:8, color:'#f9fafb',
-              fontSize:14, zIndex:1000, textAlign:'center', maxWidth:'80%',
-            }}>
-              No stations in view. Try zooming out or moving the map.
-            </div>
-          )}
-        </main>
-      )}
+        {/* Empty state */}
+        {!loading && !errMsg && stations.length === 0 && (
+          <div style={empty}>
+            No stations found in this area. Try zooming out or moving the map.
+          </div>
+        )}
+        {/* Error state */}
+        {errMsg && (
+          <div style={empty}>
+            {errMsg}
+          </div>
+        )}
+      </main>
     </div>
   );
 }
+
+const btn: React.CSSProperties = {
+  padding: "0.35rem 0.6rem",
+  fontSize: "0.8rem",
+  border: "1px solid #374151",
+  borderRadius: "0.35rem",
+  background: "#1f2937",
+  color: "#f9fafb",
+  cursor: "pointer",
+};
+
+const input: React.CSSProperties = {
+  padding: "0.35rem 0.5rem",
+  fontSize: "0.85rem",
+  border: "1px solid #374151",
+  borderRadius: "0.35rem",
+  background: "#0b1220",
+  color: "#f9fafb",
+  minWidth: 320,
+};
+
+const empty: React.CSSProperties = {
+  position: "absolute",
+  top: "50%",
+  left: "50%",
+  transform: "translate(-50%, -50%)",
+  padding: "1rem",
+  background: "rgba(0,0,0,0.7)",
+  borderRadius: "0.5rem",
+  color: "#f9fafb",
+  fontSize: "0.9rem",
+  zIndex: 1000,
+  textAlign: "center",
+  maxWidth: "80%",
+};
