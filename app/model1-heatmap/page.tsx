@@ -7,22 +7,22 @@ import 'leaflet/dist/leaflet.css';
 
 import { featuresFor, scoreFor, type OCMStation } from '../../lib/model1';
 
-// Leaflet bits (client only)
+// React-Leaflet (client only)
 const MapContainer = dynamic(
   () => import('react-leaflet').then((m) => m.MapContainer),
-  { ssr: false },
+  { ssr: false }
 );
 const TileLayer = dynamic(
   () => import('react-leaflet').then((m) => m.TileLayer),
-  { ssr: false },
+  { ssr: false }
 );
 const Marker = dynamic(
   () => import('react-leaflet').then((m) => m.Marker),
-  { ssr: false },
+  { ssr: false }
 );
 const Popup = dynamic(
   () => import('react-leaflet').then((m) => m.Popup),
-  { ssr: false },
+  { ssr: false }
 );
 
 type HeatPoint = [number, number, number];
@@ -36,22 +36,25 @@ function isStationWithScore(x: any): x is StationWithScore {
   return !!x && typeof x === 'object' && typeof x._score === 'number';
 }
 
-// ---------- Heat layer wrapper ----------
+/** Heat layer wrapper — added/removed as `points` changes */
 function HeatLayer({ points }: { points: HeatPoint[] }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
 
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
       if (!map) return;
       const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat');
+      await import('leaflet.heat'); // plugin
 
+      // remove any previous layer
       if (layerRef.current) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
+
       if (cancelled || points.length === 0) return;
 
       const layer = (L as any).heatLayer(points, {
@@ -78,10 +81,9 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
 }
 
 export default function Model1HeatmapPage() {
-  // default: London
+  // default view: London
   const [params] = useState(() => {
-    if (typeof window === 'undefined')
-      return { lat: 51.5074, lon: -0.1278, dist: 25 };
+    if (typeof window === 'undefined') return { lat: 51.5074, lon: -0.1278, dist: 25 };
     const sp = new URLSearchParams(window.location.search);
     const lat = Number(sp.get('lat') || 51.5074);
     const lon = Number(sp.get('lon') || -0.1278);
@@ -93,18 +95,24 @@ export default function Model1HeatmapPage() {
     };
   });
 
-  const mapRef = useRef<any>(null);
+  // Leaflet map instance (set via ref callback)
+  const [map, setMap] = useState<any>(null);
+
+  // current bounds
   const [bounds, setBounds] =
     useState<{ north: number; south: number; east: number; west: number } | null>(null);
+
   const [stations, setStations] = useState<StationWithScore[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // show heat overlay (markers are always shown)
   const [showHeatmap, setShowHeatmap] = useState(false);
 
-  // search UI
+  // search input
   const [query, setQuery] = useState('');
 
-  // icons (client)
+  // simple div icons
   const [operationalIcon, offlineIcon] = useMemo(() => {
     if (typeof window === 'undefined') return [undefined, undefined];
     const L = require('leaflet');
@@ -123,9 +131,10 @@ export default function Model1HeatmapPage() {
     return [ok, off];
   }, []);
 
-  // fetch stations from /api/sites (bbox) or /api/stations (center/radius)
+  // fetch stations for bbox (preferred) or center/radius
   useEffect(() => {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
+
     async function run() {
       setLoading(true);
       setError(null);
@@ -139,17 +148,17 @@ export default function Model1HeatmapPage() {
         }
         const r = await fetch(url, { cache: 'no-store' });
         if (!r.ok) throw new Error(`API ${r.status}`);
-        // /api/sites returns { sites: [...] }; /api/stations may return array
         const data = await r.json();
         const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.sites) ? data.sites : [];
 
         const scored = arr
           .map((s: any): StationWithScore | null => {
+            // get lat/lon (works for both /api/stations and /api/sites)
             const lat = s?.AddressInfo?.Latitude ?? s?.lat;
             const lon = s?.AddressInfo?.Longitude ?? s?.lon;
-            if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
-            // If this came from /api/sites (flattened), build AddressInfo so model1 works
+            // normalise fields so model1 scoring works the same
             if (!s.AddressInfo) {
               s.AddressInfo = {
                 Latitude: lat,
@@ -160,6 +169,7 @@ export default function Model1HeatmapPage() {
             }
             s.DataSource = s.source ?? 'ocm';
 
+            // score
             const f = featuresFor(s as OCMStation);
             const sc = scoreFor(f);
             return Object.assign({}, s, { _score: sc }) as StationWithScore;
@@ -175,6 +185,7 @@ export default function Model1HeatmapPage() {
         setLoading(false);
       }
     }
+
     run();
   }, [bounds, params.lat, params.lon, params.dist]);
 
@@ -185,19 +196,20 @@ export default function Model1HeatmapPage() {
     const min = Math.min(...vals);
     const max = Math.max(...vals);
     const span = max - min || 1;
-    return stations.map((s) => {
-      const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
-      const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
-      const w = (s._score - min) / span;
-      return [lat as number, lon as number, w] as HeatPoint;
-    });
+    return stations
+      .map((s) => {
+        const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
+        const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
+        const w = (s._score - min) / span;
+        return [lat as number, lon as number, w] as HeatPoint;
+      })
+      .filter((p) => p.every((n) => Number.isFinite(n)));
   }, [stations]);
 
-  // map event binding
+  // once the map exists, read bounds + wire listeners
   useEffect(() => {
-    const map = mapRef.current;
     if (!map) return;
-    const upd = () => {
+    const update = () => {
       const b = map.getBounds?.();
       if (!b) return;
       setBounds({
@@ -207,18 +219,16 @@ export default function Model1HeatmapPage() {
         west: b.getWest(),
       });
     };
-    upd();
-    map.on?.('moveend', upd);
-    map.on?.('zoomend', upd);
+    update();
+    map.on?.('moveend', update);
+    map.on?.('zoomend', update);
     return () => {
-      map.off?.('moveend', upd);
-      map.off?.('zoomend', upd);
+      map.off?.('moveend', update);
+      map.off?.('zoomend', update);
     };
-  }, [mapRef]);
+  }, [map]);
 
-  const mapCenter: [number, number] = [params.lat, params.lon];
-
-  // search handler
+  // search (postcode or area)
   async function doSearch() {
     const q = query.trim();
     if (!q) return;
@@ -231,17 +241,19 @@ export default function Model1HeatmapPage() {
       if (!r.ok) throw new Error(g?.error || 'Search failed');
       const lat = Number(g.lat);
       const lon = Number(g.lon);
-      if (mapRef.current && Number.isFinite(lat) && Number.isFinite(lon)) {
-        mapRef.current.setView([lat, lon], 14);
+      if (map && Number.isFinite(lat) && Number.isFinite(lon)) {
+        map.setView([lat, lon], 14);
       }
     } catch (e) {
       console.error(e);
     }
   }
 
+  const mapCenter: [number, number] = [params.lat, params.lon];
+
   return (
     <div style={{ height: '100vh', width: '100vw', position: 'relative' }}>
-      {/* Toolbar */}
+      {/* Controls */}
       <div
         style={{
           position: 'absolute',
@@ -263,24 +275,26 @@ export default function Model1HeatmapPage() {
             if (!navigator.geolocation) return;
             navigator.geolocation.getCurrentPosition((pos) => {
               const { latitude, longitude } = pos.coords;
-              mapRef.current?.setView([latitude, longitude], 13);
+              map?.setView([latitude, longitude], 13);
             });
           }}
           style={{ padding: '0.35rem 0.6rem', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#fff' }}
         >
           Use my location
         </button>
+
         <button
-          onClick={() => mapRef.current?.setView(mapCenter, 12)}
+          onClick={() => map?.setView(mapCenter, 12)}
           style={{ padding: '0.35rem 0.6rem', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#fff' }}
         >
           Reset view
         </button>
+
         <button
           onClick={() => setShowHeatmap((v) => !v)}
           style={{ padding: '0.35rem 0.6rem', background: '#1f2937', border: '1px solid #374151', borderRadius: 6, color: '#fff' }}
         >
-          {showHeatmap ? 'Markers' : 'Heatmap'}
+          {showHeatmap ? 'Hide heatmap' : 'Heatmap'}
         </button>
 
         {/* Search box */}
@@ -316,71 +330,68 @@ export default function Model1HeatmapPage() {
           zoom={12}
           scrollWheelZoom
           style={{ height: '100%', width: '100%' }}
-          // capture the Leaflet map instance without using whenReady’s event arg
-          ref={(m: any) => { mapRef.current = m; }}
+          ref={setMap} // <— sets map state once the map is ready
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
+          {/* Heat overlay (markers stay visible) */}
           {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-          {!showHeatmap &&
-            stations.map((s, i) => {
-              const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
-              const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
-              const title =
-                (s as any).AddressInfo?.Title ?? (s as any).name ?? 'EV charge point';
-              const postcode =
-                (s as any).AddressInfo?.Postcode ?? (s as any).postcode ?? '';
-              const maxPowerKw =
-                Array.isArray((s as any).Connections)
-                  ? Math.max(
-                      0,
-                      ...((s as any).Connections.map((c: any) =>
-                        Number(c?.PowerKW ?? 0),
-                      ) as number[]),
-                    )
-                  : (s as any).maxPowerKw ?? null;
+          {/* Markers */}
+          {stations.map((s, i) => {
+            const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
+            const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
-              const isOperational =
-                typeof (s as any).StatusType?.IsOperational === 'boolean'
-                  ? (s as any).StatusType.IsOperational
-                  : null;
+            const title =
+              (s as any).AddressInfo?.Title ?? (s as any).name ?? 'EV charge point';
+            const postcode =
+              (s as any).AddressInfo?.Postcode ?? (s as any).postcode ?? '';
 
-              return (
-                <Marker
-                  key={i}
-                  position={[lat as number, lon as number]}
-                  icon={
-                    isOperational === null
-                      ? undefined
-                      : isOperational
-                      ? operationalIcon
-                      : offlineIcon
-                  }
-                >
-                  <Popup>
-                    <strong>{title}</strong>
-                    <br />
-                    Postcode: {postcode || '—'}
-                    <br />
-                    Connectors:{' '}
-                    {Array.isArray((s as any).Connections)
-                      ? (s as any).Connections.length
-                      : (s as any).connectors ?? '—'}
-                    <br />
-                    Max power:{' '}
-                    {maxPowerKw != null ? `${maxPowerKw} kW` : '—'}
-                    <br />
-                    Score: {s._score.toFixed(2)}
-                  </Popup>
-                </Marker>
-              );
-            })}
+            const maxPowerKw = Array.isArray((s as any).Connections)
+              ? Math.max(0, ...((s as any).Connections.map((c: any) => Number(c?.PowerKW ?? 0)) as number[]))
+              : (s as any).maxPowerKw ?? null;
+
+            const isOperational =
+              typeof (s as any).StatusType?.IsOperational === 'boolean'
+                ? (s as any).StatusType.IsOperational
+                : null;
+
+            return (
+              <Marker
+                key={i}
+                position={[lat as number, lon as number]}
+                icon={
+                  isOperational === null
+                    ? undefined
+                    : isOperational
+                    ? operationalIcon
+                    : offlineIcon
+                }
+              >
+                <Popup>
+                  <strong>{title}</strong>
+                  <br />
+                  Postcode: {postcode || '—'}
+                  <br />
+                  Connectors:{' '}
+                  {Array.isArray((s as any).Connections)
+                    ? (s as any).Connections.length
+                    : (s as any).connectors ?? '—'}
+                  <br />
+                  Max power: {maxPowerKw != null ? `${maxPowerKw} kW` : '—'}
+                  <br />
+                  Score: {s._score.toFixed(2)}
+                </Popup>
+              </Marker>
+            );
+          })}
         </MapContainer>
 
+        {/* Empty state */}
         {!loading && !error && stations.length === 0 && (
           <div
             style={{
