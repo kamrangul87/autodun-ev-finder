@@ -6,7 +6,6 @@ import 'leaflet/dist/leaflet.css';
 import { useMap, useMapEvents } from 'react-leaflet';
 import { featuresFor, scoreFor, type OCMStation } from '../../lib/model1';
 
-// Client-only React-Leaflet components
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const Marker        = dynamic(() => import('react-leaflet').then(m => m.Marker),        { ssr: false });
@@ -16,7 +15,6 @@ type HeatPoint = [number, number, number];
 interface StationWithScore extends OCMStation { _score: number; DataSource?: string; }
 const isS = (x: any): x is StationWithScore => !!x && typeof x._score === 'number';
 
-/** Syncs outer state with map bounds (no manual on/off). */
 function BoundsWatcher({ onChange }: { onChange: (b: { north: number; south: number; east: number; west: number }) => void }) {
   const map = useMap();
   const push = React.useCallback(() => {
@@ -29,32 +27,50 @@ function BoundsWatcher({ onChange }: { onChange: (b: { north: number; south: num
   return null;
 }
 
-/** Heat overlay mounted safely within the map lifecycle. */
+/** SAFE heat overlay: never crashes if plugin is missing. */
 function HeatOverlay({ points, enabled }: { points: HeatPoint[]; enabled: boolean }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      // Remove any previous layer
+
+    async function mount() {
+      // Remove previous
       if (layerRef.current) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
       if (!enabled || points.length === 0) return;
 
-      const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat'); // adds L.heatLayer
-      if (cancelled) return;
+      try {
+        const L = (await import('leaflet')).default as any;
 
-      const layer = (L as any).heatLayer(points, {
-        radius: 45, blur: 25, maxZoom: 17, max: 1.0, minOpacity: 0.35,
-      });
-      layer.addTo(map);
-      layerRef.current = layer;
-    })();
+        // Try to ensure L.heatLayer is present; fall back silently if not.
+        let haveHeat = !!(L as any).heatLayer;
+        if (!haveHeat) {
+          try {
+            await import('leaflet.heat'); // requires `npm i leaflet.heat`
+            haveHeat = !!(L as any).heatLayer;
+          } catch (err) {
+            console.warn('[HeatOverlay] leaflet.heat not available; skipping heat layer.');
+            haveHeat = false;
+          }
+        }
+        if (!haveHeat || cancelled) return;
 
+        const layer = (L as any).heatLayer(points, {
+          radius: 45, blur: 25, maxZoom: 17, max: 1.0, minOpacity: 0.35,
+        });
+        layer.addTo(map);
+        layerRef.current = layer;
+      } catch (err) {
+        console.error('[HeatOverlay] failed to mount heat layer:', err);
+        // Don’t throw — just skip overlay so the app keeps running
+      }
+    }
+
+    mount();
     return () => {
       cancelled = true;
       if (layerRef.current) {
@@ -67,7 +83,6 @@ function HeatOverlay({ points, enabled }: { points: HeatPoint[]; enabled: boolea
   return null;
 }
 
-/** Expose map instance to a ref (for search recenter). */
 function MapHandle({ mapRef }: { mapRef: React.MutableRefObject<any> }) {
   const map = useMap();
   useEffect(() => { mapRef.current = map; return () => { mapRef.current = null; }; }, [map, mapRef]);
@@ -75,11 +90,9 @@ function MapHandle({ mapRef }: { mapRef: React.MutableRefObject<any> }) {
 }
 
 export default function Model1HeatmapPage() {
-  // Prevent hydration race: render map only after client mount
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
-  // Default: London
   const [params] = useState(() => {
     if (typeof window === 'undefined') return { lat: 51.5074, lon: -0.1278, dist: 25 };
     const sp = new URLSearchParams(window.location.search);
@@ -100,11 +113,10 @@ export default function Model1HeatmapPage() {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
 
-  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [showHeatmap, setShowHeatmap] = useState(false); // markers stay visible regardless
   const [query, setQuery] = useState('');
   const mapRef = useRef<any>(null);
 
-  // Nice div icons for markers
   const [okIcon, offIcon] = useMemo(() => {
     if (typeof window === 'undefined') return [undefined, undefined];
     const L = require('leaflet');
@@ -113,7 +125,6 @@ export default function Model1HeatmapPage() {
     return [ok, off];
   }, []);
 
-  // Fetch stations (bbox if known else center/radius)
   useEffect(() => {
     if (!mounted) return;
     const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? '';
@@ -165,7 +176,6 @@ export default function Model1HeatmapPage() {
     })();
   }, [mounted, bounds, params.lat, params.lon, params.dist]);
 
-  // Heat points
   const heatPoints: HeatPoint[] = useMemo(() => {
     if (!stations.length) return [];
     const vals = stations.map(s => s._score);
@@ -197,8 +207,7 @@ export default function Model1HeatmapPage() {
   const center: [number, number] = [params.lat, params.lon];
 
   return (
-    <div style={{ height: '100vh', width: '100vw', position: 'relative' }}>
-      {/* Controls */}
+    <div style={{ height:'100vh', width:'100vw', position:'relative' }}>
       <div style={{
         position:'absolute', top:'0.75rem', left:'0.75rem', zIndex:1000,
         background:'rgba(12,19,38,0.92)', padding:'0.75rem', borderRadius:8,
@@ -239,7 +248,6 @@ export default function Model1HeatmapPage() {
         </button>
       </div>
 
-      {/* Map only after client mounted */}
       {mounted && (
         <main style={{ height:'100%', width:'100%' }}>
           <MapContainer center={center} zoom={12} scrollWheelZoom style={{ height:'100%', width:'100%' }}>
@@ -250,7 +258,7 @@ export default function Model1HeatmapPage() {
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
 
-            {/* Heat overlay toggles ON, markers always rendered */}
+            {/* Safe heat overlay */}
             <HeatOverlay points={heatPoints} enabled={showHeatmap} />
 
             {stations.map((s, i) => {
@@ -258,7 +266,7 @@ export default function Model1HeatmapPage() {
               const lon = (s as any).AddressInfo?.Longitude ?? (s as any).lon;
               if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
 
-              const title = (s as any).AddressInfo?.Title ?? (s as any).name ?? 'EV charge point';
+              const title    = (s as any).AddressInfo?.Title ?? (s as any).name ?? 'EV charge point';
               const postcode = (s as any).AddressInfo?.Postcode ?? (s as any).postcode ?? '';
 
               const maxPowerKw = Array.isArray((s as any).Connections)
