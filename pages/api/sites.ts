@@ -70,10 +70,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sp = req.query as Record<string, string | undefined>;
   const bbox = sp.bbox;
 
-  // Derive center+radius from bbox; fallback to central London.
+  // → center + radius from bbox (fallback to central London)
   let latC: number | null = null;
   let lonC: number | null = null;
-  let radiusKm = 6; // minimum radius in km
+  let radiusKm = 6; // minimum km
 
   if (bbox) {
     const parts = String(bbox).split(",").map((x) => Number(x.trim()));
@@ -86,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
   if (latC == null || lonC == null) {
-    latC = 51.5074; // London fallback center
+    latC = 51.5074;  // London center
     lonC = -0.1278;
   }
 
@@ -125,27 +125,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // First try
     let { urlUsed, ocmStatus, sites } = await fetchOnce(radiusKm);
-    // If empty, widen once
     if (sites.length === 0) {
       ({ urlUsed, ocmStatus, sites } = await fetchOnce(Math.max(radiusKm, 10)));
     }
 
-    const body: any = { sites };
+    const count = sites.length;
+    const body: any = {
+      // primary
+      sites,
+      // aliases some clients expect
+      stations: sites,
+      out: sites,
+      data: sites,
+      count,
+      counts: { out: count, sites: count, stations: count },
+    };
     if (sp.debug === "1") {
-      body.debug = { count: sites.length, authed, ocmStatus, ocmUrlUsed: urlUsed };
+      body.debug = { count, authed, ocmStatus, ocmUrlUsed: urlUsed };
     }
 
-    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.setHeader("X-Robots-Tag", "noindex");
     return res.status(200).json(body);
   } catch (e: any) {
-    // Surface exact failure for fast diagnosis (auth/rate-limit/params)
+    // expose precise failure to fix auth/rate limit quickly
     const message = typeof e?.message === "string" ? e.message : String(e);
-    return res.status(502).json({
-      error: "OCM fetch failed",
-      authed,
-      message,
-    });
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(502).json({ error: "OCM fetch failed", authed, message });
   }
 }
