@@ -1,19 +1,15 @@
-import { NextResponse } from "next/server";
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import { NextResponse } from 'next/server';
 
 export async function GET() {
-  const key = process.env.OCM_API_KEY || process.env.OPENCHARGEMAP_API_KEY;
-  return NextResponse.json(
-    {
-      hasOCMKey: !!(key && key.trim().length > 0),
-      envVarUsed: process.env.OCM_API_KEY
-        ? "OCM_API_KEY"
-        : process.env.OPENCHARGEMAP_API_KEY
-        ? "OPENCHARGEMAP_API_KEY"
-        : null,
-    },
-    { headers: { "Cache-Control": "no-store" } }
-  );
+  const keyA = process.env.OCM_API_KEY?.trim();
+  const keyB = process.env.OPENCHARGEMAP_API_KEY?.trim();
+  const key = keyA || keyB || '';
+  return NextResponse.json({
+    hasOCMKey: !!key,
+    keyName: keyA ? 'OCM_API_KEY' : keyB ? 'OPENCHARGEMAP_API_KEY' : null,
+    // never echo the key value
+  });
 }
