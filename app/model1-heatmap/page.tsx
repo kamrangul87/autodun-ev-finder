@@ -14,13 +14,11 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-// Import scoring helpers directly from the lib; these are purely
-// computational and safe to import on both server and client.  The
-// relative path resolves to `project/lib/model1.ts`.
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
+import { useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
-// Dynamically import leaflet components to avoid SSR issues.  The
-// `ssr: false` option ensures they are only loaded on the client.
+// Dynamically import leaflet components to avoid SSR issues (client-only)
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -37,12 +35,6 @@ const Popup = dynamic(
   () => import("react-leaflet").then((m) => m.Popup),
   { ssr: false }
 );
-
-// `useMap` cannot be imported dynamically because it is a hook; importing it
-// here is acceptable since it doesn't reference the `window` object itself.
-import { useMap } from "react-leaflet";
-
-import "leaflet/dist/leaflet.css";
 
 // -----------------------------------------------------------------------------
 // Feedback form component
@@ -233,7 +225,6 @@ function asOCMStations(rawItems: any[]): OCMStation[] {
   return rawItems
     .map((r, i) => {
       if (r && r.AddressInfo) return r as OCMStation;
-      // simplified shape → lift to OCM-like
       const lat = typeof r?.lat === "number" ? r.lat : null;
       const lon = typeof r?.lon === "number" ? r.lon : null;
       if (lat == null || lon == null) return null;
@@ -313,6 +304,10 @@ export default function Model1HeatmapPage() {
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState<number>(0);
 
+  // Leaflet map refs/state
+  const mapRef = useRef<any>(null);
+  const [leafletMap, setLeafletMap] = useState<any>(null);
+
   // Fetch stations whenever dependencies change
   useEffect(() => {
     async function fetchStations() {
@@ -388,9 +383,6 @@ export default function Model1HeatmapPage() {
     });
   }, [stations]);
 
-  // Map reference
-  const mapRef = useRef<any>(null);
-
   // Precreate marker icons
   const [operationalIcon, offlineIcon] = useMemo(() => {
     if (typeof window === "undefined") return [undefined, undefined];
@@ -412,7 +404,7 @@ export default function Model1HeatmapPage() {
 
   // Track and update map bounds
   useEffect(() => {
-    const map = mapRef.current;
+    const map = leafletMap;
     if (!map) return;
     const update = () => {
       const b = map.getBounds?.();
@@ -431,7 +423,7 @@ export default function Model1HeatmapPage() {
       map.off?.("moveend", update);
       map.off?.("zoomend", update);
     };
-  }, [mapRef]);
+  }, [leafletMap]);
 
   const mapCenter: [number, number] = [params.lat, params.lon];
 
@@ -556,17 +548,18 @@ export default function Model1HeatmapPage() {
           </button>
         </div>
       </div>
+
       {/* Map container */}
       <main style={{ height: "100%", width: "100%" }}>
-       <MapContainer
-  center={mapCenter}
-  zoom={13}
-  scrollWheelZoom
-  ref={mapRef}
-  style={{ height: "100%", width: "100%" }}
-  whenReady={(e) => {
-    mapRef.current = e.target;
-  }}
+        <MapContainer
+          center={mapCenter}
+          zoom={13}
+          scrollWheelZoom
+          ref={(m) => {
+            mapRef.current = m;
+            setLeafletMap(m);
+          }}
+          style={{ height: "100%", width: "100%" }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -609,7 +602,9 @@ export default function Model1HeatmapPage() {
                       <>
                         <br />
                         Source:{" "}
-                        {s.DataSource === "Council" ? "Council data" : "OpenChargeMap"}
+                        {s.DataSource === "Council"
+                          ? "Council data"
+                          : "OpenChargeMap"}
                       </>
                     )}
                     {s.StatusType?.Title && (
