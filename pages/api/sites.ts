@@ -1,6 +1,5 @@
+// pages/api/sites.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import fs from "node:fs/promises";
-import path from "node:path";
 
 export const config = { api: { externalResolver: true } };
 
@@ -9,37 +8,55 @@ const KM_PER_DEG_LAT = 111.32;
 const toRad = (d: number) => (d * Math.PI) / 180;
 const kmPerDegLon = (lat: number) => KM_PER_DEG_LAT * Math.cos(toRad(lat));
 
-function getKey() {
+function getKey(): string | undefined {
   const k = process.env.OCM_API_KEY || process.env.OPENCHARGEMAP_API_KEY;
   return k && k.trim() ? k.trim() : undefined;
 }
 
-function bboxToCenterRadius(w: number, s: number, e: number, n: number) {
+function bboxToCenterRadius(
+  w: number,
+  s: number,
+  e: number,
+  n: number
+): { latC: number; lonC: number; radiusKm: number } {
   const latC = (s + n) / 2;
   const lonC = (w + e) / 2;
-  const rLat = Math.abs(n - s) * 0.5 * KM_PER_DEG_LAT;
-  const rLon = Math.abs(e - w) * 0.5 * kmPerDegLon(latC);
-  return { latC, lonC, radiusKm: Math.max(rLat, rLon) };
+  const rLatKm = Math.abs(n - s) * 0.5 * KM_PER_DEG_LAT;
+  const rLonKm = Math.abs(e - w) * 0.5 * kmPerDegLon(latC);
+  return { latC, lonC, radiusKm: Math.max(rLatKm, rLonKm) };
 }
-function minRadius(input: string | undefined, floorKm: number) {
+
+function minRadius(input: string | undefined, floorKm: number): number {
   const n = input ? Number(input) : NaN;
   return !isFinite(n) || n <= 0 ? floorKm : Math.max(n, floorKm);
 }
-function insideBBox(lat: number, lon: number, w: number, s: number, e: number, n: number) {
-  return lon >= w && lon <= e && lat >= s && lat <= n;
-}
-function mapPOI(poi: any) {
+
+type Site = {
+  id: number | string | null;
+  lat: number | null;
+  lon: number | null;
+  name: string;
+  addr: string;
+  postcode: string | null;
+  status: "up" | "down";
+  connectors: number;
+  maxPowerKw: number;
+  source: "ocm";
+};
+
+function mapPOI(poi: any): Site {
   const ai = poi?.AddressInfo || {};
-  const conns = Array.isArray(poi?.Connections) ? poi.Connections : [];
+  const conns: any[] = Array.isArray(poi?.Connections) ? poi.Connections : [];
   const maxPower = conns.reduce((m: number, c: any) => {
     const p = Number(c?.PowerKW ?? 0);
     return isFinite(p) ? Math.max(m, p) : m;
   }, 0);
+
   return {
     id: poi?.ID ?? null,
-    lat: ai?.Latitude ?? null,
-    lon: ai?.Longitude ?? null,
-    name: ai?.Title ?? "EV charge point",
+    lat: typeof ai?.Latitude === "number" ? ai.Latitude : null,
+    lon: typeof ai?.Longitude === "number" ? ai.Longitude : null,
+    name: typeof ai?.Title === "string" ? ai.Title : "EV charge point",
     addr: [ai?.AddressLine1, ai?.Town, ai?.Postcode].filter(Boolean).join(", "),
     postcode: ai?.Postcode ?? null,
     status: poi?.StatusType?.IsOperational === false ? "down" : "up",
@@ -49,123 +66,36 @@ function mapPOI(poi: any) {
   };
 }
 
-async function loadSeedSites() {
-  const file = process.env.SEED_PATH || "public/data/seed-london.geojson";
-  try {
-    const p = path.join(process.cwd(), file);
-    const raw = await fs.readFile(p, "utf8");
-    const gj = JSON.parse(raw);
-    const feats = Array.isArray(gj?.features) ? gj.features : [];
-    return feats
-      .map((f: any, i: number) => {
-        const c = f?.geometry?.coordinates;
-        const [lon, lat] = Array.isArray(c) && c.length >= 2 ? c : [null, null];
-        return {
-          id: f?.id ?? f?.properties?.id ?? 9000000 + i,
-          lat,
-          lon,
-          name: f?.properties?.name || "EV charge point",
-          addr: f?.properties?.addr || "",
-          postcode: f?.properties?.postcode || null,
-          status: "up",
-          connectors: f?.properties?.connectors ?? 2,
-          maxPowerKw: f?.properties?.maxPowerKw ?? 22,
-          source: "seed",
-        };
-      })
-      .filter((s: any) => s.lat != null && s.lon != null);
-  } catch {
-    // tiny inline fallback if file missing
-    return [
-      { id: 9000001, lat: 51.523, lon: -0.128, name: "Russell Sq (seed)", addr: "WC1", postcode: "WC1B", status: "up", connectors: 2, maxPowerKw: 22, source: "seed" },
-      { id: 9000002, lat: 51.516, lon: -0.142, name: "Soho (seed)",        addr: "W1",  postcode: "W1D",  status: "up", connectors: 4, maxPowerKw: 50, source: "seed" },
-      { id: 9000003, lat: 51.514, lon: -0.098, name: "City (seed)",        addr: "EC4", postcode: "EC4M", status: "up", connectors: 3, maxPowerKw: 22, source: "seed" },
-    ];
-  }
-}
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const sp = req.query as Record<string, string>;
-  const dbg = sp.debug === "1";
+  const sp = req.query as Record<string, string | undefined>;
+  const bbox = sp.bbox;
 
-  // Source selection & live toggle
-  const LIVE = (process.env.LIVE_DATA || "on").toLowerCase() !== "off";
-  const sourceRaw = (sp.source || process.env.DEFAULT_SOURCE || "ocm").toLowerCase();
+  // Derive center+radius from bbox; fallback to central London.
+  let latC: number | null = null;
+  let lonC: number | null = null;
+  let radiusKm = 6; // minimum radius in km
 
-  // BBox → center+radius (min 6km). Fallback to central London if missing.
-  let latC: number | null = null, lonC: number | null = null;
-  let w: number | null = null, s: number | null = null, e: number | null = null, n: number | null = null;
-  let radiusKm = 6;
-  if (sp.bbox) {
-    const v = String(sp.bbox).split(",").map((x) => Number(x.trim()));
-    if (v.length === 4 && v.every(Number.isFinite)) {
-      [w, s, e, n] = v as [number, number, number, number];
-      const r = bboxToCenterRadius(w!, s!, e!, n!);
-      latC = r.latC; lonC = r.lonC;
+  if (bbox) {
+    const parts = String(bbox).split(",").map((x) => Number(x.trim()));
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      const [w, s, e, n] = parts as [number, number, number, number];
+      const r = bboxToCenterRadius(w, s, e, n);
+      latC = r.latC;
+      lonC = r.lonC;
       radiusKm = minRadius(sp.radiusKm, Math.max(6, r.radiusKm));
     }
   }
-  if (latC == null || lonC == null) { latC = 51.5074; lonC = -0.1278; }
-
-  // Seed mode (LIVE_DATA=off or source=seed)
-  if (!LIVE || sourceRaw === "seed") {
-    const sites = await loadSeedSites();
-    const filtered =
-      w != null && s != null && e != null && n != null
-        ? sites.filter((p) => insideBBox(p.lat, p.lon, w!, s!, e!, n!))
-        : sites;
-
-    const payload: any = { sites: filtered };
-    if (dbg) payload.debug = { mode: "seed", count: filtered.length };
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json(payload);
+  if (latC == null || lonC == null) {
+    latC = 51.5074; // London fallback center
+    lonC = -0.1278;
   }
 
-  // Council mode (optional raw GeoJSON)
-  if (sourceRaw === "council") {
-    const url = process.env.COUNCIL_URL;
-    if (!url) return res.status(500).json({ error: "COUNCIL_URL not set" });
-    try {
-      const r = await fetch(url, { cache: "no-store" });
-      const gj = await r.json();
-      const feats = Array.isArray(gj?.features) ? gj.features : [];
-      const mapped = feats
-        .map((f: any, i: number) => {
-          const [lon, lat] = f?.geometry?.coordinates ?? [];
-          return {
-            id: f?.id ?? f?.properties?.id ?? 8_000_000 + i,
-            lat, lon,
-            name: f?.properties?.name || "Council charge point",
-            addr: f?.properties?.addr || "",
-            postcode: f?.properties?.postcode || null,
-            status: "up",
-            connectors: f?.properties?.connectors ?? 2,
-            maxPowerKw: f?.properties?.maxPowerKw ?? 22,
-            source: "council",
-          };
-        })
-        .filter((p: any) => typeof p.lat === "number" && typeof p.lon === "number");
-
-      const filtered =
-        w != null && s != null && e != null && n != null
-          ? mapped.filter((p) => insideBBox(p.lat, p.lon, w!, s!, e!, n!))
-          : mapped;
-
-      const payload: any = { sites: filtered };
-      if (dbg) payload.debug = { mode: "council", count: filtered.length, url };
-      res.setHeader("Cache-Control", "no-store");
-      return res.status(200).json(payload);
-    } catch (e: any) {
-      return res.status(502).json({ error: "Council fetch failed", message: String(e) });
-    }
-  }
-
-  // OCM live mode (default)
   const key = getKey();
+  const authed = !!key;
   const headers: HeadersInit = { "User-Agent": "Autodun/1.0" };
   if (key) (headers as any)["X-API-Key"] = key;
 
-  async function fetchOCM(distKm: number) {
+  async function fetchOnce(distKm: number): Promise<{ urlUsed: string; ocmStatus: number; sites: Site[] }> {
     const u = new URL(OCM_BASE);
     u.searchParams.set("output", "json");
     u.searchParams.set("compact", "true");
@@ -181,27 +111,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const urlUsed = u.toString();
     const r = await fetch(urlUsed, { headers, cache: "no-store" });
-    const status = r.status;
+    const ocmStatus = r.status;
+
     if (!r.ok) {
       const text = await r.text().catch(() => "");
-      throw { status, urlUsed, message: `OCM ${status}: ${text.slice(0, 300)}` };
+      throw new Error(`OCM ${ocmStatus}: ${text.slice(0, 300)} @ ${urlUsed}`);
     }
+
     const data = await r.json();
     const arr = Array.isArray(data) ? data : [];
-    return { urlUsed, status, sites: arr.map(mapPOI).filter((s) => s.lat != null && s.lon != null) };
+    const sites = arr.map(mapPOI).filter((s: Site) => s.lat != null && s.lon != null);
+    return { urlUsed, ocmStatus, sites };
   }
 
   try {
-    let { urlUsed, status, sites } = await fetchOCM(radiusKm);
+    // First try
+    let { urlUsed, ocmStatus, sites } = await fetchOnce(radiusKm);
+    // If empty, widen once
     if (sites.length === 0) {
-      ({ urlUsed, status, sites } = await fetchOCM(Math.max(radiusKm, 10)));
+      ({ urlUsed, ocmStatus, sites } = await fetchOnce(Math.max(radiusKm, 10)));
     }
-    const payload: any = { sites };
-    if (dbg) payload.debug = { mode: "ocm", count: sites.length, authed: !!key, ocmStatus: status, ocmUrlUsed: urlUsed };
+
+    const body: any = { sites };
+    if (sp.debug === "1") {
+      body.debug = { count: sites.length, authed, ocmStatus, ocmUrlUsed: urlUsed };
+    }
+
     res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json(payload);
+    return res.status(200).json(body);
   } catch (e: any) {
-    // Return explicit failure so you can see exactly what's wrong
-    return res.status(502).json({ error: "OCM fetch failed", authed: !!key, ...e });
+    // Surface exact failure for fast diagnosis (auth/rate-limit/params)
+    const message = typeof e?.message === "string" ? e.message : String(e);
+    return res.status(502).json({
+      error: "OCM fetch failed",
+      authed,
+      message,
+    });
   }
 }
