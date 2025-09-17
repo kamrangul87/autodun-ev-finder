@@ -558,15 +558,15 @@ export default function Model1HeatmapPage() {
       </div>
       {/* Map container */}
       <main style={{ height: "100%", width: "100%" }}>
-        <MapContainer
-          center={mapCenter}
-          zoom={13}
-          scrollWheelZoom
-          ref={mapRef}
-          style={{ height: "100%", width: "100%" }}
-          whenCreated={(map) => {
-            mapRef.current = map;
-          }}
+       <MapContainer
+  center={mapCenter}
+  zoom={13}
+  scrollWheelZoom
+  ref={mapRef}
+  style={{ height: "100%", width: "100%" }}
+  whenReady={(e) => {
+    mapRef.current = e.target;
+  }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
