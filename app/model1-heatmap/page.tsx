@@ -7,7 +7,7 @@ import 'leaflet/dist/leaflet.css';
 
 import { featuresFor, scoreFor, type OCMStation } from '../../lib/model1';
 
-// Leaflet pieces (client-only)
+// Leaflet bits (client only)
 const MapContainer = dynamic(
   () => import('react-leaflet').then((m) => m.MapContainer),
   { ssr: false },
@@ -32,7 +32,11 @@ interface StationWithScore extends OCMStation {
   DataSource?: string;
 }
 
-// ---------- Heat layer wrapper (reliable, no “disappear”) ----------
+function isStationWithScore(x: any): x is StationWithScore {
+  return !!x && typeof x === 'object' && typeof x._score === 'number';
+}
+
+// ---------- Heat layer wrapper ----------
 function HeatLayer({ points }: { points: HeatPoint[] }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -42,9 +46,8 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
     (async () => {
       if (!map) return;
       const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat'); // augments L.heatLayer
+      await import('leaflet.heat');
 
-      // remove old
       if (layerRef.current) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
@@ -74,7 +77,6 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
   return null;
 }
 
-// ---------------------- Page ----------------------
 export default function Model1HeatmapPage() {
   // default: London
   const [params] = useState(() => {
@@ -137,29 +139,33 @@ export default function Model1HeatmapPage() {
         }
         const r = await fetch(url, { cache: 'no-store' });
         if (!r.ok) throw new Error(`API ${r.status}`);
-        // The current /api/sites returns { sites: [...] }
+        // /api/sites returns { sites: [...] }; /api/stations may return array
         const data = await r.json();
         const arr: any[] = Array.isArray(data) ? data : Array.isArray(data?.sites) ? data.sites : [];
-        const scored: StationWithScore[] = arr
-          .map((s: OCMStation) => {
+
+        const scored = arr
+          .map((s: any): StationWithScore | null => {
             const lat = s?.AddressInfo?.Latitude ?? s?.lat;
             const lon = s?.AddressInfo?.Longitude ?? s?.lon;
             if (typeof lat !== 'number' || typeof lon !== 'number') return null;
-            const f = featuresFor(s as any);
-            const sc = scoreFor(f);
-            // carry postcode/name if using the simplified sites payload
-            if (!s.AddressInfo && (s as any).postcode) {
-              (s as any).AddressInfo = {
+
+            // If this came from /api/sites (flattened), build AddressInfo so model1 works
+            if (!s.AddressInfo) {
+              s.AddressInfo = {
                 Latitude: lat,
                 Longitude: lon,
-                Postcode: (s as any).postcode,
-                Title: (s as any).name ?? 'EV charge point',
+                Postcode: s.postcode ?? null,
+                Title: s.name ?? 'EV charge point',
               };
             }
-            (s as any).DataSource = (s as any).source ?? 'ocm';
-            return Object.assign({}, s, { _score: sc });
+            s.DataSource = s.source ?? 'ocm';
+
+            const f = featuresFor(s as OCMStation);
+            const sc = scoreFor(f);
+            return Object.assign({}, s, { _score: sc }) as StationWithScore;
           })
-          .filter(Boolean);
+          .filter(isStationWithScore);
+
         setStations(scored);
       } catch (e: any) {
         console.error(e);
@@ -230,7 +236,6 @@ export default function Model1HeatmapPage() {
       }
     } catch (e) {
       console.error(e);
-      // silently ignore for now
     }
   }
 
@@ -313,7 +318,6 @@ export default function Model1HeatmapPage() {
           ref={mapRef}
           style={{ height: '100%', width: '100%' }}
           whenReady={(e) => {
-            // keep a concrete map instance ref available ASAP
             mapRef.current = e.target;
           }}
         >
@@ -322,10 +326,8 @@ export default function Model1HeatmapPage() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {/* Heat layer */}
           {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-          {/* Marker layer */}
           {!showHeatmap &&
             stations.map((s, i) => {
               const lat = (s as any).AddressInfo?.Latitude ?? (s as any).lat;
@@ -375,14 +377,12 @@ export default function Model1HeatmapPage() {
                     {maxPowerKw != null ? `${maxPowerKw} kW` : '—'}
                     <br />
                     Score: {s._score.toFixed(2)}
-                    {/* (optional) you can add feedback UI back here later */}
                   </Popup>
                 </Marker>
               );
             })}
         </MapContainer>
 
-        {/* Empty state */}
         {!loading && !error && stations.length === 0 && (
           <div
             style={{
