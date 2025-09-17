@@ -75,4 +75,121 @@
     "DataSource": "Council",
     "Borough": "Birmingham"
   }
+  ,
+  {
+    "ID": -4,
+    "AddressInfo": {
+      "Title": "Acton EV Hub",
+      "AddressLine1": "High Street",
+      "Town": "London",
+      "Postcode": "W3 6LJ",
+      "Latitude": 51.508,
+      "Longitude": -0.28,
+      "ContactTelephone1": "020 1234 5678"
+    },
+    "Connections": [
+      {
+        "ID": 1,
+        "ConnectionType": {
+          "Title": "CCS",
+          "FormalName": "CCS"
+        },
+        "PowerKW": 50
+      },
+      {
+        "ID": 2,
+        "ConnectionType": {
+          "Title": "Type 2",
+          "FormalName": "Type 2"
+        },
+        "PowerKW": 22
+      }
+    ],
+    "StatusType": {
+      "Title": "Operational",
+      "IsOperational": true
+    },
+    "DataSource": "Council",
+    "Borough": "Ealing"
+  },
+  {
+    "ID": -5,
+    "AddressInfo": {
+      "Title": "Westminster Charging Plaza",
+      "AddressLine1": "Oxford Street",
+      "Town": "London",
+      "Postcode": "W1D 2DH",
+      "Latitude": 51.515,
+      "Longitude": -0.142,
+      "ContactTelephone1": "020 8765 4321"
+    },
+    "Connections": [
+      {
+        "ID": 1,
+        "ConnectionType": {
+          "Title": "CCS",
+          "FormalName": "CCS"
+        },
+        "PowerKW": 100
+      },
+      {
+        "ID": 2,
+        "ConnectionType": {
+          "Title": "Type 2",
+          "FormalName": "Type 2"
+        },
+        "PowerKW": 22
+      },
+      {
+        "ID": 3,
+        "ConnectionType": {
+          "Title": "CHAdeMO",
+          "FormalName": "CHAdeMO"
+        },
+        "PowerKW": 50
+      }
+    ],
+    "StatusType": {
+      "Title": "Operational",
+      "IsOperational": true
+    },
+    "DataSource": "Council",
+    "Borough": "Westminster"
+  },
+  {
+    "ID": -6,
+    "AddressInfo": {
+      "Title": "Canary Wharf EV Station",
+      "AddressLine1": "Canary Wharf",
+      "Town": "London",
+      "Postcode": "E14 5AB",
+      "Latitude": 51.5055,
+      "Longitude": -0.023,
+      "ContactTelephone1": "020 9876 5432"
+    },
+    "Connections": [
+      {
+        "ID": 1,
+        "ConnectionType": {
+          "Title": "CCS",
+          "FormalName": "CCS"
+        },
+        "PowerKW": 150
+      },
+      {
+        "ID": 2,
+        "ConnectionType": {
+          "Title": "Type 2",
+          "FormalName": "Type 2"
+        },
+        "PowerKW": 11
+      }
+    ],
+    "StatusType": {
+      "Title": "Operational",
+      "IsOperational": true
+    },
+    "DataSource": "Council",
+    "Borough": "Tower Hamlets"
+  }
 ]

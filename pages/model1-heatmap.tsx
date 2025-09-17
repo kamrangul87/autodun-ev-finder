@@ -1,30 +1,30 @@
-"use client";
-
+// pages/model1-heatmap.tsx
+//
 // This page renders an EV charging heatmap using the Model‑1 scoring functions
 // from `lib/model1.ts`. It fetches charging stations from the existing
-// `/api/stations` and `/api/sites` endpoints and then computes a score for each
-// station based on its total power, maximum power and number of
-// connectors. Those scores are normalised and passed to a Leaflet heat
-// layer to visualise the relative intensity of charging infrastructure
-// across an area. Stations are also displayed as markers with a popup
-// containing basic details and the raw score. A default view centres on
-// London but you can adjust the latitude, longitude and radius by
-// editing the query parameters in the URL (for example
-// `?lat=53.48&lon=-2.24&dist=25` to focus on Manchester).
+// `/api/stations` endpoint and then computes a score for each station based on
+// its total power, maximum power and number of connectors. Those scores are
+// normalised and passed to a Leaflet heat layer to visualise the relative
+// intensity of charging infrastructure across an area. Stations are also
+// displayed as markers with a popup containing basic details and the raw
+// score.  A default view centres on London but you can adjust the latitude,
+// longitude and radius by editing the query parameters in the URL (for
+// example `?lat=53.48&lon=-2.24&dist=25` to focus on Manchester).
+
+/* eslint react/no-unescaped-entities: off */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 // Import scoring helpers directly from the lib; these are purely
-// computational and safe to import on both server and client.  The
-// relative path resolves to `project/lib/model1.ts`.
-import { featuresFor, scoreFor, type OCMStation } from '../../lib/model1';
+// computational and safe to import on both server and client.
+import { featuresFor, scoreFor, type OCMStation } from '../lib/model1';
 
 // Dynamically import leaflet components to avoid SSR issues.  The
 // `ssr: false` option ensures they are only loaded on the client.
-const MapContainer = dynamic(() => import('react-leaflet').then((m) => m.MapContainer), { ssr: false });
-const TileLayer = dynamic(() => import('react-leaflet').then((m) => m.TileLayer), { ssr: false });
-const Marker = dynamic(() => import('react-leaflet').then((m) => m.Marker), { ssr: false });
-const Popup = dynamic(() => import('react-leaflet').then((m) => m.Popup), { ssr: false });
+const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
+const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer),    { ssr: false });
+const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker),       { ssr: false });
+const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup),        { ssr: false });
 
 // `useMap` cannot be imported dynamically because it is a hook; importing it
 // here is acceptable since it doesn't reference the `window` object itself.
@@ -68,17 +68,11 @@ function FeedbackForm({ stationId, onSubmitted }: { stationId: number; onSubmitt
     }
   };
   if (submitted) {
-    return (
-      <p style={{ color: '#22c55e', fontSize: '0.75rem', marginTop: '0.5rem' }}>
-        Thank you for your feedback!
-      </p>
-    );
+    return <p style={{ color: '#22c55e', fontSize: '0.75rem', marginTop: '0.5rem' }}>Thank you for your feedback!</p>;
   }
   return (
     <form onSubmit={handleSubmit} style={{ marginTop: '0.5rem' }}>
-      <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.25rem' }}>
-        Rating (0–5):
-      </label>
+      <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.25rem' }}>Rating (0–5):</label>
       <select
         value={rating}
         onChange={(e) => setRating(parseInt(e.target.value, 10))}
@@ -94,9 +88,7 @@ function FeedbackForm({ stationId, onSubmitted }: { stationId: number; onSubmitt
         }}
       >
         {[5, 4, 3, 2, 1, 0].map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
+          <option key={n} value={n}>{n}</option>
         ))}
       </select>
       <label style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.25rem' }}>Comment:</label>
@@ -144,15 +136,27 @@ type HeatPoint = [number, number, number];
 
 interface StationWithScore extends OCMStation {
   _score: number;
+  // Status information from the API (if available).  When provided this
+  // object contains a `Title` (e.g. "Operational") and `IsOperational`
+  // boolean.  These properties are optional because earlier versions of
+  // the API did not include status data.
   StatusType?: {
     Title: string | null;
     IsOperational: boolean | null;
   };
+
+  // Aggregated user feedback.  If no feedback exists, `count` will be 0 and
+  // `averageRating`/`reliability` will be null.  Reliability is scaled to
+  // [0,1] by dividing the average rating by 5.  These fields are optional
+  // because older versions of the API may not include them.
   Feedback?: {
     count: number;
     averageRating: number | null;
     reliability: number | null;
   };
+
+  // Data source flag.  When present this indicates whether the station
+  // originated from OpenChargeMap ("OCM") or a council dataset ("Council").
   DataSource?: string;
 }
 
@@ -175,11 +179,7 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
       await import('leaflet.heat');
       // Remove previous layer if any
       if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {
-          /* ignore */
-        }
+        try { map.removeLayer(layerRef.current); } catch { /* ignore */ }
         layerRef.current = null;
       }
       if (!map || points.length === 0) return;
@@ -198,17 +198,23 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {
-          /* ignore */
-        }
+        try { map.removeLayer(layerRef.current); } catch { /* ignore */ }
         layerRef.current = null;
       }
     };
   }, [map, points]);
   return null;
 }
+
+// -----------------------------------------------------------------------------
+/*
+ * Legacy duplicate of the FeedbackForm component.  This version hard‑coded
+ * calls to `/api/feedback` and has been removed in favour of the version
+ * defined near the top of this file which respects the NEXT_PUBLIC_API_BASE
+ * environment variable.  Leaving this comment here as a reminder to avoid
+ * duplicate component definitions in future.  The implementation below has
+ * been intentionally deleted.
+ */
 
 // -----------------------------------------------------------------------------
 // Main page component
@@ -240,9 +246,7 @@ export default function Model1HeatmapPage() {
   // Track the current map bounds. When null, we fall back to the initial
   // lat/lon/dist from query params.  The bounds object contains north,
   // south, east and west properties.
-  const [bounds, setBounds] = useState<
-    { north: number; south: number; east: number; west: number } | null
-  >(null);
+  const [bounds, setBounds] = useState<{ north: number; south: number; east: number; west: number } | null>(null);
   // Toggle between heatmap and marker views. Heatmap is shown by default.
   const [showHeatmap, setShowHeatmap] = useState<boolean>(true);
 
@@ -396,38 +400,23 @@ export default function Model1HeatmapPage() {
   const mapCenter: [number, number] = [params.lat, params.lon];
 
   return (
-    <div style={{ height: '100vh', width: '100vw', position: 'relative' }}>
-      {/* Header with controls */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '0.5rem',
-          left: '0.5rem',
-          zIndex: 1000,
-          background: 'rgba(12, 19, 38, 0.9)',
-          padding: '0.75rem',
-          borderRadius: '0.25rem',
-          color: '#f9fafb',
-        }}
-      >
-        <h1 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Autodun EV Map</h1>
-        <p style={{ margin: 0, fontSize: '0.75rem', color: '#9ca3af' }}>
-          Explore EV hotspots &amp; charging insights
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <header style={{ padding: '1rem', background: '#0b1220', color: '#fff' }}>
+        <h1 style={{ fontSize: '1.25rem', fontWeight: 600 }}>EV Heatmap (Model‑1)</h1>
+        <p style={{ fontSize: '0.875rem', marginTop: '0.25rem' }}>
+          Scores are computed using the Model‑1 algorithm (based on total power, maximum
+          power and number of connectors). Use query parameters `lat`, `lon` and
+          `dist` (in km) to explore different areas.
         </p>
-        <div style={{ marginTop: '0.5rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+        {loading && <p style={{ color: '#999', marginTop: '0.5rem' }}>Loading stations…</p>}
+        {error && <p style={{ color: '#f87171', marginTop: '0.5rem' }}>{error}</p>}
+        {/* Toggle and summary row */}
+        <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <button
-            onClick={() => {
-              if (!navigator.geolocation) return;
-              navigator.geolocation.getCurrentPosition((pos) => {
-                const { latitude, longitude } = pos.coords;
-                if (mapRef.current) {
-                  mapRef.current.setView([latitude, longitude], 13);
-                }
-              });
-            }}
+            onClick={() => setShowHeatmap((prev) => !prev)}
             style={{
               padding: '0.25rem 0.5rem',
-              fontSize: '0.75rem',
+              fontSize: '0.875rem',
               border: '1px solid #374151',
               borderRadius: '0.25rem',
               background: '#1f2937',
@@ -435,37 +424,21 @@ export default function Model1HeatmapPage() {
               cursor: 'pointer',
             }}
           >
-            Use my location
+            {showHeatmap ? 'Show Markers' : 'Show Heatmap'}
           </button>
-          <button
-            onClick={() => {
-              if (mapRef.current) {
-                mapRef.current.setView(mapCenter, params.dist <= 0 ? undefined : undefined);
-              }
-            }}
-            style={{
-              padding: '0.25rem 0.5rem',
-              fontSize: '0.75rem',
-              border: '1px solid #374151',
-              borderRadius: '0.25rem',
-              background: '#1f2937',
-              color: '#f9fafb',
-              cursor: 'pointer',
-            }}
-          >
-            Reset view
-          </button>
-          {/* Connector filter */}
+          {/* Connector filter dropdown */}
           <select
             value={connFilter}
             onChange={(e) => setConnFilter(e.target.value)}
             style={{
-              padding: '0.25rem',
-              fontSize: '0.75rem',
+              padding: '0.25rem 0.5rem',
+              fontSize: '0.875rem',
               border: '1px solid #374151',
               borderRadius: '0.25rem',
               background: '#1f2937',
               color: '#f9fafb',
+              cursor: 'pointer',
+              appearance: 'none',
             }}
           >
             <option value="">All connectors</option>
@@ -473,80 +446,58 @@ export default function Model1HeatmapPage() {
             <option value="type 2">Type 2</option>
             <option value="chademo">CHAdeMO</option>
           </select>
-          {/* Data source filter */}
+          {/* Data source filter dropdown */}
           <select
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value)}
             style={{
-              padding: '0.25rem',
-              fontSize: '0.75rem',
+              padding: '0.25rem 0.5rem',
+              fontSize: '0.875rem',
               border: '1px solid #374151',
               borderRadius: '0.25rem',
               background: '#1f2937',
               color: '#f9fafb',
+              cursor: 'pointer',
+              appearance: 'none',
             }}
           >
             <option value="all">All sources</option>
             <option value="ocm">OpenChargeMap</option>
             <option value="council">Council</option>
           </select>
-          {/* Toggle heatmap/markers */}
-          <button
-            onClick={() => setShowHeatmap((v) => !v)}
-            style={{
-              padding: '0.25rem 0.5rem',
-              fontSize: '0.75rem',
-              border: '1px solid #374151',
-              borderRadius: '0.25rem',
-              background: '#1f2937',
-              color: '#f9fafb',
-              cursor: 'pointer',
-            }}
-          >
-            {showHeatmap ? 'Markers' : 'Heatmap'}
-          </button>
+          {!loading && !error && (
+            <span style={{ color: '#9ca3af', fontSize: '0.875rem' }}>
+              Found {stations.length} stations {bounds ? 'in view' : `within ${params.dist} km`}
+            </span>
+          )}
         </div>
-      </div>
-      {/* Map container */}
-      <main style={{ height: '100%', width: '100%' }}>
+      </header>
+      <main style={{ flexGrow: 1, position: 'relative' }}>
+        {/* Map must only render on client; MapContainer is dynamic imported */}
         <MapContainer
           center={mapCenter}
-          zoom={13}
-          scrollWheelZoom
-          ref={mapRef}
+          zoom={Math.max(11, Math.min(15, Math.log2(500 / params.dist)))}
           style={{ height: '100%', width: '100%' }}
-          whenCreated={(map) => {
-            mapRef.current = map;
-          }}
+          whenCreated={(map) => { mapRef.current = map; }}
         >
           <TileLayer
-            attribution="&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'
           />
           {/* Heat layer (rendered only when heatmap view is enabled) */}
           {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
           {/* Marker layer (rendered only when heatmap view is disabled) */}
-          {!showHeatmap &&
-            stations.map((s, idx) => {
-              const lat = s.AddressInfo?.Latitude as number;
-              const lon = s.AddressInfo?.Longitude as number;
-              const isOperational =
-                typeof s.StatusType?.IsOperational === 'boolean'
-                  ? s.StatusType?.IsOperational
-                  : null;
+          {!showHeatmap && stations.map((s, idx) => {
+            const lat = s.AddressInfo?.Latitude as number;
+            const lon = s.AddressInfo?.Longitude as number;
+              const isOperational = typeof s.StatusType?.IsOperational === 'boolean' ? s.StatusType?.IsOperational : null;
               return (
                 <Marker
                   key={idx}
                   position={[lat, lon]}
                   // Choose an icon based on operational status.  If status is
                   // unknown then fall back to the default Leaflet icon (undefined).
-                  icon={
-                    isOperational === null
-                      ? undefined
-                      : isOperational
-                      ? operationalIcon
-                      : offlineIcon
-                  }
+                  icon={isOperational === null ? undefined : isOperational ? operationalIcon : offlineIcon}
                 >
                   <Popup>
                     <strong>{s.AddressInfo?.Title || 'Unnamed Station'}</strong>
@@ -556,6 +507,7 @@ export default function Model1HeatmapPage() {
                     {s.AddressInfo?.Postcode ? ` ${s.AddressInfo.Postcode}` : ''}
                     <br />
                     Score: {s._score.toFixed(2)}
+
                     {/* Indicate data source (OCM vs. Council) */}
                     {s.DataSource && (
                       <>
@@ -567,8 +519,9 @@ export default function Model1HeatmapPage() {
                       <>
                         <br />
                         Status: {s.StatusType.Title}
-                        {typeof s.StatusType.IsOperational === 'boolean' &&
-                          (s.StatusType.IsOperational ? ' (Operational)' : ' (Not Operational)')}
+                        {typeof s.StatusType.IsOperational === 'boolean' && (
+                          s.StatusType.IsOperational ? ' (Operational)' : ' (Not Operational)'
+                        )}
                       </>
                     )}
                     {/* Show reliability and feedback count if available */}
@@ -608,7 +561,7 @@ export default function Model1HeatmapPage() {
                   </Popup>
                 </Marker>
               );
-            })}
+          })}
         </MapContainer>
         {/* Heatmap legend: displayed when heatmap is active */}
         {showHeatmap && (
