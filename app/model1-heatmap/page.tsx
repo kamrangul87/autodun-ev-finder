@@ -2,7 +2,6 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import L, { LatLng } from 'leaflet';
 import { useMap } from 'react-leaflet';
 
 // Load react-leaflet components dynamically (avoids SSR issues)
@@ -11,9 +10,12 @@ const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLaye
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// Heat plugin (ensure "leaflet.heat" is in package.json deps)
-import 'leaflet.heat';
+// IMPORTANT: do NOT import 'leaflet' at top-level (causes "window is not defined" on SSR)
+// We’ll load it dynamically when the map is ready.
+// Also, keep leaflet.heat’s runtime under the same dynamic load.
 
+// ---- Types (no runtime import) ----
+type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
 type Station = {
   lat: number; lon: number; name?: string | null;
@@ -22,8 +24,8 @@ type Station = {
   raw: OcmPoi;
 };
 
-/** Distance (km) from bounds as half of diagonal */
-function kmFromBounds(bounds: L.LatLngBounds): number {
+/** Distance (km) from bounds as half of diagonal using haversine */
+function kmFromBounds(bounds: any): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
   const R = 6371;
@@ -71,7 +73,7 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
 }
 
 /** Child helper that fires once the map instance is available */
-const OnMapReady: React.FC<{ onReady: (map: L.Map) => void }> = ({ onReady }) => {
+const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
   const map = useMap();
   useEffect(() => {
     onReady(map);
@@ -79,7 +81,7 @@ const OnMapReady: React.FC<{ onReady: (map: L.Map) => void }> = ({ onReady }) =>
   return null;
 };
 
-const SearchBox: React.FC<{ onLocate: (ll: LatLng | null, zoom?: number) => void }> = ({ onLocate }) => {
+const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -99,7 +101,7 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLng | null, zoom?: number) => void
       if (arr?.length) {
         const hit = arr[0];
         const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
-        onLocate(new L.LatLng(lat, lon), 13);
+        onLocate({ lat, lng: lon }, 13);
       } else {
         alert('No results for that place/postcode.');
       }
@@ -168,32 +170,43 @@ const Model1HeatmapPage: React.FC = () => {
 
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
-  const mapRef = useRef<L.Map | null>(null);
+  const mapRef = useRef<any>(null);
+  const LRef = useRef<any>(null); // holds dynamically imported Leaflet
 
-  const onMapReady = (map: L.Map) => {
+  const onMapReady = async (map: any) => {
     mapRef.current = map;
+
+    // Dynamically import Leaflet and the heat plugin on the client
+    const leaflet = await import('leaflet');
+    await import('leaflet.heat');
+    LRef.current = leaflet;
+
     document.getElementById('markersBtn')?.addEventListener('click', () => setShowMarkers(s => !s));
     document.getElementById('heatBtn')?.addEventListener('click', () => setShowHeat(s => !s));
   };
 
-  const handleLocate = async (ll: LatLng | null, zoom = 13) => {
+  const handleLocate = async (ll: LatLngLike | null, zoom = 13) => {
     const map = mapRef.current; if (!map) return;
     if (ll) {
-      map.setView(ll, zoom);
+      map.setView([ll.lat, ll.lng], zoom);
     } else if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        pos => map.setView(new L.LatLng(pos.coords.latitude, pos.coords.longitude), 13),
+        pos => map.setView([pos.coords.latitude, pos.coords.longitude], 13),
         () => alert('Location permission denied')
       );
     }
   };
 
-  // Manage heat layer
+  // Manage heat layer (create only after Leaflet is loaded)
   useEffect(() => {
-    const map = mapRef.current; if (!map) return;
+    const map = mapRef.current;
+    const L = LRef.current;
+    if (!map || !L) return;
+
     if (showHeat) {
       const points = stations.map(s => [s.lat, s.lon, Math.max(0.05, Math.min(1, s.score ?? 0.2))]) as [number, number, number][];
       if (!heatLayerRef.current) {
+        // create layer (leaflet.heat is already imported)
         // @ts-ignore
         heatLayerRef.current = (L as any).heatLayer(points, { radius: 22, blur: 20, maxZoom: 17 });
         heatLayerRef.current.addTo(map);
@@ -216,7 +229,7 @@ const Model1HeatmapPage: React.FC = () => {
         zoom={12}
         style={{ height: '100%', width: '100%' }}
       >
-        {/* Get the map instance safely */}
+        {/* capture map instance & load Leaflet on client */}
         <OnMapReady onReady={onMapReady} />
 
         <TileLayer
