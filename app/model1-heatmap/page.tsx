@@ -1,4 +1,5 @@
 'use client';
+import { useMap } from 'react-leaflet';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
@@ -7,7 +8,6 @@ import L, { LatLng } from 'leaflet';
 // Load react-leaflet pieces dynamically (avoids SSR issues)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
-const useMap        = dynamic(() => import('react-leaflet').then(m => m.useMap),        { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
