@@ -154,7 +154,7 @@ const Model1HeatmapPage: React.FC = () => {
   const [showHeat, setShowHeat] = useState(false);
 
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
-  const heatLayerRef = useRef<L.HeatLayer | null>(null);
+  const heatLayerRef = useRef<any>(null);
   const mapRef = useRef<L.Map | null>(null);
 
   const onMapReady = (map: L.Map) => {
