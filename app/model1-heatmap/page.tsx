@@ -1,17 +1,17 @@
 'use client';
-import { useMap } from 'react-leaflet';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import L, { LatLng } from 'leaflet';
+import { useMap } from 'react-leaflet';
 
-// Load react-leaflet pieces dynamically (avoids SSR issues)
+// Load react-leaflet components dynamically (avoids SSR issues)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// leaflet.heat (make sure dependency exists in package.json)
+// Heat plugin (ensure "leaflet.heat" is in package.json deps)
 import 'leaflet.heat';
 
 type OcmPoi = any;
@@ -22,14 +22,18 @@ type Station = {
   raw: OcmPoi;
 };
 
+/** Distance (km) from bounds as half of diagonal */
 function kmFromBounds(bounds: L.LatLngBounds): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
-  const R = 6371, toRad = (d: number) => d * Math.PI / 180;
+  const R = 6371;
+  const toRad = (d: number) => d * Math.PI / 180;
   const dLat = toRad(ne.lat - sw.lat);
   const dLon = toRad(ne.lng - sw.lng);
-  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(sw.lat))*Math.cos(toRad(ne.lat))*Math.sin(dLon/2)**2;
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(sw.lat)) * Math.cos(toRad(ne.lat)) *
+            Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return (R * c) / 2;
 }
 
@@ -66,6 +70,15 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
+/** Child helper that fires once the map instance is available */
+const OnMapReady: React.FC<{ onReady: (map: L.Map) => void }> = ({ onReady }) => {
+  const map = useMap();
+  useEffect(() => {
+    onReady(map);
+  }, [map, onReady]);
+  return null;
+};
+
 const SearchBox: React.FC<{ onLocate: (ll: LatLng | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -79,9 +92,9 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLng | null, zoom?: number) => void
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove if you want global
+      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
 
-      const r = await fetch(url.toString(), { headers: { 'Accept': 'application/json' } });
+      const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
       if (arr?.length) {
         const hit = arr[0];
@@ -175,6 +188,7 @@ const Model1HeatmapPage: React.FC = () => {
     }
   };
 
+  // Manage heat layer
   useEffect(() => {
     const map = mapRef.current; if (!map) return;
     if (showHeat) {
@@ -186,15 +200,13 @@ const Model1HeatmapPage: React.FC = () => {
       } else {
         heatLayerRef.current.setLatLngs(points);
       }
-    } else {
-      if (heatLayerRef.current) {
-        heatLayerRef.current.remove();
-        heatLayerRef.current = null;
-      }
+    } else if (heatLayerRef.current) {
+      heatLayerRef.current.remove();
+      heatLayerRef.current = null;
     }
   }, [showHeat, stations]);
 
-  const markers = useMemo(() => showMarkers ? stations : [], [showMarkers, stations]);
+  const markers = useMemo(() => (showMarkers ? stations : []), [showMarkers, stations]);
 
   return (
     <div className="w-full h-[calc(100vh-64px)] relative">
@@ -203,18 +215,20 @@ const Model1HeatmapPage: React.FC = () => {
         center={[51.5072, -0.1276]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
-        whenCreated={(map) => onMapReady(map)}
       >
+        {/* Get the map instance safely */}
+        <OnMapReady onReady={onMapReady} />
+
         <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
+          attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* data wiring */}
+        {/* Data wiring */}
         {/* @ts-ignore */}
         <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
 
-        {/* markers */}
+        {/* Markers */}
         {markers.map((s, i) => (
           <CircleMarker key={`${s.lat},${s.lon},${i}`} center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
             <Popup>
