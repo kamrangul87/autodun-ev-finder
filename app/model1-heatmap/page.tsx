@@ -203,7 +203,7 @@ const Model1HeatmapPage: React.FC = () => {
         center={[51.5072, -0.1276]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
-        whenReady={(ctx) => onMapReady(ctx.target)}
+        whenCreated={(map) => onMapReady(map)}
       >
         <TileLayer
           attribution='&copy; OpenStreetMap contributors'
