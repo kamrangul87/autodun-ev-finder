@@ -1,14 +1,27 @@
-import { NextRequest } from "next/server";
+import { NextRequest } from 'next/server';
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const q = searchParams.get("q");
-  if (!q) return new Response(JSON.stringify({ error: "Missing q" }), { status: 400 });
-
-  const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&countrycodes=gb`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Autodun-EV-Finder/1.0 (contact: info@autodun.com)" }
-  });
-  const data = await res.json();
-  return new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+  const q = (req.nextUrl.searchParams.get('q') || '').trim();
+  if (!q) return new Response(JSON.stringify({ error: 'q required' }), { status: 400 });
+  try {
+    const u = new URL('https://nominatim.openstreetmap.org/search');
+    u.searchParams.set('q', q);
+    u.searchParams.set('format', 'json');
+    u.searchParams.set('limit', '1');
+    const r = await fetch(u.toString(), {
+      headers: { 'User-Agent': 'Autodun EV Finder' },
+      cache: 'no-store',
+    });
+    const arr = await r.json();
+    if (!Array.isArray(arr) || !arr.length) {
+      return new Response(JSON.stringify({ error: 'no results' }), { status: 404 });
+    }
+    const hit = arr[0];
+    return new Response(JSON.stringify({ lat: hit.lat, lon: hit.lon, display_name: hit.display_name }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: 'geocode failed' }), { status: 500 });
+  }
 }
