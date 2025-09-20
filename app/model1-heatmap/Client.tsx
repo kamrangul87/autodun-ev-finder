@@ -1,38 +1,35 @@
 "use client";
 
 /**
- * Autodun EV Map (client component)
- * - Debounced bbox updates (prevents API spam)
- * - Race-proof network (AbortController + latest-request-wins)
- * - Client-side LRU cache keyed by rounded bbox + filters (shows "cache: hit")
- * - Heatmap + Markers together using <Pane> (heat under markers)
- * - Stable popups (stop propagation so forms don’t close)
- * - Heatmap opacity slider
- * - Postcode/area search (Nominatim, GB fallback, visible loading/error)
+ * Autodun EV Map (client)
+ * - Debounced bbox fetch (no API spam) + latest-request-wins
+ * - Client LRU cache (shows "cache: hit")
+ * - Heatmap + markers with panes (heat under markers)
+ * - Stable popups (no accidental close while interacting)
+ * - Search: robust geocoding (UK postcode normalization + GB fallback)
+ * - UI: toolbar narrower; popups always above toolbar
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// ---- request coordination (module-level) -----------------------------------
+// ---------------- request coordination (module scope) ------------------------
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// ---- client-side cache (module-level LRU) ----------------------------------
+// ---------------- simple LRU cache (module scope) ---------------------------
 type CacheEntry<T> = { data: T; t: number };
 const MAX_CACHE = 30;
 const stationCache = new Map<string, CacheEntry<StationWithScore[]>>();
-
 function setCache(key: string, data: StationWithScore[]) {
   stationCache.set(key, { data, t: Date.now() });
   if (stationCache.size > MAX_CACHE) {
-    const oldestKey = [...stationCache.entries()]
-      .sort((a, b) => a[1].t - b[1].t)[0]?.[0];
-    if (oldestKey) stationCache.delete(oldestKey);
+    const oldest = [...stationCache.entries()].sort((a, b) => a[1].t - b[1].t)[0]?.[0];
+    if (oldest) stationCache.delete(oldest);
   }
 }
-function getCache(key: string): StationWithScore[] | undefined {
+function getCache(key: string) {
   const hit = stationCache.get(key);
   if (!hit) return undefined;
   stationCache.delete(key);
@@ -40,7 +37,7 @@ function getCache(key: string): StationWithScore[] | undefined {
   return hit.data;
 }
 
-// ---- helpers ----------------------------------------------------------------
+// ---------------- helpers ---------------------------------------------------
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -80,7 +77,14 @@ function bboxKey(
   ].join("|");
 }
 
-// ---- react-leaflet components (client-only) --------------------------------
+// Normalize UK postcodes like "ig45hr" -> "IG4 5HR"
+function normalizeUKPostcode(q: string) {
+  const s = q.toUpperCase().replace(/\s+/g, "");
+  if (s.length < 5 || s.length > 7) return q.trim();
+  return s.slice(0, s.length - 3) + " " + s.slice(-3);
+}
+
+// ---------------- react-leaflet (client-only) -------------------------------
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -102,8 +106,55 @@ const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), {
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
-// ---------------------------------------------------------------------------
-// Feedback form – stop propagation so popup stays open
+// ---------------- types -----------------------------------------------------
+type HeatPoint = [number, number, number];
+interface StationWithScore extends OCMStation {
+  _score: number;
+  StatusType?: { Title: string | null; IsOperational: boolean | null };
+  Feedback?: { count: number; averageRating: number | null; reliability: number | null };
+  DataSource?: string;
+}
+
+// ---------------- heat layer ------------------------------------------------
+function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
+  const map = useMap();
+  const layerRef = useRef<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function mount() {
+      if (cancelled) return;
+      const L = (await import("leaflet")).default as any;
+      await import("leaflet.heat");
+
+      if (layerRef.current && map) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+      if (!map || points.length === 0) return;
+
+      const layer = (L as any).heatLayer(points, {
+        radius: 45, blur: 25, maxZoom: 17, max: 1.0,
+        minOpacity: opacity, pane: "heat",
+      });
+      layer.addTo(map);
+      layerRef.current = layer;
+    }
+
+    mount().catch(console.error);
+    return () => {
+      cancelled = true;
+      if (layerRef.current && map) {
+        try { map.removeLayer(layerRef.current); } catch {}
+        layerRef.current = null;
+      }
+    };
+  }, [map, points, opacity]);
+
+  return null;
+}
+
+// ---------------- feedback form --------------------------------------------
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -145,74 +196,55 @@ function FeedbackForm({
     );
   }
 
+  // Stop propagation so Popup stays open while typing/clicking
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
   return (
     <form
       onSubmit={handleSubmit}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-      onWheel={(e) => e.stopPropagation()}
+      onMouseDown={stop}
+      onClick={stop}
+      onWheel={stop}
       style={{ marginTop: "0.5rem" }}
     >
-      <label
-        style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem" }}
-      >
-        Rating (0–5):
+      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>
+        Rating (0–5)
       </label>
       <select
         value={rating}
         onChange={(e) => setRating(parseInt(e.target.value, 10))}
         style={{
-          padding: "0.25rem",
-          fontSize: "0.75rem",
-          border: "1px solid #374151",
-          borderRadius: "0.25rem",
-          background: "#1f2937",
-          color: "#f9fafb",
-          width: "100%",
-          marginBottom: "0.25rem",
+          width: "100%", padding: "0.25rem", fontSize: "0.75rem",
+          border: "1px solid #374151", borderRadius: 4, background: "#1f2937", color: "#f9fafb",
+          marginBottom: 6,
         }}
       >
         {[5, 4, 3, 2, 1, 0].map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
+          <option key={n} value={n}>{n}</option>
         ))}
       </select>
 
-      <label
-        style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem" }}
-      >
-        Comment:
+      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>
+        Comment
       </label>
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
         placeholder="Optional comment"
         style={{
-          width: "100%",
-          height: "3rem",
-          padding: "0.25rem",
-          fontSize: "0.75rem",
-          border: "1px solid #374151",
-          borderRadius: "0.25rem",
-          background: "#0b1220",
-          color: "#f9fafb",
-          marginBottom: "0.25rem",
-          resize: "vertical",
+          width: "100%", height: "3rem", padding: "0.25rem",
+          fontSize: "0.75rem", border: "1px solid #374151", borderRadius: 4,
+          background: "#0b1220", color: "#f9fafb", marginBottom: 6, resize: "vertical",
         }}
       />
       <button
         type="submit"
         disabled={submitting}
         style={{
-          padding: "0.25rem 0.5rem",
-          fontSize: "0.75rem",
-          border: "1px solid #374151",
-          borderRadius: "0.25rem",
-          background: submitting ? "#374151" : "#1f2937",
-          color: "#f9fafb",
-          cursor: "not-allowed",
-          width: "100%",
+          width: "100%", padding: "0.25rem 0.5rem", fontSize: "0.75rem",
+          border: "1px solid #374151", borderRadius: 4,
+          background: submitting ? "#374151" : "#1f2937", color: "#f9fafb",
+          cursor: submitting ? "not-allowed" : "pointer",
         }}
       >
         Submit
@@ -221,64 +253,11 @@ function FeedbackForm({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Types
-type HeatPoint = [number, number, number];
-
-interface StationWithScore extends OCMStation {
-  _score: number;
-  StatusType?: { Title: string | null; IsOperational: boolean | null };
-  Feedback?: { count: number; averageRating: number | null; reliability: number | null };
-  DataSource?: string;
-}
-
-// ---------------------------------------------------------------------------
-// Heat layer (in dedicated 'heat' pane)
-function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
-  const map = useMap();
-  const layerRef = useRef<any>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function mount() {
-      if (cancelled) return;
-      const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat");
-
-      if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-      if (!map || points.length === 0) return;
-
-      const layer = (L as any).heatLayer(points, {
-        radius: 45, blur: 25, maxZoom: 17, max: 1.0, minOpacity: opacity, pane: "heat",
-      });
-      layer.addTo(map);
-      layerRef.current = layer;
-    }
-
-    mount().catch(console.error);
-    return () => {
-      cancelled = true;
-      if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-    };
-  }, [map, points, opacity]);
-
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Component
+// ---------------- component -------------------------------------------------
 export default function Client() {
-  // Read query params lazily (client only)
+  // initial params
   const [params] = useState(() => {
-    if (typeof window === "undefined") {
-      return { lat: 51.5074, lon: -0.1278, dist: 25 };
-    }
+    if (typeof window === "undefined") return { lat: 51.5074, lon: -0.1278, dist: 25 };
     const sp = new URLSearchParams(window.location.search);
     const lat = parseFloat(sp.get("lat") || "51.5074");
     const lon = parseFloat(sp.get("lon") || "-0.1278");
@@ -294,11 +273,9 @@ export default function Client() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [bounds, setBounds] = useState<{
-    north: number; south: number; east: number; west: number;
-  } | null>(null);
+  const [bounds, setBounds] = useState<{ north: number; south: number; east: number; west: number } | null>(null);
 
-  // layer controls
+  // layers
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [heatOpacity, setHeatOpacity] = useState(0.65);
@@ -314,20 +291,20 @@ export default function Client() {
   // cache indicator
   const [cacheHitLast, setCacheHitLast] = useState(false);
 
-  // search box
+  // search
   const [searchText, setSearchText] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
-  // Map ref
+  // map ref
   const mapRef = useRef<any>(null);
 
-  // Debounced bounds tracker
+  // debounced bounds watcher
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const debouncedUpdate = debounce(() => {
+    const update = debounce(() => {
       const b = map.getBounds?.();
       if (!b) return;
       setBounds({
@@ -338,28 +315,26 @@ export default function Client() {
       });
     }, 450);
 
-    debouncedUpdate(); // initial
-    map.on?.("moveend", debouncedUpdate);
-    map.on?.("zoomend", debouncedUpdate);
+    update();
+    map.on?.("moveend", update);
+    map.on?.("zoomend", update);
     return () => {
-      map.off?.("moveend", debouncedUpdate);
-      map.off?.("zoomend", debouncedUpdate);
+      map.off?.("moveend", update);
+      map.off?.("zoomend", update);
     };
   }, []);
 
-  // Fetch stations (race-proofed + cache-aware)
+  // fetch stations (cache + race-safe)
   useEffect(() => {
     const key = bboxKey(bounds, params, connFilter, sourceFilter);
 
     async function fetchStations() {
       setError(null);
 
-      // 1) Try cache first (instant paint + badge)
       const cached = getCache(key);
       setCacheHitLast(!!cached);
       if (cached) setStations(cached);
 
-      // 2) Latest-request-wins network fetch
       const reqId = ++lastReqId;
       if (lastController) lastController.abort();
       const controller = new AbortController();
@@ -376,22 +351,14 @@ export default function Client() {
           url = `${apiBase}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
         }
         if (connFilter) url += `&conn=${encodeURIComponent(connFilter)}`;
-        if (sourceFilter && sourceFilter !== "all") {
-          url += `&source=${encodeURIComponent(sourceFilter)}`;
-        } else if (sourceFilter === "all") {
-          url += `&source=all`;
-        }
+        if (sourceFilter && sourceFilter !== "all") url += `&source=${encodeURIComponent(sourceFilter)}`;
+        else if (sourceFilter === "all") url += `&source=all`;
 
         const res = await fetch(url, { cache: "no-store", signal: controller.signal });
         if (!res.ok) throw new Error(`API responded with ${res.status}`);
 
         const json = await res.json();
-        let data: OCMStation[] = Array.isArray(json)
-          ? json
-          : Array.isArray(json?.items)
-          ? json.items
-          : [];
-
+        const data: OCMStation[] = Array.isArray(json) ? json : Array.isArray(json?.items) ? json.items : [];
         if (!Array.isArray(json) && json?.error) setError(String(json.error));
 
         const scored: StationWithScore[] = (data ?? [])
@@ -415,15 +382,9 @@ export default function Client() {
     }
 
     fetchStations();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    bounds,
-    params.lat, params.lon, params.dist,
-    connFilter, sourceFilter,
-    feedbackVersion,
-  ]);
+  }, [bounds, params.lat, params.lon, params.dist, connFilter, sourceFilter, feedbackVersion]);
 
-  // Heat points
+  // heat points
   const heatPoints: HeatPoint[] = useMemo(() => {
     if (!stations.length) return [];
     const vals = stations.map((s) => s._score);
@@ -438,37 +399,39 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Geocode (postcode/area) via Nominatim with GB fallback
+  // geocode
   async function goToSearch() {
-    const q = searchText.trim();
-    if (!q || !mapRef.current) return;
+    const qRaw = searchText.trim();
+    if (!qRaw || !mapRef.current) return;
 
+    const q = normalizeUKPostcode(qRaw);
     setSearchError(null);
     setSearchLoading(true);
+
     try {
       const tries = [
+        // postcode-specific (GB), then generic q with GB fallback
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&postalcode=${encodeURIComponent(q)}`,
         `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
         `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&q=${encodeURIComponent(q)}`,
       ];
-      let hit: any = null;
 
+      let hit: any = null;
       for (const url of tries) {
         const res = await fetch(url, { headers: { Accept: "application/json" } });
         if (!res.ok) continue;
         const arr = (await res.json()) as Array<{ lat: string; lon: string }>;
         if (Array.isArray(arr) && arr.length) { hit = arr[0]; break; }
       }
-      if (!hit) {
-        setSearchError("Location not found.");
-        return;
-      }
+
+      if (!hit) { setSearchError("Location not found."); return; }
 
       const lat = parseFloat(hit.lat);
       const lon = parseFloat(hit.lon);
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         const map = mapRef.current;
         const targetZoom = Math.max(map.getZoom?.() ?? 12, 13);
-        map.flyTo([lat, lon], targetZoom, { animate: true, duration: 0.8 });
+        map.flyTo([lat, lon], targetZoom, { animate: true, duration: 0.9 });
       } else {
         setSearchError("Location not found.");
       }
@@ -480,25 +443,30 @@ export default function Client() {
     }
   }
 
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {/* Header / Controls */}
+      {/* Raise popup above everything; also make heat non-interactive */}
+      <style>{`
+        .leaflet-pane.leaflet-popup-pane { z-index: 1200 !important; }
+        .leaflet-pane.leaflet-heatmap-layer, .leaflet-pane#heat { pointer-events: none; }
+      `}</style>
+
+      {/* Toolbar — narrower to avoid covering map center */}
       <div
         style={{
           position: "absolute",
           top: "0.5rem",
           left: "0.5rem",
-          zIndex: 1000,
+          zIndex: 650,              // below popup (700), above map panes
           background: "rgba(12, 19, 38, 0.9)",
           padding: "0.75rem",
           borderRadius: "0.25rem",
           color: "#f9fafb",
+          maxWidth: 560,
         }}
       >
-        <h1 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>
-          Autodun EV Map
-        </h1>
+        <h1 style={{ margin: 0, fontSize: "1rem", fontWeight: 600 }}>Autodun EV Map</h1>
         <p style={{ margin: 0, fontSize: "0.75rem", color: "#9ca3af" }}>
           Explore EV hotspots &amp; charging insights
         </p>
@@ -534,9 +502,7 @@ export default function Client() {
           </button>
 
           <button
-            onClick={() => {
-              mapRef.current?.setView([params.lat, params.lon], 13);
-            }}
+            onClick={() => mapRef.current?.setView([params.lat, params.lon], 13)}
             style={{
               padding: "0.25rem 0.5rem",
               fontSize: "0.75rem",
@@ -550,7 +516,6 @@ export default function Client() {
             Reset view
           </button>
 
-          {/* Connectors */}
           <select
             value={connFilter}
             onChange={(e) => setConnFilter(e.target.value)}
@@ -569,12 +534,9 @@ export default function Client() {
             <option value="chademo">CHAdeMO</option>
           </select>
 
-          {/* Source filter */}
           <select
             value={sourceFilter}
-            onChange={(e) =>
-              setSourceFilter(e.target.value as "ocm" | "all" | "council")
-            }
+            onChange={(e) => setSourceFilter(e.target.value as "ocm" | "all" | "council")}
             style={{
               padding: "0.25rem",
               fontSize: "0.75rem",
@@ -589,7 +551,6 @@ export default function Client() {
             <option value="council">Council</option>
           </select>
 
-          {/* Toggles */}
           <button
             onClick={() => setShowMarkers((v) => !v)}
             style={{
@@ -620,7 +581,6 @@ export default function Client() {
             {showHeatmap ? "Heatmap ✓" : "Heatmap ✗"}
           </button>
 
-          {/* Heat opacity slider */}
           {showHeatmap && (
             <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
               Opacity
@@ -635,7 +595,7 @@ export default function Client() {
             </label>
           )}
 
-          {/* Search box */}
+          {/* Search */}
           <input
             placeholder="Search postcode or area (e.g. EC1A, Glasgow)"
             value={searchText}
@@ -667,7 +627,7 @@ export default function Client() {
             {searchLoading ? "Searching…" : "Search"}
           </button>
 
-          {loading && <span style={{ marginLeft: 6, fontSize: "0.75rem" }}>Loading…</span>}
+          {loading && <span style={{ fontSize: "0.75rem" }}>Loading…</span>}
         </div>
 
         {searchError && (
@@ -677,13 +637,13 @@ export default function Client() {
         )}
       </div>
 
-      {/* Status chip with cache badge */}
+      {/* status chip */}
       <div
         style={{
           position: "absolute",
           top: "0.75rem",
           right: "0.75rem",
-          zIndex: 1000,
+          zIndex: 640,
           background: "rgba(15, 23, 42, 0.85)",
           color: "#e5e7eb",
           padding: "0.25rem 0.5rem",
@@ -693,11 +653,10 @@ export default function Client() {
         }}
         title="Stations returned by the API after filters"
       >
-        stations: {stations.length}
-        {cacheHitLast ? " • cache: hit" : ""}
+        stations: {stations.length}{cacheHitLast ? " • cache: hit" : ""}
       </div>
 
-      {/* Map */}
+      {/* map */}
       <main style={{ height: "100%", width: "100%" }}>
         <MapContainer
           center={[params.lat, params.lon]}
@@ -711,16 +670,16 @@ export default function Client() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {/* Panes: create safely via React-Leaflet */}
+          {/* panes */}
           <Pane name="heat" style={{ zIndex: 399, pointerEvents: "none" }} />
           <Pane name="markers" style={{ zIndex: 401 }} />
 
-          {/* Heat layer (under markers, non-interactive) */}
+          {/* heat under markers */}
           {showHeatmap && heatPoints.length > 0 && (
             <HeatLayer points={heatPoints} opacity={heatOpacity} />
           )}
 
-          {/* Markers (above heat) */}
+          {/* markers */}
           {showMarkers &&
             stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
@@ -731,11 +690,7 @@ export default function Client() {
                   : null;
 
               const fill =
-                isOperational === null
-                  ? "#60a5fa"
-                  : isOperational
-                  ? "#22c55e"
-                  : "#ef4444";
+                isOperational === null ? "#60a5fa" : isOperational ? "#22c55e" : "#ef4444";
 
               return (
                 <CircleMarker
@@ -744,12 +699,7 @@ export default function Client() {
                   radius={6}
                   pane="markers"
                   bubblingMouseEvents={false}
-                  pathOptions={{
-                    color: "#ffffff",
-                    weight: 2,
-                    fillColor: fill,
-                    fillOpacity: 1,
-                  }}
+                  pathOptions={{ color: "#ffffff", weight: 2, fillColor: fill, fillOpacity: 1 }}
                 >
                   <Popup
                     closeOnClick={false}
@@ -778,8 +728,7 @@ export default function Client() {
                     {s.DataSource && (
                       <>
                         <br />
-                        Source:{" "}
-                        {s.DataSource === "Council" ? "Council data" : "OpenChargeMap"}
+                        Source: {s.DataSource === "Council" ? "Council data" : "OpenChargeMap"}
                       </>
                     )}
                     {s.StatusType?.Title && (
@@ -787,9 +736,7 @@ export default function Client() {
                         <br />
                         Status: {s.StatusType.Title}
                         {typeof s.StatusType.IsOperational === "boolean" &&
-                          (s.StatusType.IsOperational
-                            ? " (Operational)"
-                            : " (Not Operational)")}
+                          (s.StatusType.IsOperational ? " (Operational)" : " (Not Operational)")}
                       </>
                     )}
                     {s.Feedback && s.Feedback.reliability != null && (
@@ -799,7 +746,6 @@ export default function Client() {
                         {s.Feedback.count} feedback)
                       </>
                     )}
-
                     <div style={{ marginTop: "0.5rem" }}>
                       {feedbackOpenId === (s.ID as number) ? (
                         <FeedbackForm
@@ -835,7 +781,7 @@ export default function Client() {
             })}
         </MapContainer>
 
-        {/* Heat legend */}
+        {/* heat legend */}
         {showHeatmap && (
           <div
             style={{
@@ -847,7 +793,7 @@ export default function Client() {
               borderRadius: "0.25rem",
               color: "#f9fafb",
               fontSize: "0.75rem",
-              zIndex: 1000,
+              zIndex: 640,
             }}
           >
             <div
@@ -866,7 +812,7 @@ export default function Client() {
           </div>
         )}
 
-        {/* Empty state */}
+        {/* empty state */}
         {!loading && !error && stations.length === 0 && (
           <div
             style={{
@@ -879,7 +825,7 @@ export default function Client() {
               borderRadius: "0.5rem",
               color: "#f9fafb",
               fontSize: "0.875rem",
-              zIndex: 1000,
+              zIndex: 640,
               textAlign: "center",
               maxWidth: "80%",
             }}
@@ -888,7 +834,7 @@ export default function Client() {
           </div>
         )}
 
-        {/* Error banner */}
+        {/* error banner */}
         {error && (
           <div
             style={{
@@ -900,7 +846,7 @@ export default function Client() {
               borderRadius: "0.375rem",
               color: "#fff",
               fontSize: "0.8rem",
-              zIndex: 1000,
+              zIndex: 640,
             }}
           >
             {error}
