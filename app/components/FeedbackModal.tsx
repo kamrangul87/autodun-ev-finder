@@ -6,11 +6,13 @@ type Props = {
   stationId: string | null;
   open: boolean;
   onClose: () => void;
-  onSuccess?: () => void;
+  onSuccess?: () => void; // will let us refresh the popup
 };
 
 export default function FeedbackModal({ stationId, open, onClose, onSuccess }: Props) {
-  const [rating, setRating] = useState(4);
+  // REQUIRED by API: a 0..5 rating
+  const [rating, setRating] = useState(3);
+  // optional extras you can keep if you want to expand later
   const [waitTime, setWaitTime] = useState(0);
   const [priceFair, setPriceFair] = useState(3);
   const [working, setWorking] = useState(true);
@@ -21,27 +23,20 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
 
   const submit = async () => {
     if (!stationId) return;
-    if (!(rating >= 0 && rating <= 5)) {
-      alert('Rating must be between 0 and 5');
-      return;
-    }
     setBusy(true);
     try {
       const r = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // API requires `rating`. The rest are extra metadata (harmless if ignored).
+        // IMPORTANT: include `rating`
         body: JSON.stringify({ stationId, rating, waitTime, priceFair, working, comment }),
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'Submit failed');
-      // reset + close
+
+      // reset + close + bump parent
       onClose();
-      setRating(4);
-      setWaitTime(0);
-      setPriceFair(3);
-      setWorking(true);
-      setComment('');
+      setRating(3); setWaitTime(0); setPriceFair(3); setWorking(true); setComment('');
       onSuccess?.();
       alert('Thanks! Feedback recorded.');
     } catch (e: any) {
@@ -52,34 +47,30 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
   };
 
   return (
-    <div className="fixed inset-0 z-[2000] bg-black/60 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-white text-black w-full max-w-md rounded-2xl p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-[2000] bg-black/60 flex items-center justify-center">
+      <div className="bg-white text-black w-full max-w-md rounded-2xl p-5 shadow-xl">
         <div className="text-lg font-semibold mb-3">Station feedback</div>
         <div className="text-xs text-gray-600 mb-4">Station ID: {stationId}</div>
 
-        {/* Rating (0–5) */}
         <label className="block mb-3">
           <div className="mb-1">Overall rating (0–5)</div>
           <input
             type="number"
             min={0}
             max={5}
-            step={1}
+            step={0.5}
             value={rating}
-            onChange={(e) => setRating(Math.max(0, Math.min(5, parseInt(e.target.value || '0', 10))))}
+            onChange={e => setRating(Number(e.target.value))}
             className="w-full border rounded px-3 py-2"
           />
         </label>
 
-        {/* Optional extra signals */}
+        {/* Optional fields */}
         <label className="block mb-3">
           <div className="mb-1">Wait time (0–5)</div>
           <input
-            type="number"
-            min={0}
-            max={5}
-            value={waitTime}
-            onChange={(e) => setWaitTime(Math.max(0, Math.min(5, parseInt(e.target.value || '0', 10))))}
+            type="number" min={0} max={5} value={waitTime}
+            onChange={e => setWaitTime(parseInt(e.target.value || '0', 10))}
             className="w-full border rounded px-3 py-2"
           />
         </label>
@@ -87,17 +78,14 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
         <label className="block mb-3">
           <div className="mb-1">Price fairness (0–5)</div>
           <input
-            type="number"
-            min={0}
-            max={5}
-            value={priceFair}
-            onChange={(e) => setPriceFair(Math.max(0, Math.min(5, parseInt(e.target.value || '0', 10))))}
+            type="number" min={0} max={5} value={priceFair}
+            onChange={e => setPriceFair(parseInt(e.target.value || '0', 10))}
             className="w-full border rounded px-3 py-2"
           />
         </label>
 
         <label className="flex items-center gap-2 mb-3">
-          <input type="checkbox" checked={working} onChange={(e) => setWorking(e.target.checked)} />
+          <input type="checkbox" checked={working} onChange={e => setWorking(e.target.checked)} />
           <span>Charger working</span>
         </label>
 
@@ -105,7 +93,7 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
           <div className="mb-1">Comment (optional)</div>
           <textarea
             value={comment}
-            onChange={(e) => setComment(e.target.value)}
+            onChange={e => setComment(e.target.value)}
             className="w-full border rounded px-3 py-2 h-24"
           />
         </label>
