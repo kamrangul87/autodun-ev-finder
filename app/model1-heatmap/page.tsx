@@ -12,7 +12,7 @@ const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLaye
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// ---------------- Types ----------------
+// ---- Types ----
 type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
 type Station = {
@@ -22,7 +22,7 @@ type Station = {
   raw: OcmPoi;
 };
 
-// ---------------- Helpers ----------------
+/** Distance (km) from bounds as half of diagonal using haversine */
 function kmFromBounds(bounds: any): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -70,13 +70,15 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
+/** Child helper that fires once the map instance is available */
 const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
   const map = useMap();
-  useEffect(() => { onReady(map); }, [map, onReady]);
+  useEffect(() => {
+    onReady(map);
+  }, [map, onReady]);
   return null;
 };
 
-// ---------------- Search Box ----------------
 const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,17 +92,19 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb');
+      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
 
       const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
       if (arr?.length) {
         const hit = arr[0];
-        onLocate({ lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) }, 13);
+        const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
+        onLocate({ lat, lng: lon }, 13);
       } else {
         alert('No results for that place/postcode.');
       }
-    } catch {
+    } catch (e) {
+      console.error(e);
       alert('Search failed. Try again.');
     } finally {
       setLoading(false);
@@ -126,7 +130,6 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
   );
 };
 
-// ---------------- Fetch stations ----------------
 const FetchOnMove: React.FC<{
   setStations: React.Dispatch<React.SetStateAction<Station[]>>,
   onToggleWires: (w: { attach: () => void; detach: () => void }) => void
@@ -146,7 +149,7 @@ const FetchOnMove: React.FC<{
     const onMove = () => debounced();
     map.on('moveend', onMove);
     map.on('zoomend', onMove);
-    debounced();
+    debounced(); // initial fetch
     onToggleWires({
       attach: () => { map.on('moveend', onMove); map.on('zoomend', onMove); },
       detach: () => { map.off('moveend', onMove); map.off('zoomend', onMove); },
@@ -157,7 +160,7 @@ const FetchOnMove: React.FC<{
   return null;
 };
 
-// ---------------- Feedback ----------------
+/* ------------------------- Feedback summary helper ------------------------- */
 async function fetchFeedbackSummary(stationId: string) {
   try {
     const r = await fetch(`/api/feedback?stationId=${encodeURIComponent(stationId)}`, { cache: 'no-store' });
@@ -167,18 +170,29 @@ async function fetchFeedbackSummary(stationId: string) {
   } catch { return null; }
 }
 
-const MarkerWithPopup: React.FC<{ s: Station; fbRefresh: number }> = ({ s, fbRefresh }) => {
+/* ----------------------- Marker with popup ----------------------- */
+const MarkerWithPopup: React.FC<{ s: Station }> = ({ s }) => {
   const [fb, setFb] = useState<{count:number;averageRating:number|null;reliability:number|null} | null>(null);
 
-  useEffect(() => {
+  const fetchFb = () => {
     const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
     fetchFeedbackSummary(id).then(setFb);
-  }, [s, fbRefresh]); // refetch on refresh
+  };
+
+  useEffect(() => { fetchFb(); }, [s]);
+
+  // attach a hook to DOM for external refresh
+  useEffect(() => {
+    const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
+    const el = document.querySelector(`[data-station-id="${id}"]`) as any;
+    if (el) el.refreshFeedback = fetchFb;
+    return () => { if (el) delete el.refreshFeedback; };
+  }, [s]);
 
   return (
     <CircleMarker center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
       <Popup>
-        <div style={{ minWidth: 240 }}>
+        <div style={{ minWidth: 240 }} data-station-id={s.raw?.ID ?? `${s.lat},${s.lon}`}>
           <b>{s.name ?? 'Charging site'}</b>
           <div>{s.postcode ?? s.addr ?? ''}</div>
           <div>Max power: {s.maxPowerKw ?? 0} kW</div>
@@ -203,7 +217,6 @@ const MarkerWithPopup: React.FC<{ s: Station; fbRefresh: number }> = ({ s, fbRef
   );
 };
 
-// ---------------- Page ----------------
 const Model1HeatmapPage: React.FC = () => {
   const [stations, setStations] = useState<Station[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
@@ -214,10 +227,9 @@ const Model1HeatmapPage: React.FC = () => {
   const mapRef = useRef<any>(null);
   const LRef = useRef<any>(null);
 
+  // Feedback modal state + global opener
   const [fbOpen, setFbOpen] = useState(false);
   const [fbStationId, setFbStationId] = useState<string | null>(null);
-  const [fbRefresh, setFbRefresh] = useState(0);
-
   useEffect(() => {
     (window as any).openFeedbackModal = (id: string) => {
       setFbStationId(id);
@@ -233,10 +245,12 @@ const Model1HeatmapPage: React.FC = () => {
     LRef.current = leaflet;
 
     document.getElementById('markersBtn')?.addEventListener('click', () => {
-      setShowMarkers(true); setShowHeat(false);
+      setShowMarkers(true);
+      setShowHeat(false);
     });
     document.getElementById('heatBtn')?.addEventListener('click', () => {
-      setShowHeat(true); setShowMarkers(false);
+      setShowHeat(true);
+      setShowMarkers(false);
     });
   };
 
@@ -252,6 +266,7 @@ const Model1HeatmapPage: React.FC = () => {
     }
   };
 
+  // Manage heat layer
   useEffect(() => {
     const map = mapRef.current;
     const L = LRef.current;
@@ -284,22 +299,31 @@ const Model1HeatmapPage: React.FC = () => {
         style={{ height: '100%', width: '100%' }}
       >
         <OnMapReady onReady={onMapReady} />
+
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+
         {/* @ts-ignore */}
         <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
+
         {markers.map((s, i) => (
-          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} fbRefresh={fbRefresh} />
+          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} />
         ))}
       </MapContainer>
 
+      {/* Feedback Modal */}
       <FeedbackModal
         stationId={fbStationId}
         open={fbOpen}
         onClose={() => setFbOpen(false)}
-        onSuccess={() => setFbRefresh(x => x + 1)} // trigger refetch
+        onSuccess={() => {
+          if (fbStationId) {
+            const el = document.querySelector(`[data-station-id="${fbStationId}"]`) as any;
+            if (el?.refreshFeedback) el.refreshFeedback();
+          }
+        }}
       />
     </div>
   );
