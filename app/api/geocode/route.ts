@@ -1,31 +1,72 @@
 import { NextRequest } from "next/server";
 
-export const dynamic = "force-dynamic"; // don't prerender
+export const dynamic = "force-dynamic"; // never prerender
 
 export async function GET(req: NextRequest) {
   const qRaw = (req.nextUrl.searchParams.get("q") || "").trim();
+  const latStr = req.nextUrl.searchParams.get("lat");
+  const lonStr = req.nextUrl.searchParams.get("lon");
+  const lat = latStr ? Number(latStr) : undefined;
+  const lon = lonStr ? Number(lonStr) : undefined;
+
   if (!qRaw) {
-    return new Response(JSON.stringify({ error: "q required" }), {
-      status: 400,
-      headers: { "content-type": "application/json" },
-    });
+    return json({ error: "q required" }, 400);
   }
 
   const q = normalizeUKPostcode(qRaw);
 
-  // Prefer GB/postcodes first, then fall back to generic queries
-  const tries = [
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&postalcode=${encodeURIComponent(
-      q
-    )}`,
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&q=${encodeURIComponent(
-      q
-    )}`,
-  ];
+  // If we have a map center, create a small viewbox (≈30–40km) to bias results near the user.
+  const viewbox = lat != null && lon != null ? makeViewbox(lon, lat, 0.35) : undefined;
+
+  // Try, in order:
+  // 1) GB postal code search (fast & precise)
+  // 2) Bounded search near the map center (GB)
+  // 3) "q, United Kingdom"
+  // 4) Plain "q" (last resort)
+  const tries: string[] = [];
+
+  if (looksLikeUKPostcode(q)) {
+    tries.push(
+      withParams("https://nominatim.openstreetmap.org/search", {
+        format: "json",
+        limit: "1",
+        countrycodes: "gb",
+        postalcode: q,
+      }),
+    );
+  }
+
+  if (viewbox) {
+    tries.push(
+      withParams("https://nominatim.openstreetmap.org/search", {
+        format: "json",
+        limit: "1",
+        countrycodes: "gb",
+        q,
+        viewbox,
+        bounded: "1",
+      }),
+    );
+  }
+
+  tries.push(
+    withParams("https://nominatim.openstreetmap.org/search", {
+      format: "json",
+      limit: "1",
+      q: `${q}, United Kingdom`,
+    }),
+  );
+
+  tries.push(
+    withParams("https://nominatim.openstreetmap.org/search", {
+      format: "json",
+      limit: "1",
+      q,
+    }),
+  );
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 6000);
+  const timer = setTimeout(() => controller.abort(), 6500);
 
   try {
     for (const url of tries) {
@@ -42,35 +83,54 @@ export async function GET(req: NextRequest) {
       const arr = (await r.json()) as Array<{ lat: string; lon: string; display_name?: string }>;
       if (Array.isArray(arr) && arr.length) {
         const hit = arr[0];
-        const lat = parseFloat(hit.lat);
-        const lon = parseFloat(hit.lon);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          return new Response(
-            JSON.stringify({ lat, lon, display_name: hit.display_name, q: qRaw }),
-            { headers: { "content-type": "application/json" } }
-          );
+        const hitLat = Number(hit.lat);
+        const hitLon = Number(hit.lon);
+        if (Number.isFinite(hitLat) && Number.isFinite(hitLon)) {
+          clearTimeout(timer);
+          return json({ lat: hitLat, lon: hitLon, display_name: hit.display_name, q: qRaw });
         }
       }
     }
-
-    return new Response(JSON.stringify({ error: "location not found" }), {
-      status: 404,
-      headers: { "content-type": "application/json" },
-    });
-  } catch (e: any) {
-    const status = e?.name === "AbortError" ? 504 : 502;
-    return new Response(JSON.stringify({ error: "geocode failed" }), {
-      status,
-      headers: { "content-type": "application/json" },
-    });
-  } finally {
     clearTimeout(timer);
+    return json({ error: "location not found" }, 404);
+  } catch (e: any) {
+    clearTimeout(timer);
+    const status = e?.name === "AbortError" ? 504 : 502;
+    return json({ error: "geocode failed" }, status);
   }
 }
 
+function json(body: any, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function looksLikeUKPostcode(s: string) {
+  const t = s.toUpperCase().replace(/\s+/g, "");
+  return /^[A-Z]{1,2}\d[A-Z0-9]?\d[A-Z]{2}$/.test(t);
+}
+
 function normalizeUKPostcode(input: string) {
-  // Turn "ig45hr" -> "IG4 5HR" (keep original if it doesn't look like a UK postcode)
   const s = input.toUpperCase().replace(/\s+/g, "");
-  if (s.length < 5 || s.length > 7) return input.trim();
-  return s.slice(0, s.length - 3) + " " + s.slice(-3);
+  if (looksLikeUKPostcode(s)) return s.slice(0, s.length - 3) + " " + s.slice(-3);
+  return input.trim();
+}
+
+function withParams(base: string, params: Record<string, string | number | undefined>) {
+  const u = new URL(base);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v != null) u.searchParams.set(k, String(v));
+  });
+  return u.toString();
+}
+
+function makeViewbox(centerLon: number, centerLat: number, delta: number) {
+  // viewbox = minlon,minlat,maxlon,maxlat
+  const minlon = centerLon - delta;
+  const minlat = centerLat - delta;
+  const maxlon = centerLon + delta;
+  const maxlat = centerLat + delta;
+  return `${minlon},${minlat},${maxlon},${maxlat}`;
 }
