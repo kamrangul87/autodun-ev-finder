@@ -5,17 +5,6 @@ export const dynamic = 'force-dynamic';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 
-/** Lazy KV loader so builds succeed even if @vercel/kv isn't installed */
-async function loadKV() {
-  try {
-    if (!process.env.KV_REST_API_URL) return null; // only try if KV configured
-    const mod = await import('@vercel/kv');
-    return mod.kv;
-  } catch {
-    return null;
-  }
-}
-
 /** Fetch a chunk of stations from our own stations API */
 async function fetchChunk(baseUrl: string, lat: number, lon: number, radiusKm = 18) {
   const u = new URL('/api/stations', baseUrl);
@@ -34,6 +23,7 @@ export async function GET(req: NextRequest) {
       process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, '') ||
       req.nextUrl.origin;
 
+    // small grid over Greater London
     const centers: Array<[number, number]> = [
       [51.5072, -0.1276],
       [51.55, -0.20],
@@ -62,14 +52,12 @@ export async function GET(req: NextRequest) {
     const items = Array.from(merged.values());
     const payload = { ts: Date.now(), count: items.length, items };
 
-    const kv = await loadKV();
-    if (kv) {
-      await kv.set('stations:latest', payload);
-      await kv.set('stations:latest:ts', payload.ts);
-    }
-
-    return NextResponse.json({ ok: true, count: payload.count, persisted: !!kv });
+    // No persistence here to avoid @vercel/kv build errors.
+    return NextResponse.json({ ok: true, count: payload.count });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: String(e?.message || e) },
+      { status: 500 }
+    );
   }
 }
