@@ -1,5 +1,8 @@
 'use client';
 
+export const dynamic = 'force-dynamic'; // don’t prerender this route
+export const revalidate = 0;
+
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
@@ -10,7 +13,9 @@ import {
   LayerGroup,
   useMap,
 } from 'react-leaflet';
-import L, { Map as LeafletMap, LatLngBounds } from 'leaflet';
+
+// import Leaflet **types only** so no runtime code runs on server
+import type { Map as LeafletMap, LatLngBounds } from 'leaflet';
 
 // ---------------- Types ----------------
 type Station = {
@@ -35,23 +40,23 @@ const debounce = <F extends (...args: any[]) => void>(fn: F, ms = 450) => {
   };
 };
 
-// Request coordination (avoid races)
+// Prevent racing requests
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
 // ------------- Child Hook --------------
-function BboxWatcher({ onBbox }: { onBbox: (b: L.LatLngBounds) => void }) {
+function BboxWatcher({ onBbox }: { onBbox: (b: LatLngBounds) => void }) {
   const map = useMap();
-  const debounced = useRef<(b: L.LatLngBounds) => void>();
+  const debounced = useRef<(b: LatLngBounds) => void>();
 
   useEffect(() => {
-    debounced.current = debounce((b: L.LatLngBounds) => onBbox(b), 450);
+    debounced.current = debounce((b: LatLngBounds) => onBbox(b), 450);
   }, [onBbox]);
 
   useEffect(() => {
     const onMoveEnd = () => {
       const b = map.getBounds();
-      debounced.current?.(b);
+      debounced.current?.(b as unknown as LatLngBounds);
     };
     // initial load
     onMoveEnd();
@@ -110,20 +115,19 @@ export default function Page() {
       if (reqId !== lastReqId) return; // only latest wins
       setStations(data);
     } catch (err: any) {
-      if (err?.name === 'AbortError') return;
-      console.error('Stations fetch failed:', err);
+      if (err?.name !== 'AbortError') console.error('Stations fetch failed:', err);
     } finally {
       if (reqId === lastReqId) setLoading(false);
     }
   };
 
-  // Map ref (typed)
+  // Map ref (typed, safe on server since it's only used in client)
   const mapRef = useRef<LeafletMap | null>(null);
 
   // Re-fetch when filters/search change
   const refetchForCurrentView = () => {
     const bounds = mapRef.current?.getBounds();
-    if (bounds) fetchStationsFor(bounds);
+    if (bounds) fetchStationsFor(bounds as LatLngBounds);
   };
 
   useEffect(() => {
@@ -182,10 +186,10 @@ export default function Page() {
         {loading && <span style={{ marginLeft: 'auto' }}>Loading…</span>}
       </div>
 
-      {/* Map */}
+      {/* Map (client-only; react-leaflet is safe because this file is client-only and dynamic) */}
       <MapContainer
         ref={(m) => {
-          mapRef.current = m as unknown as LeafletMap | null;
+          mapRef.current = (m as unknown as LeafletMap) ?? null;
         }}
         center={[51.5074, -0.1278]}
         zoom={12}
