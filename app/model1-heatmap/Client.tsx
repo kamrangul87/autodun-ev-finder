@@ -4,9 +4,8 @@
  * Model-1 EV Heatmap (client component)
  * - Debounced bbox updates
  * - Race-proof fetch (AbortController + latest-request-wins)
- * - Heatmap + CircleMarkers shown together with separate toggles
+ * - Heatmap + CircleMarkers with independent toggles
  * - Heatmap opacity slider
- * - Custom Leaflet panes: heat under markers so pins stay clickable
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -178,7 +177,7 @@ interface StationWithScore extends OCMStation {
 }
 
 // ---------------------------------------------------------------------------
-// Heat layer (supports opacity + uses 'heat' pane)
+// Heat layer (opacity only; no custom panes)
 function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -191,11 +190,11 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
       const L = (await import("leaflet")).default as any;
       await import("leaflet.heat");
 
+      // remove existing
       if (layerRef.current && map) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
-
       if (!map || points.length === 0) return;
 
       const layer = (L as any).heatLayer(points, {
@@ -204,13 +203,17 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
         maxZoom: 17,
         max: 1.0,
         minOpacity: opacity,
-        pane: "heat",
       });
       layer.addTo(map);
       layerRef.current = layer;
     }
 
-    mount();
+    try {
+      mount();
+    } catch (e) {
+      // never crash the app due to the heat layer
+      console.error("Heat layer mount failed:", e);
+    }
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
@@ -356,32 +359,9 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Map ref + panes + debounced bounds tracking
+  // Map ref + debounced bounds tracking
   const mapRef = useRef<any>(null);
 
-  // create panes once so heat sits under markers (NO optional chaining on LHS)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (!map.getPane("heat")) {
-      map.createPane("heat");
-    }
-    const heatPane = map.getPane("heat");
-    if (heatPane) {
-      heatPane.style.zIndex = "399"; // under overlay/markers
-    }
-
-    if (!map.getPane("markers")) {
-      map.createPane("markers");
-    }
-    const markerPane = map.getPane("markers");
-    if (markerPane) {
-      markerPane.style.zIndex = "401"; // above heat
-    }
-  }, []);
-
-  // bounds tracker (debounced)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -604,7 +584,7 @@ export default function Client() {
             <HeatLayer points={heatPoints} opacity={heatOpacity} />
           )}
 
-          {/* Circle markers in a pane above heat */}
+          {/* Circle markers */}
           {showMarkers &&
             stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
@@ -626,7 +606,6 @@ export default function Client() {
                   key={String(s.ID)}
                   center={[lat, lon]}
                   radius={6}
-                  pane="markers"
                   pathOptions={{
                     color: "#ffffff",
                     weight: 2,
