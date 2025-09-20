@@ -4,10 +4,11 @@
  * Autodun EV Map (client component)
  * - Debounced bbox updates (prevents API spam)
  * - Race-proof network (AbortController + latest-request-wins)
- * - Client-side LRU cache keyed by rounded bbox + filters
+ * - Client-side LRU cache keyed by rounded bbox + filters (+ visible cache badge)
  * - Heatmap + Markers together, using React-Leaflet <Pane> (heat under markers)
  * - Stable popups: stop click/scroll propagation so forms don’t close
  * - Heatmap opacity slider
+ * - Postcode/area search (Nominatim)
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -32,7 +33,6 @@ function setCache(key: string, data: StationWithScore[]) {
     if (oldestKey) stationCache.delete(oldestKey);
   }
 }
-
 function getCache(key: string): StationWithScore[] | undefined {
   const hit = stationCache.get(key);
   if (!hit) return undefined;
@@ -50,7 +50,6 @@ const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
     t = setTimeout(() => fn(...args), ms);
   };
 };
-
 const round = (n: number, dp = 3) => Math.round(n * 10 ** dp) / 10 ** dp;
 
 function bboxKey(
@@ -83,14 +82,6 @@ function bboxKey(
   ].join("|");
 }
 
-function shallowSameIds(a: StationWithScore[], b: StationWithScore[]) {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if ((a[i].ID as any) !== (b[i].ID as any)) return false;
-  }
-  return true;
-}
-
 // ---- react-leaflet components (client-only) --------------------------------
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
@@ -110,8 +101,6 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
 const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), {
   ssr: false,
 });
-
-// hooks (safe in client file)
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -224,7 +213,7 @@ function FeedbackForm({
           borderRadius: "0.25rem",
           background: submitting ? "#374151" : "#1f2937",
           color: "#f9fafb",
-          cursor: submitting ? "not-allowed" : "pointer",
+          cursor: "not-allowed",
           width: "100%",
         }}
       >
@@ -240,15 +229,8 @@ type HeatPoint = [number, number, number];
 
 interface StationWithScore extends OCMStation {
   _score: number;
-  StatusType?: {
-    Title: string | null;
-    IsOperational: boolean | null;
-  };
-  Feedback?: {
-    count: number;
-    averageRating: number | null;
-    reliability: number | null;
-  };
+  StatusType?: { Title: string | null; IsOperational: boolean | null };
+  Feedback?: { count: number; averageRating: number | null; reliability: number | null };
   DataSource?: string;
 }
 
@@ -260,7 +242,6 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
 
   useEffect(() => {
     let cancelled = false;
-
     async function mount() {
       if (cancelled) return;
       const L = (await import("leaflet")).default as any;
@@ -273,22 +254,13 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
       if (!map || points.length === 0) return;
 
       const layer = (L as any).heatLayer(points, {
-        radius: 45,
-        blur: 25,
-        maxZoom: 17,
-        max: 1.0,
-        minOpacity: opacity,
-        pane: "heat", // ensure the layer uses our non-interactive pane
+        radius: 45, blur: 25, maxZoom: 17, max: 1.0, minOpacity: opacity, pane: "heat",
       });
       layer.addTo(map);
       layerRef.current = layer;
     }
 
-    try {
-      mount();
-    } catch (e) {
-      console.error("Heat layer mount failed:", e);
-    }
+    mount().catch(console.error);
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
@@ -325,10 +297,7 @@ export default function Client() {
   const [error, setError] = useState<string | null>(null);
 
   const [bounds, setBounds] = useState<{
-    north: number;
-    south: number;
-    east: number;
-    west: number;
+    north: number; south: number; east: number; west: number;
   } | null>(null);
 
   // layer controls
@@ -343,6 +312,12 @@ export default function Client() {
   // feedback
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
+
+  // cache indicator
+  const [cacheHitLast, setCacheHitLast] = useState(false);
+
+  // search box
+  const [searchText, setSearchText] = useState("");
 
   // Map ref
   const mapRef = useRef<any>(null);
@@ -379,8 +354,9 @@ export default function Client() {
     async function fetchStations() {
       setError(null);
 
-      // 1) Try cache first (instant paint)
+      // 1) Try cache first (instant paint + badge)
       const cached = getCache(key);
+      setCacheHitLast(!!cached);
       if (cached) setStations(cached);
 
       // 2) Latest-request-wins network fetch
@@ -429,13 +405,8 @@ export default function Client() {
           })
           .filter(Boolean) as StationWithScore[];
 
-        // update cache
         setCache(key, scored);
-
-        // latest wins & avoid useless re-renders
-        if (reqId === lastReqId && !shallowSameIds(scored, stations)) {
-          setStations(scored);
-        }
+        if (reqId === lastReqId) setStations(scored);
       } catch (e: any) {
         if (e?.name !== "AbortError") setError(e?.message || "Failed to load stations");
       } finally {
@@ -447,11 +418,8 @@ export default function Client() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bounds,
-    params.lat,
-    params.lon,
-    params.dist,
-    connFilter,
-    sourceFilter,
+    params.lat, params.lon, params.dist,
+    connFilter, sourceFilter,
     feedbackVersion,
   ]);
 
@@ -471,6 +439,30 @@ export default function Client() {
   }, [stations]);
 
   const mapCenter: [number, number] = [params.lat, params.lon];
+
+  // Geocode (postcode/area) via Nominatim
+  async function goToSearch() {
+    const q = searchText.trim();
+    if (!q) return;
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
+        q
+      )}`;
+      const res = await fetch(url, {
+        headers: { "Accept-Language": "en" },
+      });
+      const json = (await res.json()) as Array<{ lat: string; lon: string }>;
+      if (json?.length) {
+        const lat = parseFloat(json[0].lat);
+        const lon = parseFloat(json[0].lon);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) {
+          mapRef.current?.setView([lat, lon], 14);
+        }
+      }
+    } catch (e) {
+      console.error("Geocode failed", e);
+    }
+  }
 
   // -------------------------------------------------------------------------
   return (
@@ -626,10 +618,43 @@ export default function Client() {
               />
             </label>
           )}
+
+          {/* Search box */}
+          <input
+            placeholder="Search postcode or area (e.g. EC1A)"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && goToSearch()}
+            style={{
+              padding: "0.25rem",
+              fontSize: "0.75rem",
+              border: "1px solid #374151",
+              borderRadius: "0.25rem",
+              background: "#0b1220",
+              color: "#f9fafb",
+              minWidth: 220,
+            }}
+          />
+          <button
+            onClick={goToSearch}
+            style={{
+              padding: "0.25rem 0.5rem",
+              fontSize: "0.75rem",
+              border: "1px solid #374151",
+              borderRadius: "0.25rem",
+              background: "#1f2937",
+              color: "#f9fafb",
+              cursor: "pointer",
+            }}
+          >
+            Search
+          </button>
+
+          {loading && <span style={{ marginLeft: 6, fontSize: "0.75rem" }}>Loading…</span>}
         </div>
       </div>
 
-      {/* Small debug chip */}
+      {/* Status chip with cache badge */}
       <div
         style={{
           position: "absolute",
@@ -646,12 +671,13 @@ export default function Client() {
         title="Stations returned by the API after filters"
       >
         stations: {stations.length}
+        {cacheHitLast ? " • cache: hit" : ""}
       </div>
 
       {/* Map */}
       <main style={{ height: "100%", width: "100%" }}>
         <MapContainer
-          center={mapCenter}
+          center={[params.lat, params.lon]}
           zoom={13}
           scrollWheelZoom
           ref={mapRef}
@@ -683,10 +709,10 @@ export default function Client() {
 
               const fill =
                 isOperational === null
-                  ? "#60a5fa" // blue = unknown
+                  ? "#60a5fa"
                   : isOperational
-                  ? "#22c55e" // green = operational
-                  : "#ef4444"; // red = not operational
+                  ? "#22c55e"
+                  : "#ef4444";
 
               return (
                 <CircleMarker
