@@ -2,23 +2,23 @@
 
 /**
  * Autodun EV Map (client)
- * - Debounced bbox fetch (no API spam) + latest-request-wins
- * - Client LRU cache (shows "cache: hit")
- * - Heatmap + markers with panes (heat under markers)
- * - Stable popups (no accidental close while interacting)
- * - Search: robust geocoding (UK postcode normalization + GB fallback)
- * - UI: toolbar narrower; popups always above toolbar
+ * - Debounced bbox fetch + latest-request-wins
+ * - Client LRU cache
+ * - Heatmap + markers (heat under markers)
+ * - Stable popups (do not close while typing/clicking)
+ * - **Search uses server proxy /api/geocode** (no CORS/rate-limit flakiness)
+ * - Toolbar narrower + lower z-index so popups stay above it
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// ---------------- request coordination (module scope) ------------------------
+// ============ request coordination ============
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// ---------------- simple LRU cache (module scope) ---------------------------
+// ============ small LRU cache =================
 type CacheEntry<T> = { data: T; t: number };
 const MAX_CACHE = 30;
 const stationCache = new Map<string, CacheEntry<StationWithScore[]>>();
@@ -37,7 +37,7 @@ function getCache(key: string) {
   return hit.data;
 }
 
-// ---------------- helpers ---------------------------------------------------
+// ============ helpers ========================
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -48,10 +48,7 @@ const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
 const round = (n: number, dp = 3) => Math.round(n * 10 ** dp) / 10 ** dp;
 
 function bboxKey(
-  b:
-    | { north: number; south: number; east: number; west: number }
-    | null
-    | undefined,
+  b: { north: number; south: number; east: number; west: number } | null | undefined,
   params: { lat: number; lon: number; dist: number },
   conn: string,
   source: string
@@ -77,36 +74,20 @@ function bboxKey(
   ].join("|");
 }
 
-// Normalize UK postcodes like "ig45hr" -> "IG4 5HR"
-function normalizeUKPostcode(q: string) {
-  const s = q.toUpperCase().replace(/\s+/g, "");
-  if (s.length < 5 || s.length > 7) return q.trim();
-  return s.slice(0, s.length - 3) + " " + s.slice(-3);
-}
-
-// ---------------- react-leaflet (client-only) -------------------------------
-const MapContainer = dynamic(
-  () => import("react-leaflet").then((m) => m.MapContainer),
-  { ssr: false }
-);
-const TileLayer = dynamic(
-  () => import("react-leaflet").then((m) => m.TileLayer),
-  { ssr: false }
-);
-const CircleMarker = dynamic(
-  () => import("react-leaflet").then((m) => m.CircleMarker),
-  { ssr: false }
-);
-const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
+// ============ react-leaflet (client-only) ====
+const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), {
   ssr: false,
 });
-const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), {
+const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false });
+const CircleMarker = dynamic(() => import("react-leaflet").then((m) => m.CircleMarker), {
   ssr: false,
 });
+const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), { ssr: false });
+const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), { ssr: false });
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
-// ---------------- types -----------------------------------------------------
+// ============ types ==========================
 type HeatPoint = [number, number, number];
 interface StationWithScore extends OCMStation {
   _score: number;
@@ -115,7 +96,7 @@ interface StationWithScore extends OCMStation {
   DataSource?: string;
 }
 
-// ---------------- heat layer ------------------------------------------------
+// ============ Heat layer =====================
 function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -128,24 +109,31 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
       await import("leaflet.heat");
 
       if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
       if (!map || points.length === 0) return;
 
       const layer = (L as any).heatLayer(points, {
-        radius: 45, blur: 25, maxZoom: 17, max: 1.0,
-        minOpacity: opacity, pane: "heat",
+        radius: 45,
+        blur: 25,
+        maxZoom: 17,
+        max: 1.0,
+        minOpacity: opacity,
+        pane: "heat",
       });
       layer.addTo(map);
       layerRef.current = layer;
     }
-
     mount().catch(console.error);
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
     };
@@ -154,7 +142,7 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
   return null;
 }
 
-// ---------------- feedback form --------------------------------------------
+// ============ Feedback form ==================
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -188,6 +176,9 @@ function FeedbackForm({
     }
   };
 
+  // Stop propagation so Popup stays open while interacting
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
   if (submitted) {
     return (
       <p style={{ color: "#22c55e", fontSize: "0.75rem", marginTop: "0.5rem" }}>
@@ -196,54 +187,59 @@ function FeedbackForm({
     );
   }
 
-  // Stop propagation so Popup stays open while typing/clicking
-  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
-
   return (
-    <form
-      onSubmit={handleSubmit}
-      onMouseDown={stop}
-      onClick={stop}
-      onWheel={stop}
-      style={{ marginTop: "0.5rem" }}
-    >
-      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>
-        Rating (0–5)
-      </label>
+    <form onSubmit={handleSubmit} onMouseDown={stop} onClick={stop} onWheel={stop}>
+      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>Rating (0–5)</label>
       <select
         value={rating}
         onChange={(e) => setRating(parseInt(e.target.value, 10))}
         style={{
-          width: "100%", padding: "0.25rem", fontSize: "0.75rem",
-          border: "1px solid #374151", borderRadius: 4, background: "#1f2937", color: "#f9fafb",
+          width: "100%",
+          padding: "0.25rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: 4,
+          background: "#1f2937",
+          color: "#f9fafb",
           marginBottom: 6,
         }}
       >
         {[5, 4, 3, 2, 1, 0].map((n) => (
-          <option key={n} value={n}>{n}</option>
+          <option key={n} value={n}>
+            {n}
+          </option>
         ))}
       </select>
 
-      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>
-        Comment
-      </label>
+      <label style={{ display: "block", fontSize: "0.75rem", marginBottom: 4 }}>Comment</label>
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
         placeholder="Optional comment"
         style={{
-          width: "100%", height: "3rem", padding: "0.25rem",
-          fontSize: "0.75rem", border: "1px solid #374151", borderRadius: 4,
-          background: "#0b1220", color: "#f9fafb", marginBottom: 6, resize: "vertical",
+          width: "100%",
+          height: "3rem",
+          padding: "0.25rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: 4,
+          background: "#0b1220",
+          color: "#f9fafb",
+          marginBottom: 6,
+          resize: "vertical",
         }}
       />
       <button
         type="submit"
         disabled={submitting}
         style={{
-          width: "100%", padding: "0.25rem 0.5rem", fontSize: "0.75rem",
-          border: "1px solid #374151", borderRadius: 4,
-          background: submitting ? "#374151" : "#1f2937", color: "#f9fafb",
+          width: "100%",
+          padding: "0.25rem 0.5rem",
+          fontSize: "0.75rem",
+          border: "1px solid #374151",
+          borderRadius: 4,
+          background: submitting ? "#374151" : "#1f2937",
+          color: "#f9fafb",
           cursor: submitting ? "not-allowed" : "pointer",
         }}
       >
@@ -253,9 +249,9 @@ function FeedbackForm({
   );
 }
 
-// ---------------- component -------------------------------------------------
+// ============ Main component ===============
 export default function Client() {
-  // initial params
+  // init center
   const [params] = useState(() => {
     if (typeof window === "undefined") return { lat: 51.5074, lon: -0.1278, dist: 25 };
     const sp = new URLSearchParams(window.location.search);
@@ -269,26 +265,22 @@ export default function Client() {
     };
   });
 
+  // state
   const [stations, setStations] = useState<StationWithScore[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
   const [bounds, setBounds] = useState<{ north: number; south: number; east: number; west: number } | null>(null);
 
-  // layers
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [heatOpacity, setHeatOpacity] = useState(0.65);
 
-  // filters
   const [connFilter, setConnFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ocm" | "all" | "council">("ocm");
 
-  // feedback
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
 
-  // cache indicator
   const [cacheHitLast, setCacheHitLast] = useState(false);
 
   // search
@@ -299,11 +291,10 @@ export default function Client() {
   // map ref
   const mapRef = useRef<any>(null);
 
-  // debounced bounds watcher
+  // watch bounds (debounced)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
     const update = debounce(() => {
       const b = map.getBounds?.();
       if (!b) return;
@@ -314,7 +305,6 @@ export default function Client() {
         west: b.getWest(),
       });
     }, 450);
-
     update();
     map.on?.("moveend", update);
     map.on?.("zoomend", update);
@@ -324,13 +314,12 @@ export default function Client() {
     };
   }, []);
 
-  // fetch stations (cache + race-safe)
+  // fetch stations with cache + race protection
   useEffect(() => {
     const key = bboxKey(bounds, params, connFilter, sourceFilter);
 
-    async function fetchStations() {
+    async function run() {
       setError(null);
-
       const cached = getCache(key);
       setCacheHitLast(!!cached);
       if (cached) setStations(cached);
@@ -381,7 +370,7 @@ export default function Client() {
       }
     }
 
-    fetchStations();
+    run();
   }, [bounds, params.lat, params.lon, params.dist, connFilter, sourceFilter, feedbackVersion]);
 
   // heat points
@@ -399,35 +388,21 @@ export default function Client() {
     });
   }, [stations]);
 
-  // geocode
+  // search via server proxy
   async function goToSearch() {
-    const qRaw = searchText.trim();
-    if (!qRaw || !mapRef.current) return;
+    const q = searchText.trim();
+    if (!q || !mapRef.current) return;
 
-    const q = normalizeUKPostcode(qRaw);
     setSearchError(null);
     setSearchLoading(true);
-
     try {
-      const tries = [
-        // postcode-specific (GB), then generic q with GB fallback
-        `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&postalcode=${encodeURIComponent(q)}`,
-        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
-        `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&q=${encodeURIComponent(q)}`,
-      ];
-
-      let hit: any = null;
-      for (const url of tries) {
-        const res = await fetch(url, { headers: { Accept: "application/json" } });
-        if (!res.ok) continue;
-        const arr = (await res.json()) as Array<{ lat: string; lon: string }>;
-        if (Array.isArray(arr) && arr.length) { hit = arr[0]; break; }
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setSearchError(j?.error || "Location not found.");
+        return;
       }
-
-      if (!hit) { setSearchError("Location not found."); return; }
-
-      const lat = parseFloat(hit.lat);
-      const lon = parseFloat(hit.lon);
+      const { lat, lon } = (await res.json()) as { lat: number; lon: number };
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
         const map = mapRef.current;
         const targetZoom = Math.max(map.getZoom?.() ?? 12, 13);
@@ -436,29 +411,27 @@ export default function Client() {
         setSearchError("Location not found.");
       }
     } catch (e) {
-      console.error("Geocode failed", e);
       setSearchError("Search failed. Try a more specific name.");
     } finally {
       setSearchLoading(false);
     }
   }
 
-  // --------------------------------------------------------------------------
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {/* Raise popup above everything; also make heat non-interactive */}
+      {/* Ensure popups over toolbar */}
       <style>{`
         .leaflet-pane.leaflet-popup-pane { z-index: 1200 !important; }
         .leaflet-pane.leaflet-heatmap-layer, .leaflet-pane#heat { pointer-events: none; }
       `}</style>
 
-      {/* Toolbar — narrower to avoid covering map center */}
+      {/* Toolbar (narrow, low z-index) */}
       <div
         style={{
           position: "absolute",
           top: "0.5rem",
           left: "0.5rem",
-          zIndex: 650,              // below popup (700), above map panes
+          zIndex: 650,
           background: "rgba(12, 19, 38, 0.9)",
           padding: "0.75rem",
           borderRadius: "0.25rem",
@@ -488,46 +461,16 @@ export default function Client() {
                 mapRef.current?.setView([latitude, longitude], 13);
               });
             }}
-            style={{
-              padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-              cursor: "pointer",
-            }}
+            style={btn}
           >
             Use my location
           </button>
 
-          <button
-            onClick={() => mapRef.current?.setView([params.lat, params.lon], 13)}
-            style={{
-              padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={() => mapRef.current?.setView([params.lat, params.lon], 13)} style={btn}>
             Reset view
           </button>
 
-          <select
-            value={connFilter}
-            onChange={(e) => setConnFilter(e.target.value)}
-            style={{
-              padding: "0.25rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-            }}
-          >
+          <select value={connFilter} onChange={(e) => setConnFilter(e.target.value)} style={select}>
             <option value="">All connectors</option>
             <option value="ccs">CCS</option>
             <option value="type 2">Type 2</option>
@@ -537,47 +480,17 @@ export default function Client() {
           <select
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value as "ocm" | "all" | "council")}
-            style={{
-              padding: "0.25rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-            }}
+            style={select}
           >
             <option value="ocm">OpenChargeMap</option>
             <option value="all">All sources</option>
             <option value="council">Council</option>
           </select>
 
-          <button
-            onClick={() => setShowMarkers((v) => !v)}
-            style={{
-              padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={() => setShowMarkers((v) => !v)} style={btn}>
             {showMarkers ? "Markers ✓" : "Markers ✗"}
           </button>
-
-          <button
-            onClick={() => setShowHeatmap((v) => !v)}
-            style={{
-              padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#1f2937",
-              color: "#f9fafb",
-              cursor: "pointer",
-            }}
-          >
+          <button onClick={() => setShowHeatmap((v) => !v)} style={btn}>
             {showHeatmap ? "Heatmap ✓" : "Heatmap ✗"}
           </button>
 
@@ -595,35 +508,15 @@ export default function Client() {
             </label>
           )}
 
-          {/* Search */}
+          {/* SEARCH */}
           <input
             placeholder="Search postcode or area (e.g. EC1A, Glasgow)"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && goToSearch()}
-            style={{
-              padding: "0.25rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: "#0b1220",
-              color: "#f9fafb",
-              minWidth: 220,
-            }}
+            style={input}
           />
-          <button
-            onClick={goToSearch}
-            disabled={searchLoading}
-            style={{
-              padding: "0.25rem 0.5rem",
-              fontSize: "0.75rem",
-              border: "1px solid #374151",
-              borderRadius: "0.25rem",
-              background: searchLoading ? "#374151" : "#1f2937",
-              color: "#f9fafb",
-              cursor: searchLoading ? "not-allowed" : "pointer",
-            }}
-          >
+          <button onClick={goToSearch} disabled={searchLoading} style={{ ...btn, opacity: searchLoading ? 0.6 : 1 }}>
             {searchLoading ? "Searching…" : "Search"}
           </button>
 
@@ -631,32 +524,17 @@ export default function Client() {
         </div>
 
         {searchError && (
-          <div style={{ marginTop: 6, fontSize: "0.75rem", color: "#fca5a5" }}>
-            {searchError}
-          </div>
+          <div style={{ marginTop: 6, fontSize: "0.75rem", color: "#fca5a5" }}>{searchError}</div>
         )}
       </div>
 
       {/* status chip */}
-      <div
-        style={{
-          position: "absolute",
-          top: "0.75rem",
-          right: "0.75rem",
-          zIndex: 640,
-          background: "rgba(15, 23, 42, 0.85)",
-          color: "#e5e7eb",
-          padding: "0.25rem 0.5rem",
-          borderRadius: "0.25rem",
-          fontSize: "0.75rem",
-          border: "1px solid rgba(148,163,184,0.3)",
-        }}
-        title="Stations returned by the API after filters"
-      >
-        stations: {stations.length}{cacheHitLast ? " • cache: hit" : ""}
+      <div style={chip} title="Stations returned by the API after filters">
+        stations: {stations.length}
+        {cacheHitLast ? " • cache: hit" : ""}
       </div>
 
-      {/* map */}
+      {/* Map */}
       <main style={{ height: "100%", width: "100%" }}>
         <MapContainer
           center={[params.lat, params.lon]}
@@ -675,9 +553,7 @@ export default function Client() {
           <Pane name="markers" style={{ zIndex: 401 }} />
 
           {/* heat under markers */}
-          {showHeatmap && heatPoints.length > 0 && (
-            <HeatLayer points={heatPoints} opacity={heatOpacity} />
-          )}
+          {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} opacity={heatOpacity} />}
 
           {/* markers */}
           {showMarkers &&
@@ -742,10 +618,10 @@ export default function Client() {
                     {s.Feedback && s.Feedback.reliability != null && (
                       <>
                         <br />
-                        Reliability: {(s.Feedback.reliability * 100).toFixed(0)}% (
-                        {s.Feedback.count} feedback)
+                        Reliability: {(s.Feedback.reliability * 100).toFixed(0)}% ({s.Feedback.count} feedback)
                       </>
                     )}
+
                     <div style={{ marginTop: "0.5rem" }}>
                       {feedbackOpenId === (s.ID as number) ? (
                         <FeedbackForm
@@ -761,15 +637,7 @@ export default function Client() {
                             e.stopPropagation();
                             setFeedbackOpenId(s.ID as number);
                           }}
-                          style={{
-                            padding: "0.25rem 0.5rem",
-                            fontSize: "0.75rem",
-                            border: "1px solid #374151",
-                            borderRadius: "0.25rem",
-                            background: "#1f2937",
-                            color: "#f9fafb",
-                            cursor: "pointer",
-                          }}
+                          style={btn}
                         >
                           Leave feedback
                         </button>
@@ -781,7 +649,7 @@ export default function Client() {
             })}
         </MapContainer>
 
-        {/* heat legend */}
+        {/* legend */}
         {showHeatmap && (
           <div
             style={{
@@ -798,11 +666,11 @@ export default function Client() {
           >
             <div
               style={{
-                width: "160px",
-                height: "10px",
+                width: 160,
+                height: 10,
                 background:
                   "linear-gradient(to right, rgba(42,133,255,1) 0%, rgba(110,216,89,1) 25%, rgba(255,255,0,1) 50%, rgba(255,128,0,1) 75%, rgba(255,0,0,1) 100%)",
-                marginBottom: "0.25rem",
+                marginBottom: 4,
               }}
             />
             <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -812,43 +680,12 @@ export default function Client() {
           </div>
         )}
 
-        {/* empty state */}
+        {/* empty + error */}
         {!loading && !error && stations.length === 0 && (
-          <div
-            style={{
-              position: "absolute",
-              top: "50%",
-              left: "50%",
-              transform: "translate(-50%, -50%)",
-              padding: "1rem",
-              background: "rgba(0,0,0,0.7)",
-              borderRadius: "0.5rem",
-              color: "#f9fafb",
-              fontSize: "0.875rem",
-              zIndex: 640,
-              textAlign: "center",
-              maxWidth: "80%",
-            }}
-          >
-            No stations found in this area. Try zooming out or moving the map.
-          </div>
+          <div style={empty}>No stations found in this area. Try zooming out or moving the map.</div>
         )}
-
-        {/* error banner */}
         {error && (
-          <div
-            style={{
-              position: "absolute",
-              top: "1rem",
-              right: "1rem",
-              padding: "0.5rem 0.75rem",
-              background: "rgba(190,18,60,0.9)",
-              borderRadius: "0.375rem",
-              color: "#fff",
-              fontSize: "0.8rem",
-              zIndex: 640,
-            }}
-          >
+          <div style={errBanner}>
             {error}
           </div>
         )}
@@ -856,3 +693,68 @@ export default function Client() {
     </div>
   );
 }
+
+// --- small style helpers ---
+const btn: React.CSSProperties = {
+  padding: "0.25rem 0.5rem",
+  fontSize: "0.75rem",
+  border: "1px solid #374151",
+  borderRadius: "0.25rem",
+  background: "#1f2937",
+  color: "#f9fafb",
+  cursor: "pointer",
+};
+const select: React.CSSProperties = {
+  padding: "0.25rem",
+  fontSize: "0.75rem",
+  border: "1px solid #374151",
+  borderRadius: "0.25rem",
+  background: "#1f2937",
+  color: "#f9fafb",
+};
+const input: React.CSSProperties = {
+  padding: "0.25rem",
+  fontSize: "0.75rem",
+  border: "1px solid #374151",
+  borderRadius: "0.25rem",
+  background: "#0b1220",
+  color: "#f9fafb",
+  minWidth: 220,
+};
+const chip: React.CSSProperties = {
+  position: "absolute",
+  top: "0.75rem",
+  right: "0.75rem",
+  zIndex: 640,
+  background: "rgba(15, 23, 42, 0.85)",
+  color: "#e5e7eb",
+  padding: "0.25rem 0.5rem",
+  borderRadius: "0.25rem",
+  fontSize: "0.75rem",
+  border: "1px solid rgba(148,163,184,0.3)",
+};
+const empty: React.CSSProperties = {
+  position: "absolute",
+  top: "50%",
+  left: "50%",
+  transform: "translate(-50%, -50%)",
+  padding: "1rem",
+  background: "rgba(0,0,0,0.7)",
+  borderRadius: "0.5rem",
+  color: "#f9fafb",
+  fontSize: "0.875rem",
+  zIndex: 640,
+  textAlign: "center",
+  maxWidth: "80%",
+};
+const errBanner: React.CSSProperties = {
+  position: "absolute",
+  top: "1rem",
+  right: "1rem",
+  padding: "0.5rem 0.75rem",
+  background: "rgba(190,18,60,0.9)",
+  borderRadius: "0.375rem",
+  color: "#fff",
+  fontSize: "0.8rem",
+  zIndex: 640,
+};
