@@ -12,6 +12,7 @@ import React, {
 import dynamic from "next/dynamic";
 import "leaflet/dist/leaflet.css";
 import { type OCMStation, featuresFor, scoreFor } from "../../lib/model1";
+import FeedbackModal from "../components/FeedbackModal";
 
 /* ------------------------------------------------------------------ */
 /* React-Leaflet (client only)                                        */
@@ -174,6 +175,10 @@ export default function Model1HeatmapPage() {
   const [errMsg, setErrMsg] = useState<string | null>(null);
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [searchText, setSearchText] = useState("");
+
+  // Feedback modal state
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbStationId, setFbStationId] = useState<string | null>(null);
 
   // Use a callback ref so React-Leaflet doesn't try to access stale refs
   const setMapRef = useCallback((m: any) => {
@@ -436,7 +441,28 @@ export default function Model1HeatmapPage() {
                     <br />
                     Score: {s._score.toFixed(2)}
                     <br />
-                    <em>Feedback coming back soon (stabilising page).</em>
+                    <button
+                      className="mt-2"
+                      style={{
+                        marginTop: "0.5rem",
+                        padding: "0.35rem 0.6rem",
+                        borderRadius: "0.35rem",
+                        border: "1px solid #92400e",
+                        background: "#fbbf24",
+                        color: "#111827",
+                        cursor: "pointer",
+                      }}
+                      onClick={() => {
+                        const id =
+                          s.ID != null
+                            ? String(s.ID)
+                            : `${lat},${lon}`;
+                        setFbStationId(id);
+                        setFbOpen(true);
+                      }}
+                    >
+                      Report status / feedback
+                    </button>
                   </Popup>
                 </Marker>
               );
@@ -449,6 +475,13 @@ export default function Model1HeatmapPage() {
         )}
         {errMsg && <div style={empty}>{errMsg}</div>}
       </main>
+
+      {/* Feedback Modal */}
+      <FeedbackModal
+        stationId={fbStationId}
+        open={fbOpen}
+        onClose={() => setFbOpen(false)}
+      />
     </div>
   );
 }
