@@ -198,13 +198,12 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
 
       if (!map || points.length === 0) return;
 
-      // leaflet.heat extends L.Layer and supports the Leaflet "pane" option
       const layer = (L as any).heatLayer(points, {
         radius: 45,
         blur: 25,
         maxZoom: 17,
         max: 1.0,
-        minOpacity: opacity, // controls visibility
+        minOpacity: opacity,
         pane: "heat",
       });
       layer.addTo(map);
@@ -273,7 +272,6 @@ export default function Client() {
       setLoading(true);
       setError(null);
 
-      // keep-latest-wins + cancel in-flight
       const reqId = ++lastReqId;
       if (lastController) lastController.abort();
       const controller = new AbortController();
@@ -308,7 +306,7 @@ export default function Client() {
           : [];
 
         if (!Array.isArray(json) && json?.error) {
-          setError(String(json.error)); // e.g. "OCM 401/429"
+          setError(String(json.error));
         }
 
         const scored: StationWithScore[] = (data ?? [])
@@ -326,7 +324,6 @@ export default function Client() {
       } catch (e: any) {
         if (e?.name !== "AbortError") {
           setError(e?.message || "Failed to load stations");
-          // keep old markers visible; don't wipe setStations([])
         }
       } finally {
         if (reqId === lastReqId) setLoading(false);
@@ -362,18 +359,25 @@ export default function Client() {
   // Map ref + panes + debounced bounds tracking
   const mapRef = useRef<any>(null);
 
-  // create panes once so heat sits under markers
+  // create panes once so heat sits under markers (NO optional chaining on LHS)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    if (!map.getPane?.("heat")) {
-      map.createPane?.("heat");
-      map.getPane?.("heat")!.style.zIndex = "399"; // under overlay/markers
+    if (!map.getPane("heat")) {
+      map.createPane("heat");
     }
-    if (!map.getPane?.("markers")) {
-      map.createPane?.("markers");
-      map.getPane?.("markers")!.style.zIndex = "401"; // above heat
+    const heatPane = map.getPane("heat");
+    if (heatPane) {
+      heatPane.style.zIndex = "399"; // under overlay/markers
+    }
+
+    if (!map.getPane("markers")) {
+      map.createPane("markers");
+    }
+    const markerPane = map.getPane("markers");
+    if (markerPane) {
+      markerPane.style.zIndex = "401"; // above heat
     }
   }, []);
 
