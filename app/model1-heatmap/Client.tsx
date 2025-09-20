@@ -4,11 +4,11 @@
  * Autodun EV Map (client component)
  * - Debounced bbox updates (prevents API spam)
  * - Race-proof network (AbortController + latest-request-wins)
- * - Client-side LRU cache keyed by rounded bbox + filters (+ visible cache badge)
- * - Heatmap + Markers together, using React-Leaflet <Pane> (heat under markers)
- * - Stable popups: stop click/scroll propagation so forms don’t close
+ * - Client-side LRU cache keyed by rounded bbox + filters (shows "cache: hit")
+ * - Heatmap + Markers together using <Pane> (heat under markers)
+ * - Stable popups (stop propagation so forms don’t close)
  * - Heatmap opacity slider
- * - Postcode/area search (Nominatim)
+ * - Postcode/area search (Nominatim, GB fallback, visible loading/error)
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -26,7 +26,6 @@ const stationCache = new Map<string, CacheEntry<StationWithScore[]>>();
 
 function setCache(key: string, data: StationWithScore[]) {
   stationCache.set(key, { data, t: Date.now() });
-  // evict oldest if needed
   if (stationCache.size > MAX_CACHE) {
     const oldestKey = [...stationCache.entries()]
       .sort((a, b) => a[1].t - b[1].t)[0]?.[0];
@@ -36,7 +35,6 @@ function setCache(key: string, data: StationWithScore[]) {
 function getCache(key: string): StationWithScore[] | undefined {
   const hit = stationCache.get(key);
   if (!hit) return undefined;
-  // touch for LRU
   stationCache.delete(key);
   stationCache.set(key, { data: hit.data, t: Date.now() });
   return hit.data;
@@ -318,6 +316,8 @@ export default function Client() {
 
   // search box
   const [searchText, setSearchText] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // Map ref
   const mapRef = useRef<any>(null);
@@ -438,29 +438,45 @@ export default function Client() {
     });
   }, [stations]);
 
-  const mapCenter: [number, number] = [params.lat, params.lon];
-
-  // Geocode (postcode/area) via Nominatim
+  // Geocode (postcode/area) via Nominatim with GB fallback
   async function goToSearch() {
     const q = searchText.trim();
-    if (!q) return;
+    if (!q || !mapRef.current) return;
+
+    setSearchError(null);
+    setSearchLoading(true);
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-        q
-      )}`;
-      const res = await fetch(url, {
-        headers: { "Accept-Language": "en" },
-      });
-      const json = (await res.json()) as Array<{ lat: string; lon: string }>;
-      if (json?.length) {
-        const lat = parseFloat(json[0].lat);
-        const lon = parseFloat(json[0].lon);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          mapRef.current?.setView([lat, lon], 14);
-        }
+      const tries = [
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=gb&q=${encodeURIComponent(q)}`,
+      ];
+      let hit: any = null;
+
+      for (const url of tries) {
+        const res = await fetch(url, { headers: { Accept: "application/json" } });
+        if (!res.ok) continue;
+        const arr = (await res.json()) as Array<{ lat: string; lon: string }>;
+        if (Array.isArray(arr) && arr.length) { hit = arr[0]; break; }
+      }
+      if (!hit) {
+        setSearchError("Location not found.");
+        return;
+      }
+
+      const lat = parseFloat(hit.lat);
+      const lon = parseFloat(hit.lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        const map = mapRef.current;
+        const targetZoom = Math.max(map.getZoom?.() ?? 12, 13);
+        map.flyTo([lat, lon], targetZoom, { animate: true, duration: 0.8 });
+      } else {
+        setSearchError("Location not found.");
       }
     } catch (e) {
       console.error("Geocode failed", e);
+      setSearchError("Search failed. Try a more specific name.");
+    } finally {
+      setSearchLoading(false);
     }
   }
 
@@ -519,7 +535,7 @@ export default function Client() {
 
           <button
             onClick={() => {
-              mapRef.current?.setView(mapCenter, 13);
+              mapRef.current?.setView([params.lat, params.lon], 13);
             }}
             style={{
               padding: "0.25rem 0.5rem",
@@ -621,7 +637,7 @@ export default function Client() {
 
           {/* Search box */}
           <input
-            placeholder="Search postcode or area (e.g. EC1A)"
+            placeholder="Search postcode or area (e.g. EC1A, Glasgow)"
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && goToSearch()}
@@ -637,21 +653,28 @@ export default function Client() {
           />
           <button
             onClick={goToSearch}
+            disabled={searchLoading}
             style={{
               padding: "0.25rem 0.5rem",
               fontSize: "0.75rem",
               border: "1px solid #374151",
               borderRadius: "0.25rem",
-              background: "#1f2937",
+              background: searchLoading ? "#374151" : "#1f2937",
               color: "#f9fafb",
-              cursor: "pointer",
+              cursor: searchLoading ? "not-allowed" : "pointer",
             }}
           >
-            Search
+            {searchLoading ? "Searching…" : "Search"}
           </button>
 
           {loading && <span style={{ marginLeft: 6, fontSize: "0.75rem" }}>Loading…</span>}
         </div>
+
+        {searchError && (
+          <div style={{ marginTop: 6, fontSize: "0.75rem", color: "#fca5a5" }}>
+            {searchError}
+          </div>
+        )}
       </div>
 
       {/* Status chip with cache badge */}
