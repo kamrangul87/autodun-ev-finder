@@ -1,15 +1,8 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
-export const revalidate = false;
-
 /**
- * Model-1 EV Heatmap page
- * - Fetches stations from /api/stations (bbox or center+radius).
- * - Uses featuresFor/scoreFor from lib/model1.ts to compute scores.
- * - Renders Leaflet heat layer (leaflet.heat) or markers with popups.
- * - Includes connector/source filters and a lightweight feedback form.
- * - Surfaces backend errors (e.g., OCM key/rate-limit) in the UI.
+ * Model-1 EV Heatmap page (client component)
+ * — Debounced bbox updates, race-proof fetch (AbortController), stable keys.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -233,13 +226,13 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Page
+// Page (client component)
 export default function Client() {
   // Read query params lazily (client only)
   const [params] = useState(() => {
     if (typeof window === "undefined") {
       return { lat: 51.5074, lon: -0.1278, dist: 25 };
-    }
+      }
     const sp = new URLSearchParams(window.location.search);
     const lat = parseFloat(sp.get("lat") || "51.5074");
     const lon = parseFloat(sp.get("lon") || "-0.1278");
@@ -264,7 +257,6 @@ export default function Client() {
 
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [connFilter, setConnFilter] = useState("");
-  // Default to OCM while validating data flow; you can switch to "all".
   const [sourceFilter, setSourceFilter] = useState<"ocm" | "all" | "council">("ocm");
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
@@ -303,7 +295,6 @@ export default function Client() {
         if (!res.ok) throw new Error(`API responded with ${res.status}`);
 
         const json = await res.json();
-        // API can return an array or { error, items, detail }
         let data: OCMStation[] = Array.isArray(json)
           ? json
           : Array.isArray(json?.items)
@@ -325,7 +316,6 @@ export default function Client() {
           })
           .filter(Boolean) as StationWithScore[];
 
-        // only latest request updates state
         if (reqId === lastReqId) setStations(scored);
       } catch (e: any) {
         if (e?.name !== "AbortError") {
@@ -381,8 +371,7 @@ export default function Client() {
       });
     }, 450);
 
-    // initial + on move/zoom
-    debouncedUpdate();
+    debouncedUpdate(); // initial
     map.on?.("moveend", debouncedUpdate);
     map.on?.("zoomend", debouncedUpdate);
     return () => {
@@ -649,19 +638,17 @@ export default function Client() {
         {/* Heat legend */}
         {showHeatmap && (
           <div
-            style{
-              {
-                position: "absolute",
-                bottom: "1rem",
-                left: "1rem",
-                padding: "0.5rem",
-                background: "rgba(0,0,0,0.6)",
-                borderRadius: "0.25rem",
-                color: "#f9fafb",
-                fontSize: "0.75rem",
-                zIndex: 1000,
-              } as React.CSSProperties
-            }
+            style={{
+              position: "absolute",
+              bottom: "1rem",
+              left: "1rem",
+              padding: "0.5rem",
+              background: "rgba(0,0,0,0.6)",
+              borderRadius: "0.25rem",
+              color: "#f9fafb",
+              fontSize: "0.75rem",
+              zIndex: 1000,
+            }}
           >
             <div
               style={{
