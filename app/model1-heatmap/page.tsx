@@ -1,480 +1,321 @@
 // app/model1-heatmap/page.tsx
-"use client";
+'use client';
 
-import React, {
-  MutableRefObject,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import dynamic from "next/dynamic";
-import "leaflet/dist/leaflet.css";
-import { type OCMStation, featuresFor, scoreFor } from "../../lib/model1";
-import FeedbackModal from "../components/FeedbackModal";
+import React, { useEffect, useMemo, useRef, useState, MutableRefObject } from 'react';
+import dynamic from 'next/dynamic';
+import { useMap } from 'react-leaflet';
+import FeedbackModal from '../components/FeedbackModal';
 
-/* ------------------------------------------------------------------ */
-/* React-Leaflet (client only)                                        */
-/* ------------------------------------------------------------------ */
-const MapContainer = dynamic(
-  () => import("react-leaflet").then((m) => m.MapContainer),
-  { ssr: false }
-);
-const TileLayer = dynamic(
-  () => import("react-leaflet").then((m) => m.TileLayer),
-  { ssr: false }
-);
-const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), {
-  ssr: false,
-});
-const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
-  ssr: false,
-});
+// Load react-leaflet components dynamically (avoids SSR issues)
+const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
+const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
+const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
+const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-/* ------------------------------------------------------------------ */
-/* Types & constants                                                   */
-/* ------------------------------------------------------------------ */
-type HeatPoint = [number, number, number];
-interface StationWithScore extends OCMStation {
-  _score: number;
-}
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+// IMPORTANT: do NOT import 'leaflet' at top-level (causes "window is not defined" on SSR)
+// We’ll load it dynamically when the map is ready.
+// Also, keep leaflet.heat’s runtime under the same dynamic load.
 
-/* ------------------------------------------------------------------ */
-/* Small helpers                                                       */
-/* ------------------------------------------------------------------ */
-const coerceArray = <T,>(x: unknown): T[] =>
-  Array.isArray(x) ? (x as T[]) : [];
+// ---- Types (no runtime import) ----
+type LatLngLike = { lat: number; lng: number };
+type OcmPoi = any;
+type Station = {
+  lat: number; lon: number; name?: string | null;
+  addr?: string | null; postcode?: string | null;
+  connectors?: number; maxPowerKw?: number; score?: number;
+  raw: OcmPoi;
+};
 
-function normalizeToStation(obj: any): OCMStation | null {
-  // Already OCM shape
-  if (obj?.AddressInfo?.Latitude != null) return obj as OCMStation;
-
-  // Our /api/sites fallback shape
-  if (typeof obj?.lat === "number" && typeof obj?.lon === "number") {
-    return {
-      ID: obj.id ?? null,
-      AddressInfo: {
-        Title: obj.name ?? "EV charge point",
-        Latitude: obj.lat,
-        Longitude: obj.lon,
-        Postcode: obj.postcode ?? null,
-        AddressLine1: obj.addr ?? null,
-        Town: null,
-        StateOrProvince: null,
-        CountryID: null,
-        DistanceUnit: 0,
-        Distance: 0,
-        RelatedURL: null,
-        ContactEmail: null,
-        ContactTelephone1: null,
-      },
-      Connections: Array(
-        typeof obj.connectors === "number" ? obj.connectors : 1
-      ).fill({
-        PowerKW:
-          typeof obj.maxPowerKw === "number" ? obj.maxPowerKw : undefined,
-      }),
-      StatusType: { IsOperational: obj.status ? obj.status !== "down" : null } as any,
-    } as OCMStation;
-  }
-  return null;
+/** Distance (km) from bounds as half of diagonal using haversine */
+function kmFromBounds(bounds: any): number {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  const R = 6371;
+  const toRad = (d: number) => d * Math.PI / 180;
+  const dLat = toRad(ne.lat - sw.lat);
+  const dLon = toRad(ne.lng - sw.lng);
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(toRad(sw.lat)) * Math.cos(toRad(ne.lat)) *
+            Math.sin(dLon / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return (R * c) / 2;
 }
 
-function bboxFromCenter(lat: number, lon: number, distKm: number) {
-  const dLat = distKm / 111.32;
-  const dLon = distKm / (111.32 * Math.cos((lat * Math.PI) / 180));
-  return { west: lon - dLon, south: lat - dLat, east: lon + dLon, north: lat + dLat };
+function normalise(p: OcmPoi): Station | null {
+  const lat = p?.AddressInfo?.Latitude;
+  const lon = p?.AddressInfo?.Longitude;
+  if (typeof lat !== 'number' || typeof lon !== 'number') return null;
+
+  const conns: any[] = Array.isArray(p?.Connections) ? p.Connections : [];
+  const connectors = conns.length;
+  const maxPowerKw = conns.reduce((m, c) => (typeof c?.PowerKW === 'number' && c.PowerKW > m ? c.PowerKW : m), 0) || 0;
+
+  const s = p?.autodun?.score as number | undefined;
+  const score =
+    typeof s === 'number'
+      ? s
+      : (0.6 * Math.log(1 + (connectors || 0)) + 0.3 * (maxPowerKw / 350) + 0.1);
+
+  return {
+    lat, lon,
+    name: p?.AddressInfo?.Title ?? null,
+    addr: p?.AddressInfo?.AddressLine1 ?? null,
+    postcode: p?.AddressInfo?.Postcode ?? null,
+    connectors, maxPowerKw, score,
+    raw: p,
+  };
 }
 
-/* ------------------------------------------------------------------ */
-/* Heat overlay using leaflet.heat (robust, adds & removes cleanly)    */
-/* ------------------------------------------------------------------ */
-function HeatOverlay({
-  points,
-  mapRef,
-}: {
-  points: HeatPoint[];
-  mapRef: MutableRefObject<any>;
-}) {
+function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
+  const t = useRef<number | null>(null);
+  return (...args: T) => {
+    if (t.current) window.clearTimeout(t.current);
+    t.current = window.setTimeout(() => fn(...args), ms) as unknown as number;
+  };
+}
+
+/** Child helper that fires once the map instance is available */
+const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
+  const map = useMap();
   useEffect(() => {
-    let layer: any = null;
-    let cancelled = false;
-
-    (async () => {
-      // Only mount when we have a map and some points
-      if (!mapRef.current || points.length === 0) return;
-
-      const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat"); // side-effect: registers L.heatLayer
-
-      if (cancelled) return;
-
-      layer = (L as any).heatLayer(points, {
-        radius: 45,
-        blur: 25,
-        maxZoom: 17,
-        max: 1.0,
-        minOpacity: 0.35,
-      });
-      try {
-        layer.addTo(mapRef.current);
-      } catch {
-        /* ignore */
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      try {
-        if (layer && mapRef.current) {
-          mapRef.current.removeLayer(layer);
-        }
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [points, mapRef]);
-
+    onReady(map);
+  }, [map, onReady]);
   return null;
-}
+};
 
-/* ------------------------------------------------------------------ */
-/* Page                                                                */
-/* ------------------------------------------------------------------ */
-export default function Model1HeatmapPage() {
-  // Defaults (London)
-  const [params] = useState(() => {
-    if (typeof window === "undefined")
-      return { lat: 51.5074, lon: -0.1278, dist: 25 };
-    const sp = new URLSearchParams(window.location.search);
-    const lat = parseFloat(sp.get("lat") || "51.5074");
-    const lon = parseFloat(sp.get("lon") || "-0.1278");
-    const dist = parseFloat(sp.get("dist") || "25");
-    return {
-      lat: Number.isFinite(lat) ? lat : 51.5074,
-      lon: Number.isFinite(lon) ? lon : -0.1278,
-      dist: Number.isFinite(dist) ? dist : 25,
-    };
-  });
-
-  const mapRef = useRef<any>(null);
-  const [mapReady, setMapReady] = useState(false);
-
-  // Seed bounds immediately so first fetch happens without waiting for 'ready'
-  const [bounds, setBounds] = useState<{
-    north: number;
-    south: number;
-    east: number;
-    west: number;
-  } | null>(bboxFromCenter(51.5074, -0.1278, 25));
-
-  const [stations, setStations] = useState<StationWithScore[]>([]);
+const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
+  const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
-  const [errMsg, setErrMsg] = useState<string | null>(null);
-  const [showHeatmap, setShowHeatmap] = useState(true);
-  const [searchText, setSearchText] = useState("");
 
-  // Feedback modal state
-  const [fbOpen, setFbOpen] = useState(false);
-  const [fbStationId, setFbStationId] = useState<string | null>(null);
-
-  // Use a callback ref so React-Leaflet doesn't try to access stale refs
-  const setMapRef = useCallback((m: any) => {
-    mapRef.current = m || null;
-    if (m) setMapReady(true);
-  }, []);
-
-  // Track bounds whenever the map moves
-  useEffect(() => {
-    if (!mapReady || !mapRef.current) return;
-    const map = mapRef.current;
-
-    let timer: any = null;
-    const update = () => {
-      // Throttle slightly to avoid spamming requests while panning
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        try {
-          const b = map.getBounds?.();
-          if (!b) return;
-          setBounds({
-            north: b.getNorth(),
-            south: b.getSouth(),
-            east: b.getEast(),
-            west: b.getWest(),
-          });
-        } catch (e) {
-          console.warn("[map] bounds read failed", e);
-        }
-      }, 120);
-    };
-
-    update();
+  const search = async () => {
+    if (!q.trim()) return;
+    setLoading(true);
     try {
-      map.on?.("moveend", update);
-      map.on?.("zoomend", update);
-    } catch (e) {
-      console.warn("[map] attach failed", e);
-    }
+      const url = new URL('https://nominatim.openstreetmap.org/search');
+      url.searchParams.set('format', 'json');
+      url.searchParams.set('q', q);
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('limit', '1');
+      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
 
-    return () => {
-      clearTimeout(timer);
-      try {
-        map.off?.("moveend", update);
-        map.off?.("zoomend", update);
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [mapReady]);
-
-  // Fetch stations whenever bbox changes
-  useEffect(() => {
-    if (!bounds) return;
-
-    let abort = false;
-    (async () => {
-      setLoading(true);
-      setErrMsg(null);
-      try {
-        const { west, south, east, north } = bounds;
-        const url = `${API_BASE}/api/sites?bbox=${west},${south},${east},${north}`;
-        const r = await fetch(url, { cache: "no-store" });
-        if (!r.ok) throw new Error(`API ${r.status}`);
-        const raw = await r.json();
-        const arr = Array.isArray(raw) ? raw : Array.isArray(raw?.sites) ? raw.sites : [];
-        const scored: StationWithScore[] = coerceArray<any>(arr)
-          .map((x) => normalizeToStation(x))
-          .filter(Boolean)
-          .map((s) => {
-            const sc = scoreFor(featuresFor(s!));
-            return Object.assign({}, s!, { _score: sc }) as StationWithScore;
-          });
-
-        if (!abort) setStations(scored);
-      } catch (e: any) {
-        console.error(e);
-        if (!abort) {
-          setStations([]);
-          setErrMsg(e?.message || "Failed to load stations");
-        }
-      } finally {
-        if (!abort) setLoading(false);
-      }
-    })();
-
-    return () => {
-      abort = true;
-    };
-  }, [bounds]);
-
-  // Build heat points with normalised weights
-  const heatPoints: HeatPoint[] = useMemo(() => {
-    if (!stations.length) return [];
-    const values = stations.map((s) => s._score);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const denom = max - min || 1;
-    return stations.map((s) => [
-      s.AddressInfo!.Latitude as number,
-      s.AddressInfo!.Longitude as number,
-      (s._score - min) / denom,
-    ]);
-  }, [stations]);
-
-  // Marker icons
-  const [operationalIcon, offlineIcon] = useMemo(() => {
-    if (typeof window === "undefined") return [undefined, undefined];
-    const L = require("leaflet");
-    const ok = L.divIcon({
-      html:
-        '<div style="width:14px;height:14px;background:#22c55e;border-radius:50%;border:2px solid #fff;"></div>',
-      iconSize: [18, 18],
-      className: "",
-    });
-    const off = L.divIcon({
-      html:
-        '<div style="width:14px;height:14px;background:#ef4444;border-radius:50%;border:2px solid #fff;"></div>',
-      iconSize: [18, 18],
-      className: "",
-    });
-    return [ok, off];
-  }, []);
-
-  // Search (OpenStreetMap Nominatim)
-  const runSearch = async () => {
-    const q = searchText.trim();
-    if (!q || !mapRef.current) return;
-    try {
-      const u = new URL("https://nominatim.openstreetmap.org/search");
-      u.searchParams.set("q", q);
-      u.searchParams.set("format", "jsonv2");
-      u.searchParams.set("limit", "1");
-      const r = await fetch(u.toString());
-      const rows = (await r.json()) as any[];
-      if (rows?.length) {
-        const lat = parseFloat(rows[0].lat);
-        const lon = parseFloat(rows[0].lon);
-        if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          mapRef.current.setView([lat, lon], 13);
-        }
+      const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+      const arr = (await r.json()) as any[];
+      if (arr?.length) {
+        const hit = arr[0];
+        const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
+        onLocate({ lat, lng: lon }, 13);
+      } else {
+        alert('No results for that place/postcode.');
       }
     } catch (e) {
-      console.warn("search failed", e);
+      console.error(e);
+      alert('Search failed. Try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const mapCenter: [number, number] = [params.lat, params.lon];
+  return (
+    <div className="z-[1000] absolute top-4 left-4 bg-black/80 text-white rounded-xl px-3 py-3 flex flex-wrap items-center gap-2">
+      <button onClick={() => onLocate(null)} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">My location</button>
+      <button onClick={() => window.location.reload()} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Reset view</button>
+      <button id="markersBtn" className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Markers</button>
+      <button id="heatBtn" className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Heatmap</button>
+      <input
+        value={q}
+        onChange={e => setQ(e.target.value)}
+        placeholder="Search postcode or area (e.g. EC1A)"
+        className="px-3 py-2 rounded-lg bg-white/10 outline-none w-80"
+      />
+      <button onClick={search} disabled={loading} className="px-3 py-2 rounded-lg bg-emerald-500 text-black hover:bg-emerald-400">
+        {loading ? 'Searching…' : 'Search'}
+      </button>
+    </div>
+  );
+};
+
+const FetchOnMove: React.FC<{
+  setStations: React.Dispatch<React.SetStateAction<Station[]>>,
+  onToggleWires: (w: { attach: () => void; detach: () => void }) => void
+}> = ({ setStations, onToggleWires }) => {
+  const map = useMap();
+  const debounced = useDebounced(async () => {
+    const center = map.getCenter();
+    const radiusKm = Math.max(2, Math.min(25, Math.round(kmFromBounds(map.getBounds()))));
+    const url = `/api/stations?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radiusKm=${radiusKm}`;
+    const r = await fetch(url, { cache: 'no-store' });
+    const arr = await r.json();
+    const out: Station[] = (Array.isArray(arr) ? arr : []).map(normalise).filter(Boolean) as Station[];
+    setStations(out);
+  }, 350);
+
+  useEffect(() => {
+    const onMove = () => debounced();
+    map.on('moveend', onMove);
+    map.on('zoomend', onMove);
+    debounced(); // initial fetch
+    onToggleWires({
+      attach: () => { map.on('moveend', onMove); map.on('zoomend', onMove); },
+      detach: () => { map.off('moveend', onMove); map.off('zoomend', onMove); },
+    });
+    return () => { map.off('moveend', onMove); map.off('zoomend', onMove); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map]);
+
+  return null;
+};
+
+/* ------------------------- Feedback summary helper ------------------------- */
+async function fetchFeedbackSummary(stationId: string) {
+  try {
+    const r = await fetch(`/api/feedback?stationId=${encodeURIComponent(stationId)}`, { cache: 'no-store' });
+    const j = await r.json();
+    if (j?.ok === false) return null;
+    return j as { count: number; averageRating: number | null; reliability: number | null };
+  } catch { return null; }
+}
+
+/* ----------------------- Marker with popup as a child ---------------------- */
+const MarkerWithPopup: React.FC<{ s: Station }> = ({ s }) => {
+  const [fb, setFb] = useState<{count:number;averageRating:number|null;reliability:number|null} | null>(null);
+
+  useEffect(() => {
+    const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
+    fetchFeedbackSummary(id).then(setFb);
+  }, [s]);
 
   return (
-    <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {/* Controls */}
-      <div
-        style={{
-          position: "absolute",
-          top: "0.5rem",
-          left: "0.5rem",
-          zIndex: 1000,
-          background: "rgba(12,19,38,0.95)",
-          padding: "0.75rem",
-          borderRadius: "0.5rem",
-          color: "#f9fafb",
-        }}
-      >
-        <h1 style={{ margin: 0, fontSize: "1rem", fontWeight: 700 }}>
-          Autodun EV Map
-        </h1>
-        <div
-          style={{
-            marginTop: "0.5rem",
-            display: "flex",
-            gap: "0.5rem",
-            flexWrap: "wrap",
-          }}
-        >
+    <CircleMarker center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
+      <Popup>
+        <div style={{ minWidth: 240 }}>
+          <b>{s.name ?? 'Charging site'}</b>
+          <div>{s.postcode ?? s.addr ?? ''}</div>
+          <div>Max power: {s.maxPowerKw ?? 0} kW</div>
+          <div>Connectors: {s.connectors ?? 0}</div>
+          <div>Score: {(s.score ?? 0).toFixed(2)}</div>
+          <div style={{ marginTop: 6, fontSize: 12, opacity: 0.9 }}>
+            <b>Community:</b>{' '}
+            {fb ? (fb.averageRating != null ? `${fb.averageRating.toFixed(1)} / 5 (${fb.count})` : 'no ratings yet') : '…'}
+          </div>
           <button
+            style={{ marginTop: 8, padding: '6px 10px', borderRadius: 6, border: '1px solid #92400e', background: '#fbbf24', color: '#111827', cursor: 'pointer' }}
             onClick={() => {
-              navigator.geolocation?.getCurrentPosition((pos) => {
-                mapRef.current?.setView(
-                  [pos.coords.latitude, pos.coords.longitude],
-                  13
-                );
-              });
+              const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
+              (window as any).openFeedbackModal?.(id);
             }}
-            style={btn}
           >
-            Use my location
-          </button>
-          <button
-            onClick={() => mapRef.current?.setView(mapCenter, 13)}
-            style={btn}
-          >
-            Reset view
-          </button>
-          <button onClick={() => setShowHeatmap((v) => !v)} style={btn}>
-            {showHeatmap ? "Markers" : "Heatmap"}
-          </button>
-          <input
-            placeholder="Search postcode or area (e.g. EC1A, Westminster)"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && runSearch()}
-            style={input}
-          />
-          <button onClick={runSearch} style={btn}>
-            Search
+            Report status / feedback
           </button>
         </div>
-      </div>
+      </Popup>
+    </CircleMarker>
+  );
+};
 
-      {/* Map */}
-      <main style={{ height: "100%", width: "100%" }}>
-        <MapContainer
-          center={mapCenter}
-          zoom={13}
-          scrollWheelZoom
-          ref={setMapRef as unknown as MutableRefObject<any>}
-          style={{ height: "100%", width: "100%" }}
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
+const Model1HeatmapPage: React.FC = () => {
+  const [stations, setStations] = useState<Station[]>([]);
+  const [showMarkers, setShowMarkers] = useState(true);
+  const [showHeat, setShowHeat] = useState(false);
 
-          {/* Real heat overlay (leaflet.heat) */}
-          {showHeatmap && heatPoints.length > 0 && (
-            <HeatOverlay points={heatPoints} mapRef={mapRef} />
-          )}
+  const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
+  const heatLayerRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
+  const LRef = useRef<any>(null); // holds dynamically imported Leaflet
 
-          {/* Markers */}
-          {!showHeatmap &&
-            stations.map((s, i) => {
-              const lat = s.AddressInfo!.Latitude as number;
-              const lon = s.AddressInfo!.Longitude as number;
-              const op = s?.StatusType?.IsOperational;
-              return (
-                <Marker
-                  key={`${s.ID ?? i}-${lat}-${lon}`}
-                  position={[lat, lon]}
-                  icon={
-                    op == null
-                      ? undefined
-                      : op
-                      ? (operationalIcon as any)
-                      : (offlineIcon as any)
-                  }
-                >
-                  <Popup>
-                    <strong>{s.AddressInfo?.Title || "EV site"}</strong>
-                    <br />
-                    {s.AddressInfo?.Postcode ?? ""}
-                    <br />
-                    Max power:{" "}
-                    {s.Connections?.reduce(
-                      (m: number, c: any) =>
-                        Math.max(m, Number(c?.PowerKW || 0)),
-                      0
-                    ) || "—"}{" "}
-                    kW
-                    <br />
-                    Score: {s._score.toFixed(2)}
-                    <br />
-                    <button
-                      className="mt-2"
-                      style={{
-                        marginTop: "0.5rem",
-                        padding: "0.35rem 0.6rem",
-                        borderRadius: "0.35rem",
-                        border: "1px solid #92400e",
-                        background: "#fbbf24",
-                        color: "#111827",
-                        cursor: "pointer",
-                      }}
-                      onClick={() => {
-                        const id =
-                          s.ID != null
-                            ? String(s.ID)
-                            : `${lat},${lon}`;
-                        setFbStationId(id);
-                        setFbOpen(true);
-                      }}
-                    >
-                      Report status / feedback
-                    </button>
-                  </Popup>
-                </Marker>
-              );
-            })}
-        </MapContainer>
+  // Feedback modal state + global opener for popup button
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbStationId, setFbStationId] = useState<string | null>(null);
+  useEffect(() => {
+    (window as any).openFeedbackModal = (id: string) => {
+      setFbStationId(id);
+      setFbOpen(true);
+    };
+    return () => { delete (window as any).openFeedbackModal; };
+  }, []);
 
-        {/* UI states */}
-        {!loading && !errMsg && stations.length === 0 && (
-          <div style={empty}>No stations here. Pan/zoom or try a search.</div>
-        )}
-        {errMsg && <div style={empty}>{errMsg}</div>}
-      </main>
+  const onMapReady = async (map: any) => {
+    mapRef.current = map;
+
+    // Dynamically import Leaflet and the heat plugin on the client
+    const leaflet = await import('leaflet');
+    await import('leaflet.heat');
+    LRef.current = leaflet;
+
+    // Make toggles mutually exclusive
+    document.getElementById('markersBtn')?.addEventListener('click', () => {
+      setShowMarkers(true);
+      setShowHeat(false);
+    });
+    document.getElementById('heatBtn')?.addEventListener('click', () => {
+      setShowHeat(true);
+      setShowMarkers(false);
+    });
+  };
+
+  const handleLocate = async (ll: LatLngLike | null, zoom = 13) => {
+    const map = mapRef.current; if (!map) return;
+    if (ll) {
+      map.setView([ll.lat, ll.lng], zoom);
+    } else if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        pos => map.setView([pos.coords.latitude, pos.coords.longitude], 13),
+        () => alert('Location permission denied')
+      );
+    }
+  };
+
+  // Manage heat layer (create only after Leaflet is loaded)
+  useEffect(() => {
+    const map = mapRef.current;
+    const L = LRef.current;
+    if (!map || !L) return;
+
+    if (showHeat) {
+      const points = stations.map(s => [s.lat, s.lon, Math.max(0.05, Math.min(1, s.score ?? 0.2))]) as [number, number, number][];
+      if (!heatLayerRef.current) {
+        // create layer (leaflet.heat is already imported)
+        // @ts-ignore
+        heatLayerRef.current = (L as any).heatLayer(points, { radius: 22, blur: 20, maxZoom: 17 });
+        heatLayerRef.current.addTo(map);
+      } else {
+        heatLayerRef.current.setLatLngs(points);
+      }
+    } else if (heatLayerRef.current) {
+      heatLayerRef.current.remove();
+      heatLayerRef.current = null;
+    }
+  }, [showHeat, stations]);
+
+  const markers = useMemo(() => (showMarkers ? stations : []), [showMarkers, stations]);
+
+  return (
+    <div className="w-full h-[calc(100vh-64px)] relative">
+      <SearchBox onLocate={handleLocate} />
+      <MapContainer
+        center={[51.5072, -0.1276]}
+        zoom={12}
+        preferCanvas // faster for many markers
+        style={{ height: '100%', width: '100%' }}
+      >
+        {/* capture map instance & load Leaflet on client */}
+        <OnMapReady onReady={onMapReady} />
+
+        <TileLayer
+          attribution="&copy; OpenStreetMap contributors"
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        {/* Data wiring */}
+        {/* @ts-ignore */}
+        <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
+
+        {/* Heat overlay is managed in effect; nothing to render here */}
+
+        {/* Markers */}
+        {markers.map((s, i) => (
+          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} />
+        ))}
+      </MapContainer>
 
       {/* Feedback Modal */}
       <FeedbackModal
@@ -484,42 +325,6 @@ export default function Model1HeatmapPage() {
       />
     </div>
   );
-}
-
-/* ------------------------------------------------------------------ */
-/* Styling                                                             */
-/* ------------------------------------------------------------------ */
-const btn: React.CSSProperties = {
-  padding: "0.35rem 0.6rem",
-  fontSize: "0.8rem",
-  border: "1px solid #374151",
-  borderRadius: "0.35rem",
-  background: "#1f2937",
-  color: "#f9fafb",
-  cursor: "pointer",
 };
 
-const input: React.CSSProperties = {
-  padding: "0.35rem 0.5rem",
-  fontSize: "0.85rem",
-  border: "1px solid #374151",
-  borderRadius: "0.35rem",
-  background: "#0b1220",
-  color: "#f9fafb",
-  minWidth: 320,
-};
-
-const empty: React.CSSProperties = {
-  position: "absolute",
-  top: "50%",
-  left: "50%",
-  transform: "translate(-50%, -50%)",
-  padding: "1rem",
-  background: "rgba(0,0,0,0.7)",
-  borderRadius: "0.5rem",
-  color: "#f9fafb",
-  fontSize: "0.9rem",
-  zIndex: 1000,
-  textAlign: "center",
-  maxWidth: "80%",
-};
+export default Model1HeatmapPage;
