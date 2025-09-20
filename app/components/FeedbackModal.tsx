@@ -1,4 +1,3 @@
-// app/components/FeedbackModal.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -7,13 +6,11 @@ type Props = {
   stationId: string | null;
   open: boolean;
   onClose: () => void;
-  onSuccess?: () => void; // used to bump & refetch popup summary
+  onSuccess?: () => void; // caller refreshes popup after success
 };
 
 export default function FeedbackModal({ stationId, open, onClose, onSuccess }: Props) {
-  const [waitTime, setWaitTime] = useState(0);   // 0..5
-  const [priceFair, setPriceFair] = useState(3); // 0..5 (we’ll use this as the rating)
-  const [working, setWorking] = useState(true);
+  const [rating, setRating] = useState(3);
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -23,30 +20,19 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
     if (!stationId) return;
     setBusy(true);
     try {
-      // Build a helpful comment that includes the extra fields
-      const extra = ` | wait=${waitTime}/5 | working=${working ? 'yes' : 'no'}`;
-      const body = {
-        stationId,
-        rating: priceFair,                  // <-- REQUIRED by /api/feedback
-        comment: comment ? comment + extra : extra,
-      };
-
       const r = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ stationId, rating, comment }),
       });
-
       const j = await r.json();
-      if (!r.ok || j?.ok === false) {
-        throw new Error(j?.error || `HTTP ${r.status}`);
-      }
+      if (j?.ok !== true) throw new Error(j?.error || 'Submit failed');
 
       // reset + close
-      setWaitTime(0); setPriceFair(3); setWorking(true); setComment('');
+      setRating(3);
+      setComment('');
       onClose();
-      onSuccess?.(); // <-- triggers popup to refetch
-      alert('Thanks! Feedback recorded.');
+      onSuccess?.(); // parent re-fetches popup summary
     } catch (e: any) {
       alert(e?.message || 'Submit failed');
     } finally {
@@ -61,26 +47,16 @@ export default function FeedbackModal({ stationId, open, onClose, onSuccess }: P
         <div className="text-xs text-gray-600 mb-4">Station ID: {stationId}</div>
 
         <label className="block mb-3">
-          <div className="mb-1">Wait time (0–5)</div>
+          <div className="mb-1">Rating (0–5)</div>
           <input
-            type="number" min={0} max={5} value={waitTime}
-            onChange={e => setWaitTime(Math.max(0, Math.min(5, Number(e.target.value) || 0)))}
+            type="number"
+            min={0}
+            max={5}
+            step={0.5}
+            value={rating}
+            onChange={e => setRating(Math.max(0, Math.min(5, Number(e.target.value) || 0)))}
             className="w-full border rounded px-3 py-2"
           />
-        </label>
-
-        <label className="block mb-3">
-          <div className="mb-1">Price fairness (0–5) — used as rating</div>
-          <input
-            type="number" min={0} max={5} value={priceFair}
-            onChange={e => setPriceFair(Math.max(0, Math.min(5, Number(e.target.value) || 0)))}
-            className="w-full border rounded px-3 py-2"
-          />
-        </label>
-
-        <label className="flex items-center gap-2 mb-3">
-          <input type="checkbox" checked={working} onChange={e => setWorking(e.target.checked)} />
-          <span>Charger working</span>
         </label>
 
         <label className="block mb-4">
