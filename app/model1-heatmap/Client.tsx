@@ -47,18 +47,9 @@ import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 // ---------------------------------------------------------------------------
-// Feedback form
 function FeedbackForm({
   stationId,
   onSubmitted,
-  <form
-  onSubmit={handleSubmit}
-  onMouseDown={(e) => e.stopPropagation()}
-  onClick={(e) => e.stopPropagation()}
-  onWheel={(e) => e.stopPropagation()}
-  style={{ marginTop: "0.5rem" }}
->
-
 }: {
   stationId: number;
   onSubmitted: () => void;
@@ -98,7 +89,13 @@ function FeedbackForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ marginTop: "0.5rem" }}>
+    <form
+      onSubmit={handleSubmit}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+      onWheel={(e) => e.stopPropagation()}
+      style={{ marginTop: "0.5rem" }}
+    >
       <label
         style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem" }}
       >
@@ -124,6 +121,7 @@ function FeedbackForm({
           </option>
         ))}
       </select>
+
       <label
         style={{ display: "block", fontSize: "0.75rem", marginBottom: "0.25rem" }}
       >
