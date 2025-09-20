@@ -6,19 +6,19 @@
  * - Client LRU cache
  * - Heatmap + markers (heat under markers)
  * - Stable popups (do not close while typing/clicking)
- * - **Search uses server proxy /api/geocode** (no CORS/rate-limit flakiness)
- * - Toolbar narrower + lower z-index so popups stay above it
+ * - Search uses server proxy /api/geocode
+ * - Toolbar lower z-index so popups always show above it
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// ============ request coordination ============
+// ================= request coordination =================
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// ============ small LRU cache =================
+// ================= small LRU cache ======================
 type CacheEntry<T> = { data: T; t: number };
 const MAX_CACHE = 30;
 const stationCache = new Map<string, CacheEntry<StationWithScore[]>>();
@@ -37,7 +37,7 @@ function getCache(key: string) {
   return hit.data;
 }
 
-// ============ helpers ========================
+// ================= helpers =============================
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -74,7 +74,7 @@ function bboxKey(
   ].join("|");
 }
 
-// ============ react-leaflet (client-only) ====
+// ================= react-leaflet (client-only) =========
 const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), {
   ssr: false,
 });
@@ -87,7 +87,7 @@ const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), { ssr: f
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
-// ============ types ==========================
+// ================= types ===============================
 type HeatPoint = [number, number, number];
 interface StationWithScore extends OCMStation {
   _score: number;
@@ -96,7 +96,7 @@ interface StationWithScore extends OCMStation {
   DataSource?: string;
 }
 
-// ============ Heat layer =====================
+// ================= heat layer ==========================
 function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -142,7 +142,16 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
   return null;
 }
 
-// ============ Feedback form ==================
+// =============== capture map reliably ===================
+function CaptureMapRef({ onReady }: { onReady: (map: any) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (map) onReady(map);
+  }, [map, onReady]);
+  return null;
+}
+
+// ================= feedback form =======================
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -176,7 +185,6 @@ function FeedbackForm({
     }
   };
 
-  // Stop propagation so Popup stays open while interacting
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 
   if (submitted) {
@@ -249,7 +257,7 @@ function FeedbackForm({
   );
 }
 
-// ============ Main component ===============
+// ================= main component ======================
 export default function Client() {
   // init center
   const [params] = useState(() => {
@@ -391,27 +399,35 @@ export default function Client() {
   // search via server proxy
   async function goToSearch() {
     const q = searchText.trim();
-    if (!q || !mapRef.current) return;
+    if (!q) return;
+    const map = mapRef.current;
+    if (!map) {
+      setSearchError("Map not ready yet. Try again in a second.");
+      return;
+    }
 
     setSearchError(null);
     setSearchLoading(true);
     try {
       const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { cache: "no-store" });
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        setSearchError(j?.error || "Location not found.");
+        let msg = "Location not found.";
+        try {
+          const j = await res.json();
+          msg = j?.error || msg;
+        } catch {}
+        setSearchError(msg);
         return;
       }
       const { lat, lon } = (await res.json()) as { lat: number; lon: number };
       if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        const map = mapRef.current;
-        const targetZoom = Math.max(map.getZoom?.() ?? 12, 13);
-        map.flyTo([lat, lon], targetZoom, { animate: true, duration: 0.9 });
+        const z = Math.max(map.getZoom?.() ?? 12, 13);
+        map.flyTo([lat, lon], z, { animate: true, duration: 0.9 });
       } else {
         setSearchError("Location not found.");
       }
-    } catch (e) {
-      setSearchError("Search failed. Try a more specific name.");
+    } catch {
+      setSearchError("Search failed. Try a more specific name/postcode.");
     } finally {
       setSearchLoading(false);
     }
@@ -419,13 +435,13 @@ export default function Client() {
 
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {/* Ensure popups over toolbar */}
+      {/* popups above toolbar */}
       <style>{`
         .leaflet-pane.leaflet-popup-pane { z-index: 1200 !important; }
         .leaflet-pane.leaflet-heatmap-layer, .leaflet-pane#heat { pointer-events: none; }
       `}</style>
 
-      {/* Toolbar (narrow, low z-index) */}
+      {/* Toolbar */}
       <div
         style={{
           position: "absolute",
@@ -496,7 +512,7 @@ export default function Client() {
 
           {showHeatmap && (
             <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              Opacity
+              Heatmap
               <input
                 type="range"
                 min={0.1}
@@ -531,18 +547,15 @@ export default function Client() {
       {/* status chip */}
       <div style={chip} title="Stations returned by the API after filters">
         stations: {stations.length}
-        {cacheHitLast ? " • cache: hit" : ""}
+        {/* {cacheHitLast ? " • cache: hit" : ""} */}
       </div>
 
       {/* Map */}
       <main style={{ height: "100%", width: "100%" }}>
-        <MapContainer
-          center={[params.lat, params.lon]}
-          zoom={13}
-          scrollWheelZoom
-          ref={mapRef}
-          style={{ height: "100%", width: "100%" }}
-        >
+        <MapContainer center={[params.lat, params.lon]} zoom={13} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
+          {/* capture a *real* Leaflet map instance from inside the context */}
+          <CaptureMapRef onReady={(m) => (mapRef.current = m)} />
+
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -684,17 +697,13 @@ export default function Client() {
         {!loading && !error && stations.length === 0 && (
           <div style={empty}>No stations found in this area. Try zooming out or moving the map.</div>
         )}
-        {error && (
-          <div style={errBanner}>
-            {error}
-          </div>
-        )}
+        {error && <div style={errBanner}>{error}</div>}
       </main>
     </div>
   );
 }
 
-// --- small style helpers ---
+// --- tiny style helpers ---
 const btn: React.CSSProperties = {
   padding: "0.25rem 0.5rem",
   fontSize: "0.75rem",
