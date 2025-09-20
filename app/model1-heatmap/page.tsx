@@ -10,7 +10,7 @@ import {
   LayerGroup,
   useMap,
 } from 'react-leaflet';
-import L from 'leaflet';
+import L, { Map as LeafletMap, LatLngBounds } from 'leaflet';
 
 // ---------------- Types ----------------
 type Station = {
@@ -87,7 +87,7 @@ export default function Page() {
     return sp;
   }, [minKw, connector, query]);
 
-  const fetchStationsFor = async (bounds: L.LatLngBounds) => {
+  const fetchStationsFor = async (bounds: LatLngBounds) => {
     const reqId = ++lastReqId;
     if (lastController) lastController.abort();
     const controller = new AbortController();
@@ -117,16 +117,12 @@ export default function Page() {
     }
   };
 
-  // Map ref (compatible with your React-Leaflet types)
-  const mapRef = useRef<any>(null);
+  // Map ref (typed)
+  const mapRef = useRef<LeafletMap | null>(null);
 
   // Re-fetch when filters/search change
   const refetchForCurrentView = () => {
-    const map = mapRef.current;
-    if (!map) return;
-    const bounds =
-      map.getBounds?.() ??
-      map.leafletElement?.getBounds?.(); // handles different react-leaflet versions
+    const bounds = mapRef.current?.getBounds();
     if (bounds) fetchStationsFor(bounds);
   };
 
@@ -188,10 +184,8 @@ export default function Page() {
 
       {/* Map */}
       <MapContainer
-        ref={mapRef as any}
-        whenReady={(ctx: any) => {
-          // keep a handle to the Leaflet map (works across versions)
-          mapRef.current = ctx?.target ?? mapRef.current;
+        ref={(m) => {
+          mapRef.current = m as unknown as LeafletMap | null;
         }}
         center={[51.5074, -0.1278]}
         zoom={12}
