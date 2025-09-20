@@ -1,3 +1,4 @@
+// app/model1-heatmap/page.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
