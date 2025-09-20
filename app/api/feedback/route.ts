@@ -65,7 +65,23 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const stationIdNum = parseBodyNumber(body?.stationId);
-    const rating = parseBodyNumber(body?.rating);
+
+    // Try to read direct rating first
+    let rating = parseBodyNumber(body?.rating);
+
+    // If not provided, compute one from waitTime, priceFair, working
+    if (rating == null) {
+      const waitTime = parseBodyNumber(body?.waitTime) ?? 0;   // 0–5 (lower better)
+      const priceFair = parseBodyNumber(body?.priceFair) ?? 3; // 0–5
+      const working = body?.working === false ? 0 : 1;         // true = 1, false = 0
+
+      rating =
+        (5 - waitTime) * 0.4 +   // shorter wait → higher score
+        priceFair * 0.4 +        // fairness
+        working * 1.0;           // working charger bonus
+      rating = Math.max(0, Math.min(5, rating));
+    }
+
     const comment = typeof body?.comment === 'string' ? String(body.comment).trim() : undefined;
 
     if (!Number.isFinite(stationIdNum!) || rating == null || rating < 0 || rating > 5) {
