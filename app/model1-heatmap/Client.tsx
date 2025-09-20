@@ -4,6 +4,7 @@
  * Autodun EV Map (client component)
  * - Debounced bbox updates (prevents API spam)
  * - Race-proof network (AbortController + latest-request-wins)
+ * - Client-side LRU cache keyed by rounded bbox + filters
  * - Heatmap + Markers together, using React-Leaflet <Pane> (heat under markers)
  * - Stable popups: stop click/scroll propagation so forms don’t close
  * - Heatmap opacity slider
@@ -17,7 +18,31 @@ import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// ---- debounce helper (module-level) ----------------------------------------
+// ---- client-side cache (module-level LRU) ----------------------------------
+type CacheEntry<T> = { data: T; t: number };
+const MAX_CACHE = 30;
+const stationCache = new Map<string, CacheEntry<StationWithScore[]>>();
+
+function setCache(key: string, data: StationWithScore[]) {
+  stationCache.set(key, { data, t: Date.now() });
+  // evict oldest if needed
+  if (stationCache.size > MAX_CACHE) {
+    const oldestKey = [...stationCache.entries()]
+      .sort((a, b) => a[1].t - b[1].t)[0]?.[0];
+    if (oldestKey) stationCache.delete(oldestKey);
+  }
+}
+
+function getCache(key: string): StationWithScore[] | undefined {
+  const hit = stationCache.get(key);
+  if (!hit) return undefined;
+  // touch for LRU
+  stationCache.delete(key);
+  stationCache.set(key, { data: hit.data, t: Date.now() });
+  return hit.data;
+}
+
+// ---- helpers ----------------------------------------------------------------
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -25,6 +50,46 @@ const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
     t = setTimeout(() => fn(...args), ms);
   };
 };
+
+const round = (n: number, dp = 3) => Math.round(n * 10 ** dp) / 10 ** dp;
+
+function bboxKey(
+  b:
+    | { north: number; south: number; east: number; west: number }
+    | null
+    | undefined,
+  params: { lat: number; lon: number; dist: number },
+  conn: string,
+  source: string
+) {
+  if (b) {
+    return [
+      "bbox",
+      round(b.west),
+      round(b.south),
+      round(b.east),
+      round(b.north),
+      `conn=${conn || "any"}`,
+      `src=${source}`,
+    ].join("|");
+  }
+  return [
+    "circle",
+    round(params.lat),
+    round(params.lon),
+    round(params.dist),
+    `conn=${conn || "any"}`,
+    `src=${source}`,
+  ].join("|");
+}
+
+function shallowSameIds(a: StationWithScore[], b: StationWithScore[]) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if ((a[i].ID as any) !== (b[i].ID as any)) return false;
+  }
+  return true;
+}
 
 // ---- react-leaflet components (client-only) --------------------------------
 const MapContainer = dynamic(
@@ -51,7 +116,7 @@ import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 // ---------------------------------------------------------------------------
-// Feedback form – propagation blocked so popup stays open while typing/clicking
+// Feedback form – stop propagation so popup stays open
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -279,18 +344,53 @@ export default function Client() {
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
 
-  // Fetch stations (race-proofed + debounced bbox)
+  // Map ref
+  const mapRef = useRef<any>(null);
+
+  // Debounced bounds tracker
   useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    const debouncedUpdate = debounce(() => {
+      const b = map.getBounds?.();
+      if (!b) return;
+      setBounds({
+        north: b.getNorth(),
+        south: b.getSouth(),
+        east: b.getEast(),
+        west: b.getWest(),
+      });
+    }, 450);
+
+    debouncedUpdate(); // initial
+    map.on?.("moveend", debouncedUpdate);
+    map.on?.("zoomend", debouncedUpdate);
+    return () => {
+      map.off?.("moveend", debouncedUpdate);
+      map.off?.("zoomend", debouncedUpdate);
+    };
+  }, []);
+
+  // Fetch stations (race-proofed + cache-aware)
+  useEffect(() => {
+    const key = bboxKey(bounds, params, connFilter, sourceFilter);
+
     async function fetchStations() {
-      setLoading(true);
       setError(null);
 
+      // 1) Try cache first (instant paint)
+      const cached = getCache(key);
+      if (cached) setStations(cached);
+
+      // 2) Latest-request-wins network fetch
       const reqId = ++lastReqId;
       if (lastController) lastController.abort();
       const controller = new AbortController();
       lastController = controller;
 
       try {
+        setLoading(true);
         const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
         let url = "";
         if (bounds) {
@@ -329,7 +429,13 @@ export default function Client() {
           })
           .filter(Boolean) as StationWithScore[];
 
-        if (reqId === lastReqId) setStations(scored);
+        // update cache
+        setCache(key, scored);
+
+        // latest wins & avoid useless re-renders
+        if (reqId === lastReqId && !shallowSameIds(scored, stations)) {
+          setStations(scored);
+        }
       } catch (e: any) {
         if (e?.name !== "AbortError") setError(e?.message || "Failed to load stations");
       } finally {
@@ -338,6 +444,7 @@ export default function Client() {
     }
 
     fetchStations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     bounds,
     params.lat,
@@ -362,34 +469,6 @@ export default function Client() {
       return [lat, lon, w] as HeatPoint;
     });
   }, [stations]);
-
-  // Map ref + debounced bounds tracking
-  const mapRef = useRef<any>(null);
-
-  // Debounced bounds tracker
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const debouncedUpdate = debounce(() => {
-      const b = map.getBounds?.();
-      if (!b) return;
-      setBounds({
-        north: b.getNorth(),
-        south: b.getSouth(),
-        east: b.getEast(),
-        west: b.getWest(),
-      });
-    }, 450);
-
-    debouncedUpdate(); // initial
-    map.on?.("moveend", debouncedUpdate);
-    map.on?.("zoomend", debouncedUpdate);
-    return () => {
-      map.off?.("moveend", debouncedUpdate);
-      map.off?.("zoomend", debouncedUpdate);
-    };
-  }, []);
 
   const mapCenter: [number, number] = [params.lat, params.lon];
 
