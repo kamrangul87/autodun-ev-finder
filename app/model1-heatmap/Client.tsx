@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Model-1 EV Heatmap page (client component)
+ * Model-1 EV Heatmap (client component)
  * - Debounced bbox updates
  * - Race-proof fetch (AbortController + latest-request-wins)
- * - Heatmap or CircleMarkers (no fragile Leaflet divIcon)
+ * - Heatmap + CircleMarkers shown together with separate toggles
+ * - Heatmap opacity slider
+ * - Custom Leaflet panes: heat under markers so pins stay clickable
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -176,8 +178,8 @@ interface StationWithScore extends OCMStation {
 }
 
 // ---------------------------------------------------------------------------
-// Heat layer
-function HeatLayer({ points }: { points: HeatPoint[] }) {
+// Heat layer (supports opacity + uses 'heat' pane)
+function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
 
@@ -190,22 +192,20 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
       await import("leaflet.heat");
 
       if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {
-          /* ignore */
-        }
+        try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
 
       if (!map || points.length === 0) return;
 
+      // leaflet.heat extends L.Layer and supports the Leaflet "pane" option
       const layer = (L as any).heatLayer(points, {
         radius: 45,
         blur: 25,
         maxZoom: 17,
         max: 1.0,
-        minOpacity: 0.35,
+        minOpacity: opacity, // controls visibility
+        pane: "heat",
       });
       layer.addTo(map);
       layerRef.current = layer;
@@ -215,21 +215,17 @@ function HeatLayer({ points }: { points: HeatPoint[] }) {
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {
-          /* ignore */
-        }
+        try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
     };
-  }, [map, points]);
+  }, [map, points, opacity]);
 
   return null;
 }
 
 // ---------------------------------------------------------------------------
-// Page (client component)
+// Component
 export default function Client() {
   // Read query params lazily (client only)
   const [params] = useState(() => {
@@ -258,9 +254,16 @@ export default function Client() {
     west: number;
   } | null>(null);
 
+  // Layer controls
   const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showMarkers, setShowMarkers] = useState(true);
+  const [heatOpacity, setHeatOpacity] = useState(0.65);
+
+  // Filters
   const [connFilter, setConnFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ocm" | "all" | "council">("ocm");
+
+  // Feedback
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
 
@@ -356,9 +359,25 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Map ref + debounced bounds tracking
+  // Map ref + panes + debounced bounds tracking
   const mapRef = useRef<any>(null);
 
+  // create panes once so heat sits under markers
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!map.getPane?.("heat")) {
+      map.createPane?.("heat");
+      map.getPane?.("heat")!.style.zIndex = "399"; // under overlay/markers
+    }
+    if (!map.getPane?.("markers")) {
+      map.createPane?.("markers");
+      map.getPane?.("markers")!.style.zIndex = "401"; // above heat
+    }
+  }, []);
+
+  // bounds tracker (debounced)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -415,6 +434,7 @@ export default function Client() {
             display: "flex",
             flexWrap: "wrap",
             gap: "0.5rem",
+            alignItems: "center",
           }}
         >
           <button
@@ -494,7 +514,22 @@ export default function Client() {
             <option value="council">Council</option>
           </select>
 
-          {/* Toggle heat/markers */}
+          {/* Separate toggles */}
+          <button
+            onClick={() => setShowMarkers((v) => !v)}
+            style={{
+              padding: "0.25rem 0.5rem",
+              fontSize: "0.75rem",
+              border: "1px solid #374151",
+              borderRadius: "0.25rem",
+              background: "#1f2937",
+              color: "#f9fafb",
+              cursor: "pointer",
+            }}
+          >
+            {showMarkers ? "Markers ✓" : "Markers ✗"}
+          </button>
+
           <button
             onClick={() => setShowHeatmap((v) => !v)}
             style={{
@@ -507,8 +542,23 @@ export default function Client() {
               cursor: "pointer",
             }}
           >
-            {showHeatmap ? "Markers" : "Heatmap"}
+            {showHeatmap ? "Heatmap ✓" : "Heatmap ✗"}
           </button>
+
+          {/* Heat opacity slider */}
+          {showHeatmap && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              Opacity
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={heatOpacity}
+                onChange={(e) => setHeatOpacity(parseFloat(e.target.value))}
+              />
+            </label>
+          )}
         </div>
       </div>
 
@@ -547,11 +597,11 @@ export default function Client() {
 
           {/* Heat layer */}
           {showHeatmap && heatPoints.length > 0 && (
-            <HeatLayer points={heatPoints} />
+            <HeatLayer points={heatPoints} opacity={heatOpacity} />
           )}
 
-          {/* Circle markers (stable; no Leaflet divIcon) */}
-          {!showHeatmap &&
+          {/* Circle markers in a pane above heat */}
+          {showMarkers &&
             stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
               const lon = s.AddressInfo?.Longitude as number;
@@ -560,7 +610,6 @@ export default function Client() {
                   ? s.StatusType?.IsOperational
                   : null;
 
-              // style per status
               const fill =
                 isOperational === null
                   ? "#60a5fa" // blue = unknown
@@ -573,6 +622,7 @@ export default function Client() {
                   key={String(s.ID)}
                   center={[lat, lon]}
                   radius={6}
+                  pane="markers"
                   pathOptions={{
                     color: "#ffffff",
                     weight: 2,
