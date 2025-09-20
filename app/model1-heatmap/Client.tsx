@@ -2,18 +2,20 @@
 
 /**
  * Model-1 EV Heatmap page (client component)
- * — Debounced bbox updates, race-proof fetch (AbortController), stable keys.
+ * - Debounced bbox updates
+ * - Race-proof fetch (AbortController + latest-request-wins)
+ * - Heatmap or CircleMarkers (no fragile Leaflet divIcon)
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// Prevent racing requests (module-level)
+// ----- Request coordination (module-level) -----
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// Debounce helper (module-level)
+// ----- Debounce helper (module-level) -----
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -22,7 +24,7 @@ const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   };
 };
 
-// Leaflet components (client-only)
+// ----- React-Leaflet components (client-only) -----
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -31,14 +33,15 @@ const TileLayer = dynamic(
   () => import("react-leaflet").then((m) => m.TileLayer),
   { ssr: false }
 );
-const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), {
-  ssr: false,
-});
+const CircleMarker = dynamic(
+  () => import("react-leaflet").then((m) => m.CircleMarker),
+  { ssr: false }
+);
 const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
   ssr: false,
 });
 
-// Hooks (safe – runs client only since this file is client-only)
+// Hooks (safe here: file is client-only)
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -232,7 +235,7 @@ export default function Client() {
   const [params] = useState(() => {
     if (typeof window === "undefined") {
       return { lat: 51.5074, lon: -0.1278, dist: 25 };
-      }
+    }
     const sp = new URLSearchParams(window.location.search);
     const lat = parseFloat(sp.get("lat") || "51.5074");
     const lon = parseFloat(sp.get("lon") || "-0.1278");
@@ -371,7 +374,8 @@ export default function Client() {
       });
     }, 450);
 
-    debouncedUpdate(); // initial
+    // initial + on move/zoom
+    debouncedUpdate();
     map.on?.("moveend", debouncedUpdate);
     map.on?.("zoomend", debouncedUpdate);
     return () => {
@@ -546,7 +550,7 @@ export default function Client() {
             <HeatLayer points={heatPoints} />
           )}
 
-          {/* Markers */}
+          {/* Circle markers (stable; no Leaflet divIcon) */}
           {!showHeatmap &&
             stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
@@ -556,20 +560,26 @@ export default function Client() {
                   ? s.StatusType?.IsOperational
                   : null;
 
-              let icon: any = undefined;
-              if (typeof window !== "undefined" && isOperational !== null) {
-                const L = require("leaflet");
-                icon = L.divIcon({
-                  html: `<div style="width:14px;height:14px;background:${
-                    isOperational ? "#22c55e" : "#ef4444"
-                  };border-radius:50%;border:2px solid #ffffff;"></div>`,
-                  iconSize: [18, 18],
-                  className: "",
-                });
-              }
+              // style per status
+              const fill =
+                isOperational === null
+                  ? "#60a5fa" // blue = unknown
+                  : isOperational
+                  ? "#22c55e" // green = operational
+                  : "#ef4444"; // red = not operational
 
               return (
-                <Marker key={String(s.ID)} position={[lat, lon]} icon={icon}>
+                <CircleMarker
+                  key={String(s.ID)}
+                  center={[lat, lon]}
+                  radius={6}
+                  pathOptions={{
+                    color: "#ffffff",
+                    weight: 2,
+                    fillColor: fill,
+                    fillOpacity: 1,
+                  }}
+                >
                   <Popup>
                     <strong>{s.AddressInfo?.Title || "Unnamed Station"}</strong>
                     <br />
@@ -630,7 +640,7 @@ export default function Client() {
                       )}
                     </div>
                   </Popup>
-                </Marker>
+                </CircleMarker>
               );
             })}
         </MapContainer>
@@ -688,7 +698,7 @@ export default function Client() {
           </div>
         )}
 
-        {/* Error banner (from API) */}
+        {/* Error banner */}
         {error && (
           <div
             style={{
