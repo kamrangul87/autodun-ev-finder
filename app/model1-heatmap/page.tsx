@@ -1,18 +1,24 @@
 // app/model1-heatmap/page.tsx
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  MutableRefObject,
+  useCallback,
+} from 'react';
 import dynamic from 'next/dynamic';
 import { useMap } from 'react-leaflet';
 import FeedbackModal from '../components/FeedbackModal';
 
-// Load react-leaflet components dynamically (avoids SSR issues)
+// React-Leaflet pieces (CSR only)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// ---- Types ----
 type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
 type Station = {
@@ -22,7 +28,7 @@ type Station = {
   raw: OcmPoi;
 };
 
-/** Distance (km) from bounds as half of diagonal using haversine */
+// --- helpers ---
 function kmFromBounds(bounds: any): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -70,16 +76,21 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
-/** Child helper that fires once the map instance is available */
+// fires when map instance is ready
 const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
   const map = useMap();
-  useEffect(() => {
-    onReady(map);
-  }, [map, onReady]);
+  useEffect(() => { onReady(map); }, [map, onReady]);
   return null;
 };
 
-const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
+// ---------- UI bits ----------
+const SearchBox: React.FC<{
+  onLocate: (ll: LatLngLike | null, zoom?: number) => void;
+  minPower: number;
+  setMinPower: (n: number) => void;
+  conn: string;
+  setConn: (s: string) => void;
+}> = ({ onLocate, minPower, setMinPower, conn, setConn }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -92,14 +103,13 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
+      url.searchParams.set('countrycodes', 'gb');
 
       const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
       if (arr?.length) {
         const hit = arr[0];
-        const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
-        onLocate({ lat, lng: lon }, 13);
+        onLocate({ lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) }, 13);
       } else {
         alert('No results for that place/postcode.');
       }
@@ -117,6 +127,33 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       <button onClick={() => window.location.reload()} className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Reset view</button>
       <button id="markersBtn" className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Markers</button>
       <button id="heatBtn" className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20">Heatmap</button>
+
+      {/* Filters */}
+      <div className="ml-2 flex items-center gap-2">
+        <label className="text-xs opacity-80">Min kW</label>
+        <select
+          value={minPower}
+          onChange={(e) => setMinPower(parseInt(e.target.value, 10))}
+          className="px-2 py-2 rounded bg-white/10 outline-none"
+        >
+          {[0,7,22,43,50,100,150].map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+
+        <label className="text-xs opacity-80">Connector</label>
+        <select
+          value={conn}
+          onChange={(e) => setConn(e.target.value)}
+          className="px-2 py-2 rounded bg-white/10 outline-none"
+        >
+          <option value="">Any</option>
+          <option value="33">CCS (33)</option>
+          <option value="25">Type-2 (25)</option>
+          <option value="2">CHAdeMO (2)</option>
+          <option value="27">Tesla (27)</option>
+        </select>
+      </div>
+
+      {/* Search */}
       <input
         value={q}
         onChange={e => setQ(e.target.value)}
@@ -131,19 +168,40 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
 };
 
 const FetchOnMove: React.FC<{
-  setStations: React.Dispatch<React.SetStateAction<Station[]>>,
-  onToggleWires: (w: { attach: () => void; detach: () => void }) => void
-}> = ({ setStations, onToggleWires }) => {
+  setStations: React.Dispatch<React.SetStateAction<Station[]>>;
+  onToggleWires: (w: { attach: () => void; detach: () => void }) => void;
+  minPower: number;
+  conn: string;
+  setLoadingChip: (b: boolean) => void;
+}> = ({ setStations, onToggleWires, minPower, conn, setLoadingChip }) => {
   const map = useMap();
-  const debounced = useDebounced(async () => {
-    const center = map.getCenter();
-    const radiusKm = Math.max(2, Math.min(25, Math.round(kmFromBounds(map.getBounds()))));
-    const url = `/api/stations?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radiusKm=${radiusKm}`;
-    const r = await fetch(url, { cache: 'no-store' });
-    const arr = await r.json();
-    const out: Station[] = (Array.isArray(arr) ? arr : []).map(normalise).filter(Boolean) as Station[];
-    setStations(out);
-  }, 350);
+
+  const doFetch = useCallback(async () => {
+    try {
+      setLoadingChip(true);
+      const center = map.getCenter();
+      const radiusKm = Math.max(2, Math.min(25, Math.round(kmFromBounds(map.getBounds()))));
+      const sp = new URLSearchParams({
+        lat: center.lat.toFixed(5),
+        lon: center.lng.toFixed(5),
+        radiusKm: String(radiusKm),
+      });
+      if (minPower > 0) sp.set('minPower', String(minPower));
+      if (conn) sp.set('conn', conn);
+
+      const r = await fetch(`/api/stations?${sp.toString()}`, { cache: 'no-store' });
+      const arr = await r.json();
+      const out: Station[] = (Array.isArray(arr) ? arr : []).map(normalise).filter(Boolean) as Station[];
+      setStations(out);
+    } catch (e) {
+      console.error(e);
+      setStations([]);
+    } finally {
+      setLoadingChip(false);
+    }
+  }, [map, minPower, conn, setStations, setLoadingChip]);
+
+  const debounced = useDebounced(doFetch, 300);
 
   useEffect(() => {
     const onMove = () => debounced();
@@ -155,44 +213,37 @@ const FetchOnMove: React.FC<{
       detach: () => { map.off('moveend', onMove); map.off('zoomend', onMove); },
     });
     return () => { map.off('moveend', onMove); map.off('zoomend', onMove); };
-  }, [map]);
+  }, [map, debounced, onToggleWires]);
+
+  // re-fetch when filters change
+  useEffect(() => { debounced(); }, [minPower, conn, debounced]);
 
   return null;
 };
 
-/* ------------------------- Feedback summary helper ------------------------- */
+// Feedback summary (used in popup)
 async function fetchFeedbackSummary(stationId: string) {
   try {
     const r = await fetch(`/api/feedback?stationId=${encodeURIComponent(stationId)}`, { cache: 'no-store' });
     const j = await r.json();
     if (j?.ok === false) return null;
-    return j as { count: number; averageRating: number | null; reliability: number | null };
+    // Support both { ok:true, ... } and plain shape
+    return (j.ok ? j : j) as { count: number; averageRating: number | null; reliability: number | null };
   } catch { return null; }
 }
 
-/* ----------------------- Marker with popup ----------------------- */
 const MarkerWithPopup: React.FC<{ s: Station }> = ({ s }) => {
   const [fb, setFb] = useState<{count:number;averageRating:number|null;reliability:number|null} | null>(null);
 
-  const fetchFb = () => {
-    const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
-    fetchFeedbackSummary(id).then(setFb);
-  };
-
-  useEffect(() => { fetchFb(); }, [s]);
-
-  // attach a hook to DOM for external refresh
   useEffect(() => {
     const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
-    const el = document.querySelector(`[data-station-id="${id}"]`) as any;
-    if (el) el.refreshFeedback = fetchFb;
-    return () => { if (el) delete el.refreshFeedback; };
+    fetchFeedbackSummary(id).then(setFb);
   }, [s]);
 
   return (
     <CircleMarker center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
       <Popup>
-        <div style={{ minWidth: 240 }} data-station-id={s.raw?.ID ?? `${s.lat},${s.lon}`}>
+        <div style={{ minWidth: 240 }}>
           <b>{s.name ?? 'Charging site'}</b>
           <div>{s.postcode ?? s.addr ?? ''}</div>
           <div>Max power: {s.maxPowerKw ?? 0} kW</div>
@@ -221,13 +272,18 @@ const Model1HeatmapPage: React.FC = () => {
   const [stations, setStations] = useState<Station[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showHeat, setShowHeat] = useState(false);
+  const [loadingChip, setLoadingChip] = useState(false);
+
+  // New: filter state
+  const [minPower, setMinPower] = useState<number>(0);
+  const [conn, setConn] = useState<string>(''); // OCM connectionTypeId
 
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
   const LRef = useRef<any>(null);
 
-  // Feedback modal state + global opener
+  // FB modal
   const [fbOpen, setFbOpen] = useState(false);
   const [fbStationId, setFbStationId] = useState<string | null>(null);
   useEffect(() => {
@@ -244,6 +300,7 @@ const Model1HeatmapPage: React.FC = () => {
     await import('leaflet.heat');
     LRef.current = leaflet;
 
+    // toggles are exclusive
     document.getElementById('markersBtn')?.addEventListener('click', () => {
       setShowMarkers(true);
       setShowHeat(false);
@@ -266,7 +323,7 @@ const Model1HeatmapPage: React.FC = () => {
     }
   };
 
-  // Manage heat layer
+  // Heat layer management
   useEffect(() => {
     const map = mapRef.current;
     const L = LRef.current;
@@ -291,7 +348,21 @@ const Model1HeatmapPage: React.FC = () => {
 
   return (
     <div className="w-full h-[calc(100vh-64px)] relative">
-      <SearchBox onLocate={handleLocate} />
+      <SearchBox
+        onLocate={handleLocate}
+        minPower={minPower}
+        setMinPower={setMinPower}
+        conn={conn}
+        setConn={setConn}
+      />
+
+      {/* tiny loading chip */}
+      {loadingChip && (
+        <div className="absolute top-4 right-4 z-[1000] bg-black/80 text-white text-xs px-3 py-2 rounded-lg">
+          Updating…
+        </div>
+      )}
+
       <MapContainer
         center={[51.5072, -0.1276]}
         zoom={12}
@@ -305,9 +376,17 @@ const Model1HeatmapPage: React.FC = () => {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
+        {/* Data wiring */}
         {/* @ts-ignore */}
-        <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
+        <FetchOnMove
+          setStations={setStations}
+          onToggleWires={(w) => (wires.current = w)}
+          minPower={minPower}
+          conn={conn}
+          setLoadingChip={setLoadingChip}
+        />
 
+        {/* markers */}
         {markers.map((s, i) => (
           <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} />
         ))}
@@ -318,12 +397,6 @@ const Model1HeatmapPage: React.FC = () => {
         stationId={fbStationId}
         open={fbOpen}
         onClose={() => setFbOpen(false)}
-        onSuccess={() => {
-          if (fbStationId) {
-            const el = document.querySelector(`[data-station-id="${fbStationId}"]`) as any;
-            if (el?.refreshFeedback) el.refreshFeedback();
-          }
-        }}
       />
     </div>
   );
