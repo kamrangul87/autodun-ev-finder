@@ -4,7 +4,7 @@
  * Autodun EV Map (client component)
  * - Debounced bbox updates (prevents API spam)
  * - Race-proof network (AbortController + latest-request-wins)
- * - Heatmap + Markers together, with heat in a non-interactive pane UNDER markers
+ * - Heatmap + Markers together, using React-Leaflet <Pane> (heat under markers)
  * - Stable popups: stop click/scroll propagation so forms don’t close
  * - Heatmap opacity slider
  */
@@ -40,6 +40,9 @@ const CircleMarker = dynamic(
   { ssr: false }
 );
 const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
+  ssr: false,
+});
+const Pane = dynamic(() => import("react-leaflet").then((m) => m.Pane), {
   ssr: false,
 });
 
@@ -240,7 +243,7 @@ export default function Client() {
   const [params] = useState(() => {
     if (typeof window === "undefined") {
       return { lat: 51.5074, lon: -0.1278, dist: 25 };
-      }
+    }
     const sp = new URLSearchParams(window.location.search);
     const lat = parseFloat(sp.get("lat") || "51.5074");
     const lon = parseFloat(sp.get("lon") || "-0.1278");
@@ -360,25 +363,8 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Map ref + panes + debounced bounds tracking
+  // Map ref + debounced bounds tracking
   const mapRef = useRef<any>(null);
-
-  // Create panes once: heat under markers and non-interactive
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    if (!map.getPane("heat")) map.createPane("heat");
-    const heatPane = map.getPane("heat");
-    if (heatPane) {
-      heatPane.style.zIndex = "399";
-      heatPane.style.pointerEvents = "none"; // clicks pass through
-    }
-
-    if (!map.getPane("markers")) map.createPane("markers");
-    const markerPane = map.getPane("markers");
-    if (markerPane) markerPane.style.zIndex = "401";
-  }, []);
 
   // Debounced bounds tracker
   useEffect(() => {
@@ -596,6 +582,10 @@ export default function Client() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
+
+          {/* Panes: create safely via React-Leaflet */}
+          <Pane name="heat" style={{ zIndex: 399, pointerEvents: "none" }} />
+          <Pane name="markers" style={{ zIndex: 401 }} />
 
           {/* Heat layer (under markers, non-interactive) */}
           {showHeatmap && heatPoints.length > 0 && (
