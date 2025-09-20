@@ -6,13 +6,13 @@ import dynamic from 'next/dynamic';
 import { useMap } from 'react-leaflet';
 import FeedbackModal from '../components/FeedbackModal';
 
-// React-Leaflet (client-only) pieces
+// Load react-leaflet components dynamically (avoids SSR issues)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// ---- Types ----
+// ---------------- Types ----------------
 type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
 type Station = {
@@ -22,7 +22,7 @@ type Station = {
   raw: OcmPoi;
 };
 
-// Helpers
+// ---------------- Helpers ----------------
 function kmFromBounds(bounds: any): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -70,15 +70,13 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
-/** Child helper that fires once the map instance is available */
 const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
   const map = useMap();
-  useEffect(() => {
-    onReady(map);
-  }, [map, onReady]);
+  useEffect(() => { onReady(map); }, [map, onReady]);
   return null;
 };
 
+// ---------------- Search Box ----------------
 const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -92,19 +90,17 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb'); // focus UK
+      url.searchParams.set('countrycodes', 'gb');
 
       const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
       if (arr?.length) {
         const hit = arr[0];
-        const lat = parseFloat(hit.lat), lon = parseFloat(hit.lon);
-        onLocate({ lat, lng: lon }, 13);
+        onLocate({ lat: parseFloat(hit.lat), lng: parseFloat(hit.lon) }, 13);
       } else {
         alert('No results for that place/postcode.');
       }
-    } catch (e) {
-      console.error(e);
+    } catch {
       alert('Search failed. Try again.');
     } finally {
       setLoading(false);
@@ -130,6 +126,7 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
   );
 };
 
+// ---------------- Fetch stations ----------------
 const FetchOnMove: React.FC<{
   setStations: React.Dispatch<React.SetStateAction<Station[]>>,
   onToggleWires: (w: { attach: () => void; detach: () => void }) => void
@@ -149,19 +146,18 @@ const FetchOnMove: React.FC<{
     const onMove = () => debounced();
     map.on('moveend', onMove);
     map.on('zoomend', onMove);
-    debounced(); // initial fetch
+    debounced();
     onToggleWires({
       attach: () => { map.on('moveend', onMove); map.on('zoomend', onMove); },
       detach: () => { map.off('moveend', onMove); map.off('zoomend', onMove); },
     });
     return () => { map.off('moveend', onMove); map.off('zoomend', onMove); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map]);
 
   return null;
 };
 
-/* ------------------------- Feedback summary helper ------------------------- */
+// ---------------- Feedback ----------------
 async function fetchFeedbackSummary(stationId: string) {
   try {
     const r = await fetch(`/api/feedback?stationId=${encodeURIComponent(stationId)}`, { cache: 'no-store' });
@@ -171,14 +167,13 @@ async function fetchFeedbackSummary(stationId: string) {
   } catch { return null; }
 }
 
-/* ----------------------- Marker with popup (refreshable) ------------------- */
-const MarkerWithPopup: React.FC<{ s: Station; bump: number }> = ({ s, bump }) => {
+const MarkerWithPopup: React.FC<{ s: Station; fbRefresh: number }> = ({ s, fbRefresh }) => {
   const [fb, setFb] = useState<{count:number;averageRating:number|null;reliability:number|null} | null>(null);
 
   useEffect(() => {
     const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
     fetchFeedbackSummary(id).then(setFb);
-  }, [s, bump]); // re-fetch when bump changes
+  }, [s, fbRefresh]); // refetch on refresh
 
   return (
     <CircleMarker center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
@@ -208,6 +203,7 @@ const MarkerWithPopup: React.FC<{ s: Station; bump: number }> = ({ s, bump }) =>
   );
 };
 
+// ---------------- Page ----------------
 const Model1HeatmapPage: React.FC = () => {
   const [stations, setStations] = useState<Station[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
@@ -216,12 +212,12 @@ const Model1HeatmapPage: React.FC = () => {
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
-  const LRef = useRef<any>(null); // dynamic Leaflet
-  const [fbBump, setFbBump] = useState(0); // <-- bump to refresh popups
+  const LRef = useRef<any>(null);
 
-  // Feedback modal state + global opener for popup button
   const [fbOpen, setFbOpen] = useState(false);
   const [fbStationId, setFbStationId] = useState<string | null>(null);
+  const [fbRefresh, setFbRefresh] = useState(0);
+
   useEffect(() => {
     (window as any).openFeedbackModal = (id: string) => {
       setFbStationId(id);
@@ -236,14 +232,11 @@ const Model1HeatmapPage: React.FC = () => {
     await import('leaflet.heat');
     LRef.current = leaflet;
 
-    // Make toggles mutually exclusive
     document.getElementById('markersBtn')?.addEventListener('click', () => {
-      setShowMarkers(true);
-      setShowHeat(false);
+      setShowMarkers(true); setShowHeat(false);
     });
     document.getElementById('heatBtn')?.addEventListener('click', () => {
-      setShowHeat(true);
-      setShowMarkers(false);
+      setShowHeat(true); setShowMarkers(false);
     });
   };
 
@@ -259,7 +252,6 @@ const Model1HeatmapPage: React.FC = () => {
     }
   };
 
-  // Manage heat layer (create only after Leaflet is loaded)
   useEffect(() => {
     const map = mapRef.current;
     const L = LRef.current;
@@ -292,28 +284,22 @@ const Model1HeatmapPage: React.FC = () => {
         style={{ height: '100%', width: '100%' }}
       >
         <OnMapReady onReady={onMapReady} />
-
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-
-        {/* Data wiring */}
         {/* @ts-ignore */}
         <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
-
-        {/* Markers */}
         {markers.map((s, i) => (
-          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} bump={fbBump} />
+          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} fbRefresh={fbRefresh} />
         ))}
       </MapContainer>
 
-      {/* Feedback Modal (bumps state on success so popups refresh) */}
       <FeedbackModal
         stationId={fbStationId}
         open={fbOpen}
         onClose={() => setFbOpen(false)}
-        onSuccess={() => setFbBump(x => x + 1)}
+        onSuccess={() => setFbRefresh(x => x + 1)} // trigger refetch
       />
     </div>
   );
