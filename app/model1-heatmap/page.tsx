@@ -1,22 +1,18 @@
 // app/model1-heatmap/page.tsx
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState, MutableRefObject } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useMap } from 'react-leaflet';
 import FeedbackModal from '../components/FeedbackModal';
 
-// Load react-leaflet components dynamically (avoids SSR issues)
+// React-Leaflet (client-only) pieces
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// IMPORTANT: do NOT import 'leaflet' at top-level (causes "window is not defined" on SSR)
-// We’ll load it dynamically when the map is ready.
-// Also, keep leaflet.heat’s runtime under the same dynamic load.
-
-// ---- Types (no runtime import) ----
+// ---- Types ----
 type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
 type Station = {
@@ -26,7 +22,7 @@ type Station = {
   raw: OcmPoi;
 };
 
-/** Distance (km) from bounds as half of diagonal using haversine */
+// Helpers
 function kmFromBounds(bounds: any): number {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
@@ -96,7 +92,7 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
+      url.searchParams.set('countrycodes', 'gb'); // focus UK
 
       const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
@@ -175,14 +171,14 @@ async function fetchFeedbackSummary(stationId: string) {
   } catch { return null; }
 }
 
-/* ----------------------- Marker with popup as a child ---------------------- */
-const MarkerWithPopup: React.FC<{ s: Station }> = ({ s }) => {
+/* ----------------------- Marker with popup (refreshable) ------------------- */
+const MarkerWithPopup: React.FC<{ s: Station; bump: number }> = ({ s, bump }) => {
   const [fb, setFb] = useState<{count:number;averageRating:number|null;reliability:number|null} | null>(null);
 
   useEffect(() => {
     const id = s.raw?.ID != null ? String(s.raw.ID) : `${s.lat},${s.lon}`;
     fetchFeedbackSummary(id).then(setFb);
-  }, [s]);
+  }, [s, bump]); // re-fetch when bump changes
 
   return (
     <CircleMarker center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
@@ -220,7 +216,8 @@ const Model1HeatmapPage: React.FC = () => {
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
-  const LRef = useRef<any>(null); // holds dynamically imported Leaflet
+  const LRef = useRef<any>(null); // dynamic Leaflet
+  const [fbBump, setFbBump] = useState(0); // <-- bump to refresh popups
 
   // Feedback modal state + global opener for popup button
   const [fbOpen, setFbOpen] = useState(false);
@@ -235,8 +232,6 @@ const Model1HeatmapPage: React.FC = () => {
 
   const onMapReady = async (map: any) => {
     mapRef.current = map;
-
-    // Dynamically import Leaflet and the heat plugin on the client
     const leaflet = await import('leaflet');
     await import('leaflet.heat');
     LRef.current = leaflet;
@@ -273,7 +268,6 @@ const Model1HeatmapPage: React.FC = () => {
     if (showHeat) {
       const points = stations.map(s => [s.lat, s.lon, Math.max(0.05, Math.min(1, s.score ?? 0.2))]) as [number, number, number][];
       if (!heatLayerRef.current) {
-        // create layer (leaflet.heat is already imported)
         // @ts-ignore
         heatLayerRef.current = (L as any).heatLayer(points, { radius: 22, blur: 20, maxZoom: 17 });
         heatLayerRef.current.addTo(map);
@@ -294,10 +288,9 @@ const Model1HeatmapPage: React.FC = () => {
       <MapContainer
         center={[51.5072, -0.1276]}
         zoom={12}
-        preferCanvas // faster for many markers
+        preferCanvas
         style={{ height: '100%', width: '100%' }}
       >
-        {/* capture map instance & load Leaflet on client */}
         <OnMapReady onReady={onMapReady} />
 
         <TileLayer
@@ -309,19 +302,18 @@ const Model1HeatmapPage: React.FC = () => {
         {/* @ts-ignore */}
         <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
 
-        {/* Heat overlay is managed in effect; nothing to render here */}
-
         {/* Markers */}
         {markers.map((s, i) => (
-          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} />
+          <MarkerWithPopup key={`${s.lat},${s.lon},${i}`} s={s} bump={fbBump} />
         ))}
       </MapContainer>
 
-      {/* Feedback Modal */}
+      {/* Feedback Modal (bumps state on success so popups refresh) */}
       <FeedbackModal
         stationId={fbStationId}
         open={fbOpen}
         onClose={() => setFbOpen(false)}
+        onSuccess={() => setFbBump(x => x + 1)}
       />
     </div>
   );
