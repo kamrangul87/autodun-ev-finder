@@ -51,6 +51,14 @@ import "leaflet/dist/leaflet.css";
 function FeedbackForm({
   stationId,
   onSubmitted,
+  <form
+  onSubmit={handleSubmit}
+  onMouseDown={(e) => e.stopPropagation()}
+  onClick={(e) => e.stopPropagation()}
+  onWheel={(e) => e.stopPropagation()}
+  style={{ marginTop: "0.5rem" }}
+>
+
 }: {
   stationId: number;
   onSubmitted: () => void;
@@ -606,6 +614,7 @@ export default function Client() {
                   key={String(s.ID)}
                   center={[lat, lon]}
                   radius={6}
+                  bubblingMouseEvents={false}
                   pathOptions={{
                     color: "#ffffff",
                     weight: 2,
@@ -613,66 +622,27 @@ export default function Client() {
                     fillOpacity: 1,
                   }}
                 >
-                  <Popup>
-                    <strong>{s.AddressInfo?.Title || "Unnamed Station"}</strong>
-                    <br />
-                    {s.AddressInfo?.AddressLine1 || ""}
-                    {s.AddressInfo?.Town ? `, ${s.AddressInfo.Town}` : ""}
-                    {s.AddressInfo?.Postcode ? ` ${s.AddressInfo.Postcode}` : ""}
-                    <br />
-                    Score: {s._score.toFixed(2)}
-                    {s.DataSource && (
-                      <>
-                        <br />
-                        Source:{" "}
-                        {s.DataSource === "Council" ? "Council data" : "OpenChargeMap"}
-                      </>
-                    )}
-                    {s.StatusType?.Title && (
-                      <>
-                        <br />
-                        Status: {s.StatusType.Title}
-                        {typeof s.StatusType.IsOperational === "boolean" &&
-                          (s.StatusType.IsOperational
-                            ? " (Operational)"
-                            : " (Not Operational)")}
-                      </>
-                    )}
-                    {s.Feedback && s.Feedback.reliability != null && (
-                      <>
-                        <br />
-                        Reliability: {(s.Feedback.reliability * 100).toFixed(0)}% (
-                        {s.Feedback.count} feedback)
-                      </>
-                    )}
+                 <Popup
+  closeOnClick={false}       // don't close when clicking the map
+  autoClose={false}          // don't auto-close when another popup opens
+  keepInView                 // optional: keep within viewport
+  eventHandlers={{
+    add: (e: any) => {
+      // When popup is added to map, stop click/scroll bubbling
+      try {
+        const L = require("leaflet");
+        const el = e?.popup?.getElement?.();
+        if (el) {
+          L.DomEvent.disableClickPropagation(el);
+          L.DomEvent.disableScrollPropagation(el);
+        }
+      } catch {}
+    },
+  }}
+>
+  {/* ... your existing popup content (title, address, feedback form) ... */}
+</Popup>
 
-                    <div style={{ marginTop: "0.5rem" }}>
-                      {feedbackOpenId === (s.ID as number) ? (
-                        <FeedbackForm
-                          stationId={s.ID as number}
-                          onSubmitted={() => {
-                            setFeedbackVersion((v) => v + 1);
-                            setFeedbackOpenId(null);
-                          }}
-                        />
-                      ) : (
-                        <button
-                          onClick={() => setFeedbackOpenId(s.ID as number)}
-                          style={{
-                            padding: "0.25rem 0.5rem",
-                            fontSize: "0.75rem",
-                            border: "1px solid #374151",
-                            borderRadius: "0.25rem",
-                            background: "#1f2937",
-                            color: "#f9fafb",
-                            cursor: "pointer",
-                          }}
-                        >
-                          Leave feedback
-                        </button>
-                      )}
-                    </div>
-                  </Popup>
                 </CircleMarker>
               );
             })}
