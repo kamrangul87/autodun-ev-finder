@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * Model-1 EV Heatmap (client component)
- * - Debounced bbox updates
- * - Race-proof fetch (AbortController + latest-request-wins)
- * - Heatmap + CircleMarkers with independent toggles
+ * Autodun EV Map (client component)
+ * - Debounced bbox updates (prevents API spam)
+ * - Race-proof network (AbortController + latest-request-wins)
+ * - Heatmap + Markers together, with heat in a non-interactive pane UNDER markers
+ * - Stable popups: stop click/scroll propagation so forms don’t close
  * - Heatmap opacity slider
  */
 
@@ -12,11 +13,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
 
-// ----- Request coordination (module-level) -----
+// ---- request coordination (module-level) -----------------------------------
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
-// ----- Debounce helper (module-level) -----
+// ---- debounce helper (module-level) ----------------------------------------
 const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   let t: any;
   return (...args: Parameters<F>) => {
@@ -25,7 +26,7 @@ const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
   };
 };
 
-// ----- React-Leaflet components (client-only) -----
+// ---- react-leaflet components (client-only) --------------------------------
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
   { ssr: false }
@@ -42,11 +43,12 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
   ssr: false,
 });
 
-// Hooks (safe here: file is client-only)
+// hooks (safe in client file)
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
 // ---------------------------------------------------------------------------
+// Feedback form – propagation blocked so popup stays open while typing/clicking
 function FeedbackForm({
   stationId,
   onSubmitted,
@@ -183,7 +185,7 @@ interface StationWithScore extends OCMStation {
 }
 
 // ---------------------------------------------------------------------------
-// Heat layer (opacity only; no custom panes)
+// Heat layer (in dedicated 'heat' pane)
 function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }) {
   const map = useMap();
   const layerRef = useRef<any>(null);
@@ -196,7 +198,6 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
       const L = (await import("leaflet")).default as any;
       await import("leaflet.heat");
 
-      // remove existing
       if (layerRef.current && map) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
@@ -209,6 +210,7 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
         maxZoom: 17,
         max: 1.0,
         minOpacity: opacity,
+        pane: "heat", // ensure the layer uses our non-interactive pane
       });
       layer.addTo(map);
       layerRef.current = layer;
@@ -217,7 +219,6 @@ function HeatLayer({ points, opacity }: { points: HeatPoint[]; opacity: number }
     try {
       mount();
     } catch (e) {
-      // never crash the app due to the heat layer
       console.error("Heat layer mount failed:", e);
     }
     return () => {
@@ -239,7 +240,7 @@ export default function Client() {
   const [params] = useState(() => {
     if (typeof window === "undefined") {
       return { lat: 51.5074, lon: -0.1278, dist: 25 };
-    }
+      }
     const sp = new URLSearchParams(window.location.search);
     const lat = parseFloat(sp.get("lat") || "51.5074");
     const lon = parseFloat(sp.get("lon") || "-0.1278");
@@ -262,20 +263,20 @@ export default function Client() {
     west: number;
   } | null>(null);
 
-  // Layer controls
+  // layer controls
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [heatOpacity, setHeatOpacity] = useState(0.65);
 
-  // Filters
+  // filters
   const [connFilter, setConnFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"ocm" | "all" | "council">("ocm");
 
-  // Feedback
+  // feedback
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
 
-  // Fetch stations when bbox/params/filters/feedback change (race-proofed)
+  // Fetch stations (race-proofed + debounced bbox)
   useEffect(() => {
     async function fetchStations() {
       setLoading(true);
@@ -289,14 +290,12 @@ export default function Client() {
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
         let url = "";
-
         if (bounds) {
           const { north, south, east, west } = bounds;
           url = `${apiBase}/api/stations?north=${north}&south=${south}&east=${east}&west=${west}`;
         } else {
           url = `${apiBase}/api/stations?lat=${params.lat}&lon=${params.lon}&dist=${params.dist}`;
         }
-
         if (connFilter) url += `&conn=${encodeURIComponent(connFilter)}`;
         if (sourceFilter && sourceFilter !== "all") {
           url += `&source=${encodeURIComponent(sourceFilter)}`;
@@ -314,9 +313,7 @@ export default function Client() {
           ? json.items
           : [];
 
-        if (!Array.isArray(json) && json?.error) {
-          setError(String(json.error));
-        }
+        if (!Array.isArray(json) && json?.error) setError(String(json.error));
 
         const scored: StationWithScore[] = (data ?? [])
           .map((s) => {
@@ -331,9 +328,7 @@ export default function Client() {
 
         if (reqId === lastReqId) setStations(scored);
       } catch (e: any) {
-        if (e?.name !== "AbortError") {
-          setError(e?.message || "Failed to load stations");
-        }
+        if (e?.name !== "AbortError") setError(e?.message || "Failed to load stations");
       } finally {
         if (reqId === lastReqId) setLoading(false);
       }
@@ -365,9 +360,27 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Map ref + debounced bounds tracking
+  // Map ref + panes + debounced bounds tracking
   const mapRef = useRef<any>(null);
 
+  // Create panes once: heat under markers and non-interactive
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    if (!map.getPane("heat")) map.createPane("heat");
+    const heatPane = map.getPane("heat");
+    if (heatPane) {
+      heatPane.style.zIndex = "399";
+      heatPane.style.pointerEvents = "none"; // clicks pass through
+    }
+
+    if (!map.getPane("markers")) map.createPane("markers");
+    const markerPane = map.getPane("markers");
+    if (markerPane) markerPane.style.zIndex = "401";
+  }, []);
+
+  // Debounced bounds tracker
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -383,8 +396,7 @@ export default function Client() {
       });
     }, 450);
 
-    // initial + on move/zoom
-    debouncedUpdate();
+    debouncedUpdate(); // initial
     map.on?.("moveend", debouncedUpdate);
     map.on?.("zoomend", debouncedUpdate);
     return () => {
@@ -465,7 +477,7 @@ export default function Client() {
             Reset view
           </button>
 
-          {/* Connector filter */}
+          {/* Connectors */}
           <select
             value={connFilter}
             onChange={(e) => setConnFilter(e.target.value)}
@@ -484,7 +496,7 @@ export default function Client() {
             <option value="chademo">CHAdeMO</option>
           </select>
 
-          {/* Data source filter */}
+          {/* Source filter */}
           <select
             value={sourceFilter}
             onChange={(e) =>
@@ -504,7 +516,7 @@ export default function Client() {
             <option value="council">Council</option>
           </select>
 
-          {/* Separate toggles */}
+          {/* Toggles */}
           <button
             onClick={() => setShowMarkers((v) => !v)}
             style={{
@@ -552,7 +564,7 @@ export default function Client() {
         </div>
       </div>
 
-      {/* Small debug chip with station count */}
+      {/* Small debug chip */}
       <div
         style={{
           position: "absolute",
@@ -585,12 +597,12 @@ export default function Client() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {/* Heat layer */}
+          {/* Heat layer (under markers, non-interactive) */}
           {showHeatmap && heatPoints.length > 0 && (
             <HeatLayer points={heatPoints} opacity={heatOpacity} />
           )}
 
-          {/* Circle markers */}
+          {/* Markers (above heat) */}
           {showMarkers &&
             stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
@@ -612,6 +624,7 @@ export default function Client() {
                   key={String(s.ID)}
                   center={[lat, lon]}
                   radius={6}
+                  pane="markers"
                   bubblingMouseEvents={false}
                   pathOptions={{
                     color: "#ffffff",
@@ -620,27 +633,85 @@ export default function Client() {
                     fillOpacity: 1,
                   }}
                 >
-                 <Popup
-  closeOnClick={false}       // don't close when clicking the map
-  autoClose={false}          // don't auto-close when another popup opens
-  keepInView                 // optional: keep within viewport
-  eventHandlers={{
-    add: (e: any) => {
-      // When popup is added to map, stop click/scroll bubbling
-      try {
-        const L = require("leaflet");
-        const el = e?.popup?.getElement?.();
-        if (el) {
-          L.DomEvent.disableClickPropagation(el);
-          L.DomEvent.disableScrollPropagation(el);
-        }
-      } catch {}
-    },
-  }}
->
-  {/* ... your existing popup content (title, address, feedback form) ... */}
-</Popup>
+                  <Popup
+                    closeOnClick={false}
+                    autoClose={false}
+                    keepInView
+                    eventHandlers={{
+                      add: (e: any) => {
+                        try {
+                          const L = require("leaflet");
+                          const el = e?.popup?.getElement?.();
+                          if (el) {
+                            L.DomEvent.disableClickPropagation(el);
+                            L.DomEvent.disableScrollPropagation(el);
+                          }
+                        } catch {}
+                      },
+                    }}
+                  >
+                    <strong>{s.AddressInfo?.Title || "Unnamed Station"}</strong>
+                    <br />
+                    {s.AddressInfo?.AddressLine1 || ""}
+                    {s.AddressInfo?.Town ? `, ${s.AddressInfo.Town}` : ""}
+                    {s.AddressInfo?.Postcode ? ` ${s.AddressInfo.Postcode}` : ""}
+                    <br />
+                    Score: {s._score.toFixed(2)}
+                    {s.DataSource && (
+                      <>
+                        <br />
+                        Source:{" "}
+                        {s.DataSource === "Council" ? "Council data" : "OpenChargeMap"}
+                      </>
+                    )}
+                    {s.StatusType?.Title && (
+                      <>
+                        <br />
+                        Status: {s.StatusType.Title}
+                        {typeof s.StatusType.IsOperational === "boolean" &&
+                          (s.StatusType.IsOperational
+                            ? " (Operational)"
+                            : " (Not Operational)")}
+                      </>
+                    )}
+                    {s.Feedback && s.Feedback.reliability != null && (
+                      <>
+                        <br />
+                        Reliability: {(s.Feedback.reliability * 100).toFixed(0)}% (
+                        {s.Feedback.count} feedback)
+                      </>
+                    )}
 
+                    <div style={{ marginTop: "0.5rem" }}>
+                      {feedbackOpenId === (s.ID as number) ? (
+                        <FeedbackForm
+                          stationId={s.ID as number}
+                          onSubmitted={() => {
+                            setFeedbackVersion((v) => v + 1);
+                            setFeedbackOpenId(null);
+                          }}
+                        />
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFeedbackOpenId(s.ID as number);
+                          }}
+                          style={{
+                            padding: "0.25rem 0.5rem",
+                            fontSize: "0.75rem",
+                            border: "1px solid #374151",
+                            borderRadius: "0.25rem",
+                            background: "#1f2937",
+                            color: "#f9fafb",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Leave feedback
+                        </button>
+                      )}
+                    </div>
+                  </Popup>
                 </CircleMarker>
               );
             })}
