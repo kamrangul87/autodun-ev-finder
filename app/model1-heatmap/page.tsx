@@ -21,9 +21,9 @@ type Station = {
   lat: number;
   lon: number;
   powerKw?: number | null;
-  connectors?: string[]; // e.g., ['CCS2','CHAdeMO']
+  connectors?: string[];
   price?: number | null;
-  rating?: number | null; // your ML/user feedback score if any
+  rating?: number | null;
 };
 
 // -------------- Utilities --------------
@@ -35,20 +35,15 @@ const debounce = <F extends (...args: any[]) => void>(fn: F, ms = 450) => {
   };
 };
 
-// Keep these outside component to persist across renders
+// Request coordination (avoid races)
 let lastReqId = 0;
 let lastController: AbortController | null = null;
 
 // ------------- Child Hook --------------
-function BboxWatcher({
-  onBbox,
-}: {
-  onBbox: (b: L.LatLngBounds) => void;
-}) {
+function BboxWatcher({ onBbox }: { onBbox: (b: L.LatLngBounds) => void }) {
   const map = useMap();
   const debounced = useRef<(b: L.LatLngBounds) => void>();
 
-  // Create debounced wrapper once
   useEffect(() => {
     debounced.current = debounce((b: L.LatLngBounds) => onBbox(b), 450);
   }, [onBbox]);
@@ -58,9 +53,8 @@ function BboxWatcher({
       const b = map.getBounds();
       debounced.current?.(b);
     };
-    // Fire once on mount to load initial view
+    // initial load
     onMoveEnd();
-
     map.on('moveend', onMoveEnd);
     map.on('zoomend', onMoveEnd);
     return () => {
@@ -74,7 +68,7 @@ function BboxWatcher({
 
 // ------------- Main Page ---------------
 export default function Page() {
-  // UI state (adapt these to your controls)
+  // UI state
   const [minKw, setMinKw] = useState<number>(0);
   const [connector, setConnector] = useState<string>('any');
   const [query, setQuery] = useState<string>('');
@@ -95,7 +89,6 @@ export default function Page() {
 
   const fetchStationsFor = async (bounds: L.LatLngBounds) => {
     const reqId = ++lastReqId;
-    // Abort any in-flight request
     if (lastController) lastController.abort();
     const controller = new AbortController();
     lastController = controller;
@@ -111,35 +104,32 @@ export default function Page() {
 
     try {
       setLoading(true);
-      // IMPORTANT: DO NOT clear existing markers here; keep them until we have new data.
       const res = await fetch(url, { signal: controller.signal, cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as Station[];
-      // Only the latest request wins
-      if (reqId !== lastReqId) return;
+      if (reqId !== lastReqId) return; // only latest wins
       setStations(data);
     } catch (err: any) {
-      if (err?.name === 'AbortError') return; // expected on quick pans/zooms
+      if (err?.name === 'AbortError') return;
       console.error('Stations fetch failed:', err);
-      // Optionally: toast error; keep old markers visible
     } finally {
-      // Only the latest request should end the loading state
       if (reqId === lastReqId) setLoading(false);
     }
   };
 
-  // If your toolbar changes should refetch the current bbox:
+  // Map ref (compatible with your React-Leaflet types)
+  const mapRef = useRef<any>(null);
+
+  // Re-fetch when filters/search change
   const refetchForCurrentView = () => {
     const map = mapRef.current;
     if (!map) return;
-    const bounds = map.leafletElement?.getBounds?.() ?? (map as any).getBounds?.();
+    const bounds =
+      map.getBounds?.() ??
+      map.leafletElement?.getBounds?.(); // handles different react-leaflet versions
     if (bounds) fetchStationsFor(bounds);
   };
 
-  // react-leaflet map ref (v4 uses whenReady/useMap; we’ll keep a simple ref holder)
-  const mapRef = useRef<any>(null);
-
-  // Re-fetch when filters change (with current bbox)
   useEffect(() => {
     refetchForCurrentView();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -147,7 +137,7 @@ export default function Page() {
 
   return (
     <div className="w-full h-[calc(100vh-80px)] relative">
-      {/* --- Simple toolbar (replace with your real UI) --- */}
+      {/* Toolbar (simplified) */}
       <div
         style={{
           position: 'absolute',
@@ -196,9 +186,13 @@ export default function Page() {
         {loading && <span style={{ marginLeft: 'auto' }}>Loading…</span>}
       </div>
 
-      {/* --- Map --- */}
+      {/* Map */}
       <MapContainer
-        whenCreated={(mapInstance) => (mapRef.current = mapInstance)}
+        ref={mapRef as any}
+        whenReady={(ctx: any) => {
+          // keep a handle to the Leaflet map (works across versions)
+          mapRef.current = ctx?.target ?? mapRef.current;
+        }}
         center={[51.5074, -0.1278]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
@@ -215,11 +209,7 @@ export default function Page() {
         {showMarkers && (
           <LayerGroup pane="markers">
             {stations.map((s) => (
-              <CircleMarker
-                key={s.id} // stable key avoids flicker
-                center={[s.lat, s.lon]}
-                radius={6}
-              >
+              <CircleMarker key={s.id} center={[s.lat, s.lon]} radius={6}>
                 <Popup>
                   <strong>{s.name ?? 'Charging point'}</strong>
                   <div>{s.addr ?? s.postcode ?? ''}</div>
@@ -236,7 +226,7 @@ export default function Page() {
 
         {showHeat && (
           <LayerGroup pane="heat">
-            {/* plug in your heatmap layer here (e.g., leaflet-heat layer) */}
+            {/* Hook up your heat layer here */}
           </LayerGroup>
         )}
       </MapContainer>
