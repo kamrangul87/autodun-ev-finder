@@ -1,5 +1,8 @@
 "use client";
 
+export const dynamic = 'force-dynamic';
+export const revalidate = false;
+
 /**
  * Model-1 EV Heatmap page
  * - Fetches stations from /api/stations (bbox or center+radius).
@@ -12,6 +15,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { featuresFor, scoreFor, type OCMStation } from "../../lib/model1";
+
+// Prevent racing requests (module-level)
+let lastReqId = 0;
+let lastController: AbortController | null = null;
+
+// Debounce helper (module-level)
+const debounce = <F extends (...a: any[]) => void>(fn: F, ms = 450) => {
+  let t: any;
+  return (...args: Parameters<F>) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+};
 
 // Leaflet components (client-only)
 const MapContainer = dynamic(
@@ -29,7 +45,7 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
   ssr: false,
 });
 
-// Hooks (safe – no window at import time)
+// Hooks (safe – runs client only since this file is client-only)
 import { useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -253,11 +269,18 @@ export default function Client() {
   const [feedbackOpenId, setFeedbackOpenId] = useState<number | null>(null);
   const [feedbackVersion, setFeedbackVersion] = useState(0);
 
-  // Fetch stations when bbox/params/filters/feedback change
+  // Fetch stations when bbox/params/filters/feedback change (race-proofed)
   useEffect(() => {
     async function fetchStations() {
       setLoading(true);
       setError(null);
+
+      // keep-latest-wins + cancel in-flight
+      const reqId = ++lastReqId;
+      if (lastController) lastController.abort();
+      const controller = new AbortController();
+      lastController = controller;
+
       try {
         const apiBase = process.env.NEXT_PUBLIC_API_BASE ?? "";
         let url = "";
@@ -276,7 +299,7 @@ export default function Client() {
           url += `&source=all`;
         }
 
-        const res = await fetch(url, { cache: "no-cache" });
+        const res = await fetch(url, { cache: "no-store", signal: controller.signal });
         if (!res.ok) throw new Error(`API responded with ${res.status}`);
 
         const json = await res.json();
@@ -302,12 +325,15 @@ export default function Client() {
           })
           .filter(Boolean) as StationWithScore[];
 
-        setStations(scored);
+        // only latest request updates state
+        if (reqId === lastReqId) setStations(scored);
       } catch (e: any) {
-        setError(e?.message || "Failed to load stations");
-        setStations([]);
+        if (e?.name !== "AbortError") {
+          setError(e?.message || "Failed to load stations");
+          // keep old markers visible; don't wipe setStations([])
+        }
       } finally {
-        setLoading(false);
+        if (reqId === lastReqId) setLoading(false);
       }
     }
 
@@ -337,14 +363,14 @@ export default function Client() {
     });
   }, [stations]);
 
-  // Map ref + bounds tracking
+  // Map ref + debounced bounds tracking
   const mapRef = useRef<any>(null);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
 
-    const update = () => {
+    const debouncedUpdate = debounce(() => {
       const b = map.getBounds?.();
       if (!b) return;
       setBounds({
@@ -353,15 +379,15 @@ export default function Client() {
         east: b.getEast(),
         west: b.getWest(),
       });
-    };
+    }, 450);
 
     // initial + on move/zoom
-    update();
-    map.on?.("moveend", update);
-    map.on?.("zoomend", update);
+    debouncedUpdate();
+    map.on?.("moveend", debouncedUpdate);
+    map.on?.("zoomend", debouncedUpdate);
     return () => {
-      map.off?.("moveend", update);
-      map.off?.("zoomend", update);
+      map.off?.("moveend", debouncedUpdate);
+      map.off?.("zoomend", debouncedUpdate);
     };
   }, []);
 
@@ -533,7 +559,7 @@ export default function Client() {
 
           {/* Markers */}
           {!showHeatmap &&
-            stations.map((s, idx) => {
+            stations.map((s) => {
               const lat = s.AddressInfo?.Latitude as number;
               const lon = s.AddressInfo?.Longitude as number;
               const isOperational =
@@ -554,7 +580,7 @@ export default function Client() {
               }
 
               return (
-                <Marker key={idx} position={[lat, lon]} icon={icon}>
+                <Marker key={String(s.ID)} position={[lat, lon]} icon={icon}>
                   <Popup>
                     <strong>{s.AddressInfo?.Title || "Unnamed Station"}</strong>
                     <br />
@@ -623,17 +649,19 @@ export default function Client() {
         {/* Heat legend */}
         {showHeatmap && (
           <div
-            style={{
-              position: "absolute",
-              bottom: "1rem",
-              left: "1rem",
-              padding: "0.5rem",
-              background: "rgba(0,0,0,0.6)",
-              borderRadius: "0.25rem",
-              color: "#f9fafb",
-              fontSize: "0.75rem",
-              zIndex: 1000,
-            }}
+            style{
+              {
+                position: "absolute",
+                bottom: "1rem",
+                left: "1rem",
+                padding: "0.5rem",
+                background: "rgba(0,0,0,0.6)",
+                borderRadius: "0.25rem",
+                color: "#f9fafb",
+                fontSize: "0.75rem",
+                zIndex: 1000,
+              } as React.CSSProperties
+            }
           >
             <div
               style={{
