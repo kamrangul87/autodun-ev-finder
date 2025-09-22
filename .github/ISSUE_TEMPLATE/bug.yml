@@ -1,0 +1,37 @@
+name: Bug
+description: Report a problem in Autodun EV Finder
+labels: ["bug"]
+body:
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      placeholder: "Heatmap / Markers / Search / Feedback modal"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to /model1-heatmap
+        2. Search "EC1A"
+        3. Click a marker
+        4. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console / Network logs (paste snippets)
+      render: shell
