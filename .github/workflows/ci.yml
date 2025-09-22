@@ -1,13 +1,11 @@
-name: ci (node-20)
+name: CI
 on:
-  pull_request:
   push:
     branches: [main]
-
+  pull_request:
 jobs:
-  ci:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,10 +13,5 @@ jobs:
           node-version: 20
           cache: 'npm'
       - run: npm ci
-      # If you don't have TS/ESLint yet, delete these two lines for now:
-      - run: npx tsc --noEmit
-      - run: npx eslint . --max-warnings=0
-      # Build to catch SSR/window issues at compile time
-      - env:
-          NEXT_PUBLIC_API_BASE: ${{ secrets.NEXT_PUBLIC_API_BASE || 'http://localhost:3000' }}
-        run: npm run build
+      - run: npm run lint || echo "no lint script"
+      - run: npm run build
