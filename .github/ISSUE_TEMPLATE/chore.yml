@@ -1,0 +1,16 @@
+name: Chore / Refactor
+description: Non-feature work (cleanup, DX, CI, docs)
+labels: ["chore"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      placeholder: "What to change and why (e.g. split Client.tsx, speed up build, adjust CI)"
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Plan
+      placeholder: "Outline approach, risks, and test plan."
