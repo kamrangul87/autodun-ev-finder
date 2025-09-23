@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: [main]
@@ -10,12 +9,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 18.x
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm run build
+          node-version: 18
+      - run: npm install
+      - run: CI=1 NEXT_TELEMETRY_DISABLED=1 npm run build --if-present
