@@ -1,8 +1,7 @@
 'use client';
 
-import { useEffect, useRef } from "react";
-import { useMap } from "react-leaflet";
-import type { LatLngExpression } from "leaflet";
+import { useEffect, useRef } from 'react';
+import { useMap } from 'react-leaflet';
 
 type HeatPoint = [number, number, number];
 
@@ -14,8 +13,8 @@ export default function HeatLayer({ points }: { points: HeatPoint[] }) {
     let cancelled = false;
 
     (async () => {
-      const L = (await import("leaflet")).default as any;
-      await import("leaflet.heat");
+      const L = (await import('leaflet')).default as any;
+      await import('leaflet.heat');
 
       if (cancelled || !map) return;
 
@@ -23,10 +22,9 @@ export default function HeatLayer({ points }: { points: HeatPoint[] }) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
-
       if (!points.length) return;
 
-      const layer = (L as any).heatLayer(points as LatLngExpression[], {
+      const layer = (L as any).heatLayer(points, {
         radius: 45,
         blur: 25,
         maxZoom: 17,
