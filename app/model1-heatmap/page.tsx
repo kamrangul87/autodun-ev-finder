@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L, { type Map as LeafletMap, type LatLngBounds } from 'leaflet';
+import L, { type LatLngBounds } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
 // ---- Types ----
@@ -21,7 +21,7 @@ type Station = {
 
 type StationsResponse = { items: Station[] };
 
-// ---- Small helper: fetch JSON with cancellation ----
+// ---- fetch helper with cancellation ----
 async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal, cache: 'no-store' });
   if (!res.ok) {
@@ -31,13 +31,15 @@ async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ---- A child component that listens to map events and loads stations ----
+// ---- Bounds-driven data loader (no whenCreated needed) ----
 function BboxDataLoader({
   onData,
   extraParams,
+  debounceMs = 200,
 }: {
   onData: (items: Station[]) => void;
   extraParams?: Record<string, string | number | boolean>;
+  debounceMs?: number;
 }) {
   const map = useMap();
   const abortRef = useRef<AbortController | null>(null);
@@ -45,7 +47,6 @@ function BboxDataLoader({
 
   const loadForBounds = useCallback(
     (bounds: LatLngBounds) => {
-      // Cancel any in-flight request
       if (abortRef.current) abortRef.current.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -59,9 +60,7 @@ function BboxDataLoader({
         east: String(ne.lng),
         north: String(ne.lat),
         ...(extraParams
-          ? Object.fromEntries(
-              Object.entries(extraParams).map(([k, v]) => [k, String(v)])
-            )
+          ? Object.fromEntries(Object.entries(extraParams).map(([k, v]) => [k, String(v)]))
           : {}),
       });
 
@@ -71,9 +70,9 @@ function BboxDataLoader({
       fetchJSON<StationsResponse>(url, ctrl.signal)
         .then((data) => onData(data.items ?? []))
         .catch((err) => {
-          if (err?.name === 'AbortError') return; // ignore cancelled
+          if (err?.name === 'AbortError') return;
           console.error('Stations fetch failed:', err);
-          onData([]); // fail safe
+          onData([]);
         })
         .finally(() => {
           if (abortRef.current === ctrl) abortRef.current = null;
@@ -83,14 +82,14 @@ function BboxDataLoader({
   );
 
   useEffect(() => {
-    // Initial load
+    // Initial load once map is mounted
     loadForBounds(map.getBounds());
 
     const trigger = () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(() => {
         loadForBounds(map.getBounds());
-      }, 200);
+      }, debounceMs);
     };
 
     map.on('moveend', trigger);
@@ -102,12 +101,12 @@ function BboxDataLoader({
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
       if (abortRef.current) abortRef.current.abort();
     };
-  }, [map, loadForBounds]);
+  }, [map, loadForBounds, debounceMs]);
 
-  return null; // no UI
+  return null;
 }
 
-// ---- Main page ----
+// ---- Page ----
 const DEFAULT_CENTER: [number, number] = [51.5074, -0.1278]; // London
 const DEFAULT_ZOOM = 12;
 
@@ -115,14 +114,13 @@ export default function Model1HeatmapPage() {
   const [stations, setStations] = useState<Station[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
 
-  // OSM tile URL (allow override via env)
   const tileUrl =
     process.env.NEXT_PUBLIC_TILE_URL ||
     'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-  // Marker icon fix (Leaflet asset paths under bundlers)
+  // Fix Leaflet icon URLs under bundlers
   useEffect(() => {
-    // @ts-ignore override internal urls
+    // @ts-expect-error private field override (common Leaflet workaround)
     delete (L.Icon.Default.prototype as any)._getIconUrl;
     L.Icon.Default.mergeOptions({
       iconRetinaUrl:
@@ -134,23 +132,17 @@ export default function Model1HeatmapPage() {
     });
   }, []);
 
-  // Any query params you want to forward to your /api/stations
   const extraParams = useMemo(
     () => ({
-      source: 'osm', // or 'council' if your API supports it
+      source: 'osm', // swap to 'council' if your API supports it
       minPower: 0,
     }),
     []
   );
 
-  const onMapCreated = useCallback((m: LeafletMap) => {
-    // You can keep a ref/state if you need it later
-    // setMap(m);
-  }, []);
-
   return (
     <div className="w-full h-[calc(100vh-120px)] relative">
-      {/* Simple top-right controls */}
+      {/* UI controls */}
       <div className="absolute z-[1000] right-3 top-3 bg-white/90 rounded-xl shadow p-2 flex items-center gap-3">
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -166,20 +158,13 @@ export default function Model1HeatmapPage() {
         center={DEFAULT_CENTER}
         zoom={DEFAULT_ZOOM}
         style={{ height: '100%', width: '100%' }}
-        whenCreated={(leafletMap) => {
-          // ✅ Correct callback type; avoids the previous whenReady TS error
-          onMapCreated(leafletMap);
-        }}
       >
-        <TileLayer
-          attribution="&copy; OpenStreetMap contributors"
-          url={tileUrl}
-        />
+        <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
 
-        {/* Loads stations for current bounds and pushes into state */}
+        {/* Fetch stations by current bounds */}
         <BboxDataLoader onData={setStations} extraParams={extraParams} />
 
-        {/* Basic markers (toggleable) */}
+        {/* Markers */}
         {showMarkers &&
           stations.map((s) => (
             <Marker key={String(s.id)} position={[s.lat, s.lng]}>
