@@ -1,3 +1,6 @@
+export const viewport = {
+  themeColor: '#0b1220',
+};
 "use client";
 
 // Borough‑level gap index page.  Displays a table of boroughs with

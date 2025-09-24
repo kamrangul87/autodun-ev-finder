@@ -1,3 +1,6 @@
+export const viewport = {
+  themeColor: '#0b1220',
+};
 "use client";
 
 // Root page for the application.  The legacy heatmap is implemented as a

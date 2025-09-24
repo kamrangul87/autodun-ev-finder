@@ -1,3 +1,6 @@
+export const viewport = {
+  themeColor: '#0b1220',
+};
 // An offline fallback page.  When a user goes offline or visits a route
 // that has not been cached by the service worker, Next.js (via
 // next‑pwa) will serve this page.  Keeping the markup simple
