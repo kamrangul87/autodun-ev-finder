@@ -9,6 +9,13 @@ export const viewport = {
 // higher gap index indicates more EV registrations per available
 // connector, signalling areas with insufficient charging
 // infrastructure.
+"use client";
+export const viewport = { themeColor: '#0b1220' };
+// Borough‑level gap index page.  Displays a table of boroughs with
+// connector counts, EV registrations and a calculated gap index.  A
+// higher gap index indicates more EV registrations per available
+// connector, signalling areas with insufficient charging
+// infrastructure.
 
 import React, { useEffect, useState } from 'react';
 

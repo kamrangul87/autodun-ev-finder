@@ -13,6 +13,7 @@ function parseBbox(sp: URLSearchParams): [number, number, number, number] | null
   return [n, s, e, w];
 }
 
+export const dynamic = 'force-dynamic';
 function normalizeOCM(p: any) {
   const ai = p?.AddressInfo ?? {};
   const conns = Array.isArray(p?.Connections) ? p.Connections : [];
@@ -24,8 +25,8 @@ function normalizeOCM(p: any) {
   return {
     id: p?.ID ?? null,
     name: ai?.Title ?? null,
-    lat: ai?.Latitude,
-    lng: ai?.Longitude,
+    import { NextResponse } from 'next/server';
+    // Duplicate export removed
     addr: [ai?.AddressLine1, ai?.Town].filter(Boolean).join(', ') || null,
     postcode: ai?.Postcode ?? null,
     breakdown: { reports: 0, downtime: 0, connectors: conns.length },
@@ -38,7 +39,6 @@ function normalizeOCM(p: any) {
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const sp = url.searchParams;
   const bbox = parseBbox(sp);
   if (!bbox) {
     return NextResponse.json({ error: 'invalid_bbox' }, { status: 400 });
@@ -51,51 +51,126 @@ export async function GET(req: Request) {
   const params = new URLSearchParams({
     boundingbox: `${south},${west},${north},${east}`,
     compact: 'true',
-    maxresults: '1000',
-    output: 'json',
-  });
-  const apiKey = process.env.OCM_API_KEY;
-  const headers: Record<string, string> = {};
-  if (apiKey) headers['X-API-Key'] = apiKey;
 
-  let ocmData: any = null;
-  let ocmURL = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
-  let error = null;
-  let detail = null;
-  let items: any[] = [];
-  try {
-    const r = await fetch(ocmURL, {
-      headers,
-      cache: 'no-store',
-      next: { revalidate: 0 }
-    });
-    if (!r.ok) {
-      error = `OCM ${r.status}`;
-      detail = await r.text();
-      return NextResponse.json({ error, detail, items: [] }, { status: r.status });
+    export const dynamic = 'force-dynamic';
+
+    import { NextResponse } from 'next/server';
+
+    function parseFloatSafe(val: unknown): number | undefined {
+      if (typeof val === 'string') {
+        const num = parseFloat(val);
+        return isNaN(num) ? undefined : num;
+      }
+      return undefined;
     }
-    try {
-      ocmData = await r.json();
-    } catch (e) {
-      error = 'OCM_BAD_JSON';
-      detail = await r.text();
-      return NextResponse.json({ error, detail, items: [] }, { status: 502 });
+
+    function computeBBoxFromCenter(lat: number, lon: number, distKm: number) {
+      const earthRadiusKm = 6371;
+      const deltaLat = (distKm / earthRadiusKm) * (180 / Math.PI);
+      const deltaLon = (distKm / earthRadiusKm) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
+      return {
+        north: lat + deltaLat,
+        south: lat - deltaLat,
+        east: lon + deltaLon,
+        west: lon - deltaLon,
+      };
     }
-    if (!Array.isArray(ocmData)) {
-      error = 'OCM_BAD_JSON';
-      detail = ocmData;
-      return NextResponse.json({ error, detail, items: [] }, { status: 502 });
+
+    function normalizeOCM(p: any) {
+      const ai = p?.AddressInfo ?? {};
+      const conns = Array.isArray(p?.Connections) ? p.Connections : [];
+      const maxPower = conns.reduce((m: number, c: any) => {
+        const p = Number(c?.PowerKW ?? 0);
+        return isFinite(p) ? Math.max(m, p) : m;
+      }, 0);
+      const connTitles = conns.map((c: any) => (c?.ConnectionType?.Title ?? '').toLowerCase()).join(',');
+      return {
+        id: p?.ID ?? null,
+        name: ai?.Title ?? null,
+        lat: ai?.Latitude,
+        lng: ai?.Longitude,
+        addr: [ai?.AddressLine1, ai?.Town].filter(Boolean).join(', ') || null,
+        postcode: ai?.Postcode ?? null,
+        breakdown: { reports: 0, downtime: 0, connectors: conns.length },
+        power: maxPower || null,
+        network: p?.OperatorInfo?.Title ?? null,
+        updatedAt: p?.DateLastStatusUpdate ?? null,
+        _connTitles: connTitles,
+      };
     }
-    if (ocmData.length === 0) {
-      error = 'NO_STATIONS';
-      detail = { ocmURL };
-      return NextResponse.json({ error, detail, items: [] }, { status: 200 });
+
+    export async function GET(req: Request) {
+      const url = new URL(req.url);
+      const sp = url.searchParams;
+
+      // Parse bbox
+      const north = parseFloatSafe(sp.get('north'));
+      const south = parseFloatSafe(sp.get('south'));
+      const east = parseFloatSafe(sp.get('east'));
+      const west = parseFloatSafe(sp.get('west'));
+
+      // Parse center+dist
+      const lat = parseFloatSafe(sp.get('lat'));
+      const lon = parseFloatSafe(sp.get('lon'));
+      let dist = parseFloatSafe(sp.get('dist'));
+      if (dist === undefined) dist = 25;
+
+      let params: Record<string, any> = {
+        maxresults: 200,
+        compact: true,
+        verbose: false,
+      };
+
+      let mode: 'bbox' | 'center' | undefined;
+      if (
+        north !== undefined &&
+        south !== undefined &&
+        east !== undefined &&
+        west !== undefined
+      ) {
+        // Validate bbox
+        if (!(north > south && east > west)) {
+          return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
+        }
+        params.boundingbox = `${north},${south},${east},${west}`;
+        mode = 'bbox';
+      } else if (lat !== undefined && lon !== undefined) {
+        // Validate dist
+        if (dist === undefined || isNaN(dist) || dist <= 0) {
+          return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
+        }
+        params.latitude = lat;
+        params.longitude = lon;
+        params.distance = dist;
+        mode = 'center';
+      } else {
+        return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
+      }
+
+      // OCM API key
+      const apiKey = process.env.OCM_API_KEY;
+      if (apiKey) params.key = apiKey;
+
+      // Build OCM request
+      const ocmUrl = new URL('https://api.openchargemap.io/v3/poi/');
+      Object.entries(params).forEach(([k, v]) => ocmUrl.searchParams.set(k, String(v)));
+
+      let ocmStatus = 200;
+      let items: any[] = [];
+      try {
+        const resp = await fetch(ocmUrl.toString(), { headers: { 'Accept': 'application/json' } });
+        ocmStatus = resp.status;
+        if (resp.status === 401 || resp.status === 429) {
+          console.error(`[stations] OCM error ${resp.status} mode=${mode}`);
+          return NextResponse.json({ error: 'ocm_unavailable' }, { status: 502 });
+        }
+        items = await resp.json();
+        if (!Array.isArray(items)) items = [];
+      } catch (e) {
+        console.error(`[stations] OCM fetch failed mode=${mode} err=${e}`);
+        return NextResponse.json({ error: 'ocm_unavailable' }, { status: 502 });
+      }
+
+      console.log(`[stations] status=${ocmStatus} mode=${mode} count=${items.length}`);
+      return NextResponse.json(items);
     }
-    items = ocmData;
-    return NextResponse.json({ items }, { status: 200 });
-  } catch (e: any) {
-    error = e?.message || 'OCM_FETCH_ERROR';
-    detail = String(e);
-    return NextResponse.json({ error, detail, items: [] }, { status: 502 });
-  }
-}
