@@ -135,17 +135,34 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
 
 const FetchOnMove: React.FC<{
   setStations: React.Dispatch<React.SetStateAction<Station[]>>,
+  setHeatData: React.Dispatch<React.SetStateAction<any[]>>,
+  zoom: number,
+  showMarkers: boolean,
+  showHeat: boolean,
   onToggleWires: (w: { attach: () => void; detach: () => void }) => void
-}> = ({ setStations, onToggleWires }) => {
+}> = ({ setStations, setHeatData, zoom, showMarkers, showHeat, onToggleWires }) => {
   const map = useMap();
   const debounced = useDebounced(async () => {
     const center = map.getCenter();
-    const radiusKm = Math.max(2, Math.min(25, Math.round(kmFromBounds(map.getBounds()))));
-    const url = `/api/stations?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radiusKm=${radiusKm}`;
-    const r = await fetch(url, { cache: 'no-store' });
-    const arr = await r.json();
-    const out: Station[] = (Array.isArray(arr) ? arr : []).map(normalise).filter(Boolean) as Station[];
-    setStations(out);
+    const bounds = map.getBounds();
+    const radiusKm = Math.max(2, Math.min(25, Math.round(kmFromBounds(bounds))));
+    if (zoom >= 13 && showMarkers) {
+      const url = `/api/stations?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radiusKm=${radiusKm}`;
+      const r = await fetch(url, { cache: 'no-store' });
+      const arr = await r.json();
+      const out: Station[] = (Array.isArray(arr) ? arr : []).map(normalise).filter(Boolean) as Station[];
+      setStations(out);
+    } else {
+      setStations([]);
+    }
+    if (showHeat) {
+      const url = `/api/heatmap?lat=${center.lat.toFixed(5)}&lon=${center.lng.toFixed(5)}&radiusKm=${radiusKm}`;
+      const r = await fetch(url, { cache: 'no-store' });
+      const arr = await r.json();
+      setHeatData(Array.isArray(arr) ? arr : []);
+    } else {
+      setHeatData([]);
+    }
   }, 350);
 
   useEffect(() => {
@@ -159,37 +176,65 @@ const FetchOnMove: React.FC<{
     });
     return () => { map.off('moveend', onMove); map.off('zoomend', onMove); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [map]);
+  }, [map, zoom, showMarkers, showHeat]);
 
   return null;
 };
 
+
 const Model1HeatmapPage: React.FC = () => {
   const [stations, setStations] = useState<Station[]>([]);
+  const [heatData, setHeatData] = useState<any[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showHeat, setShowHeat] = useState(false);
+  const [center, setCenter] = useState<[number, number]>([51.5072, -0.1276]);
+  const [zoom, setZoom] = useState(12);
+  const [tempMarkerLatLng, setTempMarkerLatLng] = useState<LatLngLike | null>(null);
+  const [showZoomMsg, setShowZoomMsg] = useState(false);
 
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
-  const heatLayerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
   const LRef = useRef<any>(null); // holds dynamically imported Leaflet
+  const tempMarkerTimeout = useRef<any>(null);
 
   const onMapReady = async (map: any) => {
     mapRef.current = map;
-
     // Dynamically import Leaflet and the heat plugin on the client
     const leaflet = await import('leaflet');
     await import('leaflet.heat');
     LRef.current = leaflet;
-
+    // Setup custom panes for zIndex if needed
+    if (!map.getPane('overlay-councils')) {
+      map.createPane('overlay-councils');
+      map.getPane('overlay-councils').style.zIndex = 300;
+    }
+    if (!map.getPane('heatmap')) {
+      map.createPane('heatmap');
+      map.getPane('heatmap').style.zIndex = 350;
+    }
+    // Listen for zoom and move events
+    map.on('zoomend', () => {
+      setZoom(map.getZoom());
+      setShowZoomMsg(map.getZoom() < 13);
+    });
+    map.on('moveend', () => {
+      const c = map.getCenter();
+      setCenter([c.lat, c.lng]);
+    });
+    setZoom(map.getZoom());
+    setShowZoomMsg(map.getZoom() < 13);
+    setCenter([map.getCenter().lat, map.getCenter().lng]);
     document.getElementById('markersBtn')?.addEventListener('click', () => setShowMarkers(s => !s));
     document.getElementById('heatBtn')?.addEventListener('click', () => setShowHeat(s => !s));
   };
 
-  const handleLocate = async (ll: LatLngLike | null, zoom = 13) => {
+  const handleLocate = async (ll: LatLngLike | null, z = 14) => {
     const map = mapRef.current; if (!map) return;
     if (ll) {
-      map.setView([ll.lat, ll.lng], zoom);
+      map.setView([ll.lat, ll.lng], Math.max(z, 14));
+      setTempMarkerLatLng(ll);
+      if (tempMarkerTimeout.current) clearTimeout(tempMarkerTimeout.current);
+      tempMarkerTimeout.current = setTimeout(() => setTempMarkerLatLng(null), 6000);
     } else if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         pos => map.setView([pos.coords.latitude, pos.coords.longitude], 13),
@@ -198,50 +243,42 @@ const Model1HeatmapPage: React.FC = () => {
     }
   };
 
-  // Manage heat layer (create only after Leaflet is loaded)
+  // Remove temp marker on next search
   useEffect(() => {
-    const map = mapRef.current;
-    const L = LRef.current;
-    if (!map || !L) return;
+    return () => { if (tempMarkerTimeout.current) clearTimeout(tempMarkerTimeout.current); };
+  }, []);
 
-    if (showHeat) {
-      const points = stations.map(s => [s.lat, s.lon, Math.max(0.05, Math.min(1, s.score ?? 0.2))]) as [number, number, number][];
-      if (!heatLayerRef.current) {
-        // create layer (leaflet.heat is already imported)
-        // @ts-ignore
-        heatLayerRef.current = (L as any).heatLayer(points, { radius: 22, blur: 20, maxZoom: 17 });
-        heatLayerRef.current.addTo(map);
-      } else {
-        heatLayerRef.current.setLatLngs(points);
-      }
-    } else if (heatLayerRef.current) {
-      heatLayerRef.current.remove();
-      heatLayerRef.current = null;
-    }
-  }, [showHeat, stations]);
-
-  const markers = useMemo(() => (showMarkers ? stations : []), [showMarkers, stations]);
+  const markers = useMemo(() => (showMarkers && zoom >= 13 ? stations : []), [showMarkers, stations, zoom]);
 
   return (
     <div className="w-full h-[calc(100vh-64px)] relative">
       <SearchBox onLocate={handleLocate} />
+      {showZoomMsg && (
+        <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-black/80 text-white px-4 py-2 rounded-xl z-[1000] text-sm shadow">
+          Zoom in to see markers
+        </div>
+      )}
       <MapContainer
-        center={[51.5072, -0.1276]}
-        zoom={12}
+        center={center}
+        zoom={zoom}
         style={{ height: '100%', width: '100%' }}
+        whenCreated={map => onMapReady(map)}
       >
-        {/* capture map instance & load Leaflet on client */}
         <OnMapReady onReady={onMapReady} />
-
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-
         {/* Data wiring */}
         {/* @ts-ignore */}
-        <FetchOnMove setStations={setStations} onToggleWires={(w) => (wires.current = w)} />
-
+        <FetchOnMove
+          setStations={setStations}
+          setHeatData={setHeatData}
+          zoom={zoom}
+          showMarkers={showMarkers}
+          showHeat={showHeat}
+          onToggleWires={w => (wires.current = w)}
+        />
         {/* Markers */}
         {markers.map((s, i) => (
           <CircleMarker key={`${s.lat},${s.lon},${i}`} center={[s.lat, s.lon]} radius={6} fillOpacity={0.85}>
@@ -257,6 +294,12 @@ const Model1HeatmapPage: React.FC = () => {
             </Popup>
           </CircleMarker>
         ))}
+        {/* Temporary marker for search */}
+        {tempMarkerLatLng && (
+          <CircleMarker center={[tempMarkerLatLng.lat, tempMarkerLatLng.lng]} radius={10} fillOpacity={0.7} color="#00f" />
+        )}
+        {/* Heatmap layer (if needed, can be implemented here or in a custom component) */}
+        {/* Councils overlay would go here, in pane="overlay-councils" if implemented */}
       </MapContainer>
     </div>
   );

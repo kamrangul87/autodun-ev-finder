@@ -1,0 +1,50 @@
+{
+  "pages": {
+    "/_not-found/page": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/chunks/app/_not-found/page-2fa0b5262c1619a4.js"
+    ],
+    "/layout": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/css/8189c522f00f0004.css",
+      "static/chunks/708-330df03dad82c82b.js",
+      "static/chunks/app/layout-a7732478fd60aff2.js"
+    ],
+    "/borough-gap/page": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/chunks/app/borough-gap/page-e496a29ecdb28e27.js"
+    ],
+    "/offline/page": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/chunks/app/offline/page-cb9d9ef4fca52b9b.js"
+    ],
+    "/page": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/chunks/809-ded590d9a285e706.js",
+      "static/chunks/app/page-d29fbc132e7ca4fe.js"
+    ],
+    "/model1-heatmap/page": [
+      "static/chunks/webpack-fc7481fd9250075d.js",
+      "static/chunks/fd9d1056-4a7dd50a2ec46fe9.js",
+      "static/chunks/23-27775d27d8e2a352.js",
+      "static/chunks/main-app-4dec39e2cf913b34.js",
+      "static/chunks/809-ded590d9a285e706.js",
+      "static/chunks/app/model1-heatmap/page-fc9aaa47de67c48b.js"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "version": 3,
+  "middleware": {},
+  "functions": {
+    "/api/stations/route": {
+      "files": [
+        "server/middleware-build-manifest.js",
+        "server/middleware-react-loadable-manifest.js",
+        "server/next-font-manifest.js",
+        "server/interception-route-rewrite-manifest.js",
+        "prerender-manifest.js",
+        "server/edge-runtime-webpack.js",
+        "server/app/api/stations/route.js"
+      ],
+      "name": "app/api/stations/route",
+      "page": "/api/stations/route",
+      "matchers": [
+        {
+          "regexp": "^/api/stations$",
+          "originalSource": "/api/stations"
+        }
+      ],
+      "wasm": [],
+      "assets": [],
+      "environments": {
+        "previewModeId": "b33d69cf8f8b1c20c369cc54c962db54",
+        "previewModeSigningKey": "a4c1aae425c80a3b0183c9dbb569b8c5e6f4c3e0c6e2b5253132fce5331a7e8b",
+        "previewModeEncryptionKey": "2ad1a2dd38491658b61a52b9b4edf6669c3c4dc695ddbdd68a1e2a85fdf66025"
+      }
+    }
+  },
+  "sortedMiddleware": []
+}
