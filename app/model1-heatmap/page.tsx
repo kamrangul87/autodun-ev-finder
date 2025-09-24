@@ -70,6 +70,16 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
+/** Child that fires once with the Leaflet map instance */
+const ReadyCapture: React.FC<{ onReady: (map: L.Map) => void }> = ({ onReady }) => {
+  const map = useMap();
+  useEffect(() => {
+    // Leaflet 'load' may not have fired yet, but useMap gives a usable instance
+    onReady(map as unknown as L.Map);
+  }, [map, onReady]);
+  return null;
+};
+
 const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -160,7 +170,7 @@ const Model1HeatmapPage: React.FC = () => {
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
 
-  // Keep type-only for the map instance; actual Leaflet is dynamically imported in onMapReady
+  // Type-only ref for the Leaflet map; actual Leaflet is dynamically imported in onMapReady
   const mapRef = useRef<L.Map | null>(null);
   const LRef = useRef<any>(null); // holds dynamically imported Leaflet
 
@@ -220,9 +230,10 @@ const Model1HeatmapPage: React.FC = () => {
         center={[51.5072, -0.1276]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
-        // ✅ Capture map once, no duplicate whenCreated, no <OnMapReady />
-        whenCreated={(m: L.Map) => { mapRef.current = m; void onMapReady(m); }}
       >
+        {/* Capture the map instance once, using a child that calls useMap() */}
+        <ReadyCapture onReady={onMapReady} />
+
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
