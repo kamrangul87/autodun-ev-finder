@@ -5,8 +5,11 @@ export const dynamic = 'force-dynamic'; // disable SSG for this route
 import React from 'react';
 import nextDynamic from 'next/dynamic';
 
-// Load the map client-only so the server never evaluates react-leaflet/leaflet
-const ClientMap = nextDynamic(() => import('@/components/ClientMap'), { ssr: false });
+// Import the client-only map component (use RELATIVE path so no alias issues)
+const ClientMap = nextDynamic(
+  () => import('../../components/ClientMap'),
+  { ssr: false }
+);
 
 const DEFAULT_CENTER: [number, number] = [51.5074, -0.1278]; // London
 const DEFAULT_ZOOM = 12;
