@@ -1,19 +1,16 @@
 // app/model1-heatmap/page.tsx
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useMap } from 'react-leaflet';
+import type * as L from 'leaflet'; // type-only (no runtime import)
 
 // Load react-leaflet components dynamically (avoids SSR issues)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
-
-// IMPORTANT: do NOT import 'leaflet' at top-level (causes "window is not defined" on SSR)
-// We’ll load it dynamically when the map is ready.
-// Also, keep leaflet.heat’s runtime under the same dynamic load.
 
 // ---- Types (no runtime import) ----
 type LatLngLike = { lat: number; lng: number };
@@ -73,15 +70,6 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
   };
 }
 
-/** Child helper that fires once the map instance is available */
-const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
-  const map = useMap();
-  useEffect(() => {
-    onReady(map);
-  }, [map, onReady]);
-  return null;
-};
-
 const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -95,7 +83,7 @@ const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => 
       url.searchParams.set('q', q);
       url.searchParams.set('addressdetails', '1');
       url.searchParams.set('limit', '1');
-      url.searchParams.set('countrycodes', 'gb'); // focus UK; remove for global
+      url.searchParams.set('countrycodes', 'gb'); // focus UK
 
       const r = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
       const arr = (await r.json()) as any[];
@@ -171,10 +159,12 @@ const Model1HeatmapPage: React.FC = () => {
 
   const wires = useRef<{ attach: () => void; detach: () => void } | null>(null);
   const heatLayerRef = useRef<any>(null);
-  const mapRef = useRef<any>(null);
+
+  // Keep type-only for the map instance; actual Leaflet is dynamically imported in onMapReady
+  const mapRef = useRef<L.Map | null>(null);
   const LRef = useRef<any>(null); // holds dynamically imported Leaflet
 
-  const onMapReady = async (map: any) => {
+  const onMapReady = useCallback(async (map: L.Map) => {
     mapRef.current = map;
 
     // Dynamically import Leaflet and the heat plugin on the client
@@ -182,9 +172,10 @@ const Model1HeatmapPage: React.FC = () => {
     await import('leaflet.heat');
     LRef.current = leaflet;
 
+    // UI toggles
     document.getElementById('markersBtn')?.addEventListener('click', () => setShowMarkers(s => !s));
     document.getElementById('heatBtn')?.addEventListener('click', () => setShowHeat(s => !s));
-  };
+  }, []);
 
   const handleLocate = async (ll: LatLngLike | null, zoom = 13) => {
     const map = mapRef.current; if (!map) return;
@@ -229,10 +220,9 @@ const Model1HeatmapPage: React.FC = () => {
         center={[51.5072, -0.1276]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
+        // ✅ Capture map once, no duplicate whenCreated, no <OnMapReady />
+        whenCreated={(m: L.Map) => { mapRef.current = m; void onMapReady(m); }}
       >
-        {/* capture map instance & load Leaflet on client */}
-        <OnMapReady onReady={onMapReady} />
-
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
