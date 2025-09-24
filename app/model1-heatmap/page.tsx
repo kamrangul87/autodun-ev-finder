@@ -1,11 +1,14 @@
 'use client';
 
+// prevent pre-render/SSG so no server tries to touch window
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L, { type LatLngBounds } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// ---- Types ----
+// ---------- Types (kept minimal to avoid importing leaflet on server) ----------
 type Station = {
   id: string | number;
   lat: number;
@@ -21,7 +24,7 @@ type Station = {
 
 type StationsResponse = { items: Station[] };
 
-// ---- fetch helper with cancellation ----
+// ---------- fetch helper with cancellation ----------
 async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal, cache: 'no-store' });
   if (!res.ok) {
@@ -31,7 +34,7 @@ async function fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-// ---- Bounds-driven data loader (no whenCreated needed) ----
+// ---------- Bounds-driven data loader (no whenCreated needed) ----------
 function BboxDataLoader({
   onData,
   extraParams,
@@ -46,7 +49,7 @@ function BboxDataLoader({
   const debounceRef = useRef<number | null>(null);
 
   const loadForBounds = useCallback(
-    (bounds: LatLngBounds) => {
+    (bounds: any) => {
       if (abortRef.current) abortRef.current.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -106,7 +109,7 @@ function BboxDataLoader({
   return null;
 }
 
-// ---- Page ----
+// ---------- Page ----------
 const DEFAULT_CENTER: [number, number] = [51.5074, -0.1278]; // London
 const DEFAULT_ZOOM = 12;
 
@@ -118,20 +121,29 @@ export default function Model1HeatmapPage() {
     process.env.NEXT_PUBLIC_TILE_URL ||
     'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-  // Fix Leaflet icon URLs under bundlers
+  // Fix Leaflet icon URLs under bundlers — dynamically import Leaflet only in the browser
   useEffect(() => {
-    const proto = L.Icon.Default.prototype as any;
-    if (proto && proto._getIconUrl) {
-      delete proto._getIconUrl;
-    }
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-      iconUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-      shadowUrl:
-        'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-    });
+    let cancelled = false;
+    (async () => {
+      // only run in browser
+      if (typeof window === 'undefined') return;
+      const L = await import('leaflet');
+      if (cancelled) return;
+
+      const proto = (L.Icon.Default.prototype as any);
+      if (proto && proto._getIconUrl) {
+        delete proto._getIconUrl;
+      }
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl:
+          'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+        iconUrl:
+          'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+        shadowUrl:
+          'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+      });
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const extraParams = useMemo(
@@ -156,6 +168,7 @@ export default function Model1HeatmapPage() {
         </label>
       </div>
 
+      {/* Map (client-only) */}
       <MapContainer
         center={DEFAULT_CENTER}
         zoom={DEFAULT_ZOOM}
