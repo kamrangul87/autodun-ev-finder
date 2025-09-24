@@ -1,1 +1,1 @@
-{"version":1,"functions":{"/api/debug/ocm":{},"/api/echo":{},"/api/feedback":{},"/api/geocode":{},"/api/health":{},"/api/stations":{},"/api/refresh":{},"/api/borough":{},"/borough-gap":{},"/model1-heatmap":{},"/offline":{},"/":{},"/api/sites":{}}}
+{"version":1,"functions":{"/api/debug/ocm":{},"/api/echo":{},"/api/geocode":{},"/api/health":{},"/api/feedback":{},"/api/stations":{},"/api/borough":{},"/borough-gap":{},"/offline":{},"/":{},"/api/refresh":{},"/api/sites":{},"/model1-heatmap":{}}}

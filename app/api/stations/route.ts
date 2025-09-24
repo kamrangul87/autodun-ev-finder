@@ -1,5 +1,5 @@
 export const dynamic = 'force-dynamic';
-export const runtime = 'edge';
+export const runtime = 'nodejs';
 
 import { NextResponse } from 'next/server';
 
@@ -58,33 +58,44 @@ export async function GET(req: Request) {
   const headers: Record<string, string> = {};
   if (apiKey) headers['X-API-Key'] = apiKey;
 
-  let ocmData: any[] = [];
-  let fetchError: any = null;
+  let ocmData: any = null;
+  let ocmURL = `https://api.openchargemap.io/v3/poi/?${params.toString()}`;
+  let error = null;
+  let detail = null;
+  let items: any[] = [];
   try {
-    console.time?.('stations:ocm');
-    const r = await fetch(
-      `https://api.openchargemap.io/v3/poi/?${params.toString()}`,
-      { headers, next: { revalidate: 30 } }
-    );
-    if (!r.ok) throw new Error(`OCM ${r.status}`);
-    ocmData = await r.json();
-    console.timeEnd?.('stations:ocm');
-  } catch (e) {
-    fetchError = e;
-    ocmData = [];
-    console.timeEnd?.('stations:ocm');
+    const r = await fetch(ocmURL, {
+      headers,
+      cache: 'no-store',
+      next: { revalidate: 0 }
+    });
+    if (!r.ok) {
+      error = `OCM ${r.status}`;
+      detail = await r.text();
+      return NextResponse.json({ error, detail, items: [] }, { status: r.status });
+    }
+    try {
+      ocmData = await r.json();
+    } catch (e) {
+      error = 'OCM_BAD_JSON';
+      detail = await r.text();
+      return NextResponse.json({ error, detail, items: [] }, { status: 502 });
+    }
+    if (!Array.isArray(ocmData)) {
+      error = 'OCM_BAD_JSON';
+      detail = ocmData;
+      return NextResponse.json({ error, detail, items: [] }, { status: 502 });
+    }
+    if (ocmData.length === 0) {
+      error = 'NO_STATIONS';
+      detail = { ocmURL };
+      return NextResponse.json({ error, detail, items: [] }, { status: 200 });
+    }
+    items = ocmData;
+    return NextResponse.json({ items }, { status: 200 });
+  } catch (e: any) {
+    error = e?.message || 'OCM_FETCH_ERROR';
+    detail = String(e);
+    return NextResponse.json({ error, detail, items: [] }, { status: 502 });
   }
-
-  let rows = Array.isArray(ocmData) ? ocmData.map(normalizeOCM) : [];
-  rows = rows.filter(r =>
-    typeof r.lat === 'number' &&
-    typeof r.lng === 'number' &&
-    (!minPower || (typeof r.power === 'number' && r.power >= minPower)) &&
-    (!connList || connList.some(c => r._connTitles?.includes(c)))
-  );
-  rows.forEach(r => { delete r._connTitles; });
-
-  return NextResponse.json(rows, {
-    headers: { 'Cache-Control': 'private, max-age=30' }
-  });
 }
