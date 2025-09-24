@@ -70,7 +70,7 @@ function BboxDataLoader({
       fetchJSON<StationsResponse>(url, ctrl.signal)
         .then((data) => onData(data.items ?? []))
         .catch((err) => {
-          if (err?.name === 'AbortError') return;
+          if ((err as any)?.name === 'AbortError') return;
           console.error('Stations fetch failed:', err);
           onData([]);
         })
@@ -120,8 +120,10 @@ export default function Model1HeatmapPage() {
 
   // Fix Leaflet icon URLs under bundlers
   useEffect(() => {
-    // @ts-expect-error private field override (common Leaflet workaround)
-    delete (L.Icon.Default.prototype as any)._getIconUrl;
+    const proto = L.Icon.Default.prototype as any;
+    if (proto && proto._getIconUrl) {
+      delete proto._getIconUrl;
+    }
     L.Icon.Default.mergeOptions({
       iconRetinaUrl:
         'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
