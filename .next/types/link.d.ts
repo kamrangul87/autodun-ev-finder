@@ -29,21 +29,22 @@ declare namespace __next_route_internal_types__ {
     S extends `${string}${SearchOrHash}` ? never : S
 
   type StaticRoutes = 
-    | `/`
-    | `/api/borough`
+    | `/api/stations`
+    | `/api/ev-points`
+    | `/ev`
     | `/api/debug/ocm`
     | `/api/echo`
     | `/api/feedback`
     | `/api/geocode`
     | `/api/health`
+    | `/api/borough`
     | `/api/refresh`
-    | `/api/sites`
-    | `/api/stations`
     | `/borough-gap`
-    | `/model1-heatmap`
     | `/offline`
+    | `/`
+    | `/api/sites`
+    | `/model1-heatmap`
     | `/ev`
-    | `/api/ev-points`
     | `/ev`
   type DynamicRoutes<T extends string = string> = never
 

@@ -1,7 +1,7 @@
+"use client";
 export const viewport = {
   themeColor: '#0b1220',
 };
-'use client';
 
 export const dynamic = 'force-dynamic'; // disable SSG for this route
 

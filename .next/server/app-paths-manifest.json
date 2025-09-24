@@ -1,1 +1,16 @@
-{}
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/debug/ocm/route": "app/api/debug/ocm/route.js",
+  "/api/echo/route": "app/api/echo/route.js",
+  "/api/feedback/route": "app/api/feedback/route.js",
+  "/api/geocode/route": "app/api/geocode/route.js",
+  "/api/health/route": "app/api/health/route.js",
+  "/api/borough/route": "app/api/borough/route.js",
+  "/api/refresh/route": "app/api/refresh/route.js",
+  "/borough-gap/page": "app/borough-gap/page.js",
+  "/offline/page": "app/offline/page.js",
+  "/page": "app/page.js",
+  "/api/sites/route": "app/api/sites/route.js",
+  "/model1-heatmap/page": "app/model1-heatmap/page.js",
+  "/api/stations/route": "app/api/stations/route.js"
+}
