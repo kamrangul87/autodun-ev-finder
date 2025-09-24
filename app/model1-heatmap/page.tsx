@@ -1,16 +1,9 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import L, { type Map as LeafletMap, type LatLngBounds } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-
-// ---- Lazy imports to avoid SSR issues with react-leaflet ----
-const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
-const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
-const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
-const useMap       = dynamic(() => import('react-leaflet').then(m => m.useMap), { ssr: false });
 
 // ---- Types ----
 type Station = {
@@ -48,6 +41,7 @@ function BboxDataLoader({
 }) {
   const map = useMap();
   const abortRef = useRef<AbortController | null>(null);
+  const debounceRef = useRef<number | null>(null);
 
   const loadForBounds = useCallback(
     (bounds: LatLngBounds) => {
@@ -89,22 +83,23 @@ function BboxDataLoader({
   );
 
   useEffect(() => {
-    // Load once when map is ready
+    // Initial load
     loadForBounds(map.getBounds());
 
-    const handleMove = () => {
-      // Debounce slightly to avoid spamming while panning/zooming
-      const id = window.setTimeout(() => loadForBounds(map.getBounds()), 200);
-      return () => window.clearTimeout(id);
+    const trigger = () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      debounceRef.current = window.setTimeout(() => {
+        loadForBounds(map.getBounds());
+      }, 200);
     };
 
-    // React-Leaflet exposes Leaflet events via underlying map
-    map.on('moveend', handleMove);
-    map.on('zoomend', handleMove);
+    map.on('moveend', trigger);
+    map.on('zoomend', trigger);
 
     return () => {
-      map.off('moveend', handleMove);
-      map.off('zoomend', handleMove);
+      map.off('moveend', trigger);
+      map.off('zoomend', trigger);
+      if (debounceRef.current) window.clearTimeout(debounceRef.current);
       if (abortRef.current) abortRef.current.abort();
     };
   }, [map, loadForBounds]);
@@ -117,7 +112,6 @@ const DEFAULT_CENTER: [number, number] = [51.5074, -0.1278]; // London
 const DEFAULT_ZOOM = 12;
 
 export default function Model1HeatmapPage() {
-  const [map, setMap] = useState<LeafletMap | null>(null);
   const [stations, setStations] = useState<Station[]>([]);
   const [showMarkers, setShowMarkers] = useState(true);
 
@@ -126,10 +120,9 @@ export default function Model1HeatmapPage() {
     process.env.NEXT_PUBLIC_TILE_URL ||
     'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
-  // Marker icon fix (Leaflet's default assets path issue in bundlers)
+  // Marker icon fix (Leaflet asset paths under bundlers)
   useEffect(() => {
-    // Only run on client
-    // @ts-ignore - private options but widely used workaround
+    // @ts-ignore override internal urls
     delete (L.Icon.Default.prototype as any)._getIconUrl;
     L.Icon.Default.mergeOptions({
       iconRetinaUrl:
@@ -151,7 +144,8 @@ export default function Model1HeatmapPage() {
   );
 
   const onMapCreated = useCallback((m: LeafletMap) => {
-    setMap(m);
+    // You can keep a ref/state if you need it later
+    // setMap(m);
   }, []);
 
   return (
@@ -173,7 +167,7 @@ export default function Model1HeatmapPage() {
         zoom={DEFAULT_ZOOM}
         style={{ height: '100%', width: '100%' }}
         whenCreated={(leafletMap) => {
-          // ✅ This is the correct callback type; no TypeScript error.
+          // ✅ Correct callback type; avoids the previous whenReady TS error
           onMapCreated(leafletMap);
         }}
       >
