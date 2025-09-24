@@ -11,10 +11,6 @@ const TileLayer     = dynamic(() => import('react-leaflet').then(m => m.TileLaye
 const CircleMarker  = dynamic(() => import('react-leaflet').then(m => m.CircleMarker),  { ssr: false });
 const Popup         = dynamic(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
 
-// IMPORTANT: do NOT import 'leaflet' at top-level (causes "window is not defined" on SSR)
-// We’ll load it dynamically when the map is ready.
-// Also, keep leaflet.heat’s runtime under the same dynamic load.
-
 // ---- Types (no runtime import) ----
 type LatLngLike = { lat: number; lng: number };
 type OcmPoi = any;
@@ -46,7 +42,7 @@ function normalise(p: OcmPoi): Station | null {
   if (typeof lat !== 'number' || typeof lon !== 'number') return null;
 
   const conns: any[] = Array.isArray(p?.Connections) ? p.Connections : [];
-  const connectors = conns.length;
+  the const connectors = conns.length;
   const maxPowerKw = conns.reduce((m, c) => (typeof c?.PowerKW === 'number' && c.PowerKW > m ? c.PowerKW : m), 0) || 0;
 
   const s = p?.autodun?.score as number | undefined;
@@ -72,15 +68,6 @@ function useDebounced<T extends any[]>(fn: (...args: T) => void, ms: number) {
     t.current = window.setTimeout(() => fn(...args), ms) as unknown as number;
   };
 }
-
-/** Child helper that fires once the map instance is available */
-const OnMapReady: React.FC<{ onReady: (map: any) => void }> = ({ onReady }) => {
-  const map = useMap();
-  useEffect(() => {
-    onReady(map);
-  }, [map, onReady]);
-  return null;
-};
 
 const SearchBox: React.FC<{ onLocate: (ll: LatLngLike | null, zoom?: number) => void }> = ({ onLocate }) => {
   const [q, setQ] = useState('');
@@ -229,10 +216,8 @@ const Model1HeatmapPage: React.FC = () => {
         center={[51.5072, -0.1276]}
         zoom={12}
         style={{ height: '100%', width: '100%' }}
+        whenReady={({ target }) => { void onMapReady(target); }}  // ✅ capture map once
       >
-        {/* capture map instance & load Leaflet on client */}
-        <OnMapReady onReady={onMapReady} />
-
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
