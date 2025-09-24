@@ -42,8 +42,11 @@ function normalise(p: OcmPoi): Station | null {
   if (typeof lat !== 'number' || typeof lon !== 'number') return null;
 
   const conns: any[] = Array.isArray(p?.Connections) ? p.Connections : [];
-  the const connectors = conns.length;
-  const maxPowerKw = conns.reduce((m, c) => (typeof c?.PowerKW === 'number' && c.PowerKW > m ? c.PowerKW : m), 0) || 0;
+  const connectors = conns.length; // ✅ fixed typo
+  const maxPowerKw = conns.reduce(
+    (m, c) => (typeof c?.PowerKW === 'number' && c.PowerKW > m ? c.PowerKW : m),
+    0
+  ) || 0;
 
   const s = p?.autodun?.score as number | undefined;
   const score =
