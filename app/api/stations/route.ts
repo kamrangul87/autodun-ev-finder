@@ -1,6 +1,5 @@
-export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
 
+export const runtime = 'nodejs';
 import { NextResponse } from 'next/server';
 
 function parseBbox(sp: URLSearchParams): [number, number, number, number] | null {
@@ -13,7 +12,6 @@ function parseBbox(sp: URLSearchParams): [number, number, number, number] | null
   return [n, s, e, w];
 }
 
-export const dynamic = 'force-dynamic';
 function normalizeOCM(p: any) {
   const ai = p?.AddressInfo ?? {};
   const conns = Array.isArray(p?.Connections) ? p.Connections : [];
@@ -25,8 +23,7 @@ function normalizeOCM(p: any) {
   return {
     id: p?.ID ?? null,
     name: ai?.Title ?? null,
-    import { NextResponse } from 'next/server';
-    // Duplicate export removed
+  // ...existing code...
     addr: [ai?.AddressLine1, ai?.Town].filter(Boolean).join(', ') || null,
     postcode: ai?.Postcode ?? null,
     breakdown: { reports: 0, downtime: 0, connectors: conns.length },
@@ -51,10 +48,6 @@ export async function GET(req: Request) {
   const params = new URLSearchParams({
     boundingbox: `${south},${west},${north},${east}`,
     compact: 'true',
-
-    export const dynamic = 'force-dynamic';
-
-    import { NextResponse } from 'next/server';
 
     function parseFloatSafe(val: unknown): number | undefined {
       if (typeof val === 'string') {
