@@ -90,6 +90,7 @@ export default function ClientMap({
   showCouncil,
   onStationsCount,
 }: Props) {
+  // IMPORTANT: MapContainer supports ref to get the Leaflet Map instance
   const mapRef = useRef<L.Map | null>(null);
 
   const [stations, setStations] = useState<Station[]>([]);
@@ -153,7 +154,7 @@ export default function ClientMap({
     return null;
   }
 
-  /** If council toggle changes, refresh. */
+  /** If council toggle changes, refresh current bounds. */
   useEffect(() => {
     const m = mapRef.current;
     if (m) debouncedFetch(m);
@@ -164,13 +165,17 @@ export default function ClientMap({
 
   return (
     <MapContainer
+      ref={mapRef as unknown as React.RefObject<L.Map>} // get the map instance
       center={center}
       zoom={initialZoom}
       className="w-full h-[calc(100vh-140px)] rounded-xl overflow-hidden"
-      whenCreated={(leafletMap: L.Map) => {
-        mapRef.current = leafletMap;
-        // initial fetch on mount
-        debouncedFetch(leafletMap);
+      // react-leaflet v4 expects whenReady: () => void (no args)
+      whenReady={() => {
+        const m = mapRef.current;
+        if (m) {
+          // initial fetch on first ready
+          debouncedFetch(m);
+        }
       }}
     >
       <TileLayer
