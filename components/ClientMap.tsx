@@ -3,7 +3,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import L, { LatLngExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
-import "leaflet.heat"; // leaflet.heat plugin
+import "leaflet.heat"; // plugin (no TS types)
 
 import {
   MapContainer,
@@ -35,32 +35,35 @@ type Props = {
   onStationsCount?: (n: number) => void;
 };
 
-function useDebouncedCallback(fn: (...args: any[]) => void, ms: number) {
+function useDebouncedCallback<T extends (...args: any[]) => void>(fn: T, ms: number) {
   const t = useRef<ReturnType<typeof setTimeout> | null>(null);
-  return (...args: any[]) => {
+  return (...args: Parameters<T>) => {
     if (t.current) clearTimeout(t.current);
     t.current = setTimeout(() => fn(...args), ms);
   };
 }
 
-// Simple heatmap layer wrapper that updates when points change.
+/** Heatmap layer wrapper (updates when points change). */
 function HeatmapLayer({ points }: { points: Station[] }) {
   const map = useMapEvents({});
-  const layerRef = useRef<L.HeatLayer | null>(null);
+  // NOTE: leaflet.heat doesn't have TS types; use generic L.Layer
+  const layerRef = useRef<L.Layer | null>(null);
 
   useEffect(() => {
     if (!map) return;
     if (!layerRef.current) {
-      // @ts-ignore - leaflet.heat extends L with heatLayer
+      // @ts-ignore leaflet.heat augments L at runtime
       layerRef.current = L.heatLayer([], { radius: 20, blur: 15, maxZoom: 17 });
       layerRef.current.addTo(map);
     }
 
+    // @ts-ignore setLatLngs is provided by leaflet.heat
+    const heat = layerRef.current as any;
     const heatPoints = points.map((p) => [p.lat, p.lon, 0.6] as [number, number, number]);
-    layerRef.current.setLatLngs(heatPoints);
+    heat.setLatLngs(heatPoints);
 
     return () => {
-      // keep layer alive across prop changes; remove only when unmounting component
+      // keep the layer (do not remove) during prop updates
     };
   }, [map, points]);
 
@@ -99,10 +102,10 @@ export default function ClientMap({
 
     // Stations
     try {
-      const u =
+      const url =
         `/api/stations?west=${west}&south=${south}` +
         `&east=${east}&north=${north}&zoom=${zoom}`;
-      const res = await fetch(u, { cache: "no-store" });
+      const res = await fetch(url, { cache: "no-store" });
       const json = await res.json();
       const items: Station[] = Array.isArray(json?.items) ? json.items : [];
       setStations(items);
@@ -112,7 +115,7 @@ export default function ClientMap({
       onStationsCount?.(0);
     }
 
-    // Council (fetch only if the layer is enabled to save calls)
+    // Council (only if enabled)
     if (showCouncil) {
       try {
         const cu =
@@ -132,7 +135,7 @@ export default function ClientMap({
 
   const debouncedFetch = useDebouncedCallback((m: L.Map) => fetchData(m), 250);
 
-  // Re-fetch on map interactions
+  /** Re-fetch on pan/zoom. */
   function ViewEvents() {
     useMapEvents({
       moveend() {
@@ -147,7 +150,7 @@ export default function ClientMap({
     return null;
   }
 
-  // If user toggles council on/off, refresh current bounds
+  /** If council toggle changes, refresh. */
   useEffect(() => {
     const m = mapRef.current;
     if (m) debouncedFetch(m);
@@ -163,7 +166,7 @@ export default function ClientMap({
       className="w-full h-[calc(100vh-140px)] rounded-xl overflow-hidden"
       whenCreated={(leafletMap: L.Map) => {
         mapRef.current = leafletMap;
-        // Kick off the very first fetch immediately on mount
+        // initial fetch on mount
         debouncedFetch(leafletMap);
       }}
     >
