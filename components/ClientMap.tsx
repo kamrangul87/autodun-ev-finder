@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -12,7 +12,9 @@ import 'leaflet/dist/leaflet.css';
 
 import CouncilLayer from '@/components/CouncilLayer';
 
-// -------- Types you likely already have --------
+/* ------------------------------------------------------------
+   Types
+------------------------------------------------------------ */
 export type Station = {
   id: string | number;
   lat: number;
@@ -21,40 +23,61 @@ export type Station = {
   addr?: string | null;
 };
 
-type Props = {
-  /** initial map center (lat, lng) */
-  center?: [number, number];
-  /** initial zoom */
-  zoom?: number;
-
-  /** your stations array (if you fetch inside this component, you can ignore this prop) */
-  stations?: Station[];
-
-  /** if you already maintain these toggles outside, pass them down & control via props (optional) */
+type UncontrolledToggleProps = {
+  /** If you manage toggles INSIDE ClientMap */
   defaultShowHeatmap?: boolean;
   defaultShowMarkers?: boolean;
   defaultShowCouncil?: boolean;
 };
 
-/**
- * Top-right UI for toggles and count
- */
+type ControlledToggleProps = {
+  /** If you manage toggles from the parent (as in your page.tsx) */
+  showHeatmap?: boolean;
+  showMarkers?: boolean;
+  showCouncil?: boolean;
+};
+
+type CenterZoomAliases = {
+  /** Aliases to match your page.tsx */
+  initialCenter?: [number, number];
+  initialZoom?: number;
+};
+
+type CoreProps = {
+  /** Back-compat aliases if you used these earlier */
+  center?: [number, number];
+  zoom?: number;
+
+  /** Optional station list, if you render markers here */
+  stations?: Station[];
+
+  /** Parent callback: report current station count (matches your page.tsx) */
+  onStationsCount?: (n: number) => void;
+};
+
+type Props = CoreProps & CenterZoomAliases & UncontrolledToggleProps & ControlledToggleProps;
+
+/* ------------------------------------------------------------
+   Layer toggles UI
+------------------------------------------------------------ */
 function LayerToggles({
-  showHeatmap,
-  setShowHeatmap,
-  showMarkers,
-  setShowMarkers,
-  showCouncil,
-  setShowCouncil,
+  heatmapOn,
+  setHeatmapOn,
+  markersOn,
+  setMarkersOn,
+  councilOn,
+  setCouncilOn,
   stationsCount,
+  controlled, // when true, disable local toggles (parent controls)
 }: {
-  showHeatmap: boolean;
-  setShowHeatmap: (v: boolean) => void;
-  showMarkers: boolean;
-  setShowMarkers: (v: boolean) => void;
-  showCouncil: boolean;
-  setShowCouncil: (v: boolean) => void;
+  heatmapOn: boolean;
+  setHeatmapOn: (v: boolean) => void;
+  markersOn: boolean;
+  setMarkersOn: (v: boolean) => void;
+  councilOn: boolean;
+  setCouncilOn: (v: boolean) => void;
   stationsCount: number;
+  controlled: boolean;
 }) {
   return (
     <div
@@ -76,29 +99,32 @@ function LayerToggles({
           fontSize: 14,
         }}
       >
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
           <input
             type="checkbox"
-            checked={showHeatmap}
-            onChange={(e) => setShowHeatmap(e.target.checked)}
+            checked={heatmapOn}
+            onChange={(e) => !controlled && setHeatmapOn(e.target.checked)}
+            disabled={controlled}
           />
           Heatmap
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
           <input
             type="checkbox"
-            checked={showMarkers}
-            onChange={(e) => setShowMarkers(e.target.checked)}
+            checked={markersOn}
+            onChange={(e) => !controlled && setMarkersOn(e.target.checked)}
+            disabled={controlled}
           />
           Markers
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
           <input
             type="checkbox"
-            checked={showCouncil}
-            onChange={(e) => setShowCouncil(e.target.checked)}
+            checked={councilOn}
+            onChange={(e) => !controlled && setCouncilOn(e.target.checked)}
+            disabled={controlled}
           />
           Council
         </label>
@@ -109,15 +135,11 @@ function LayerToggles({
   );
 }
 
-/**
- * Simple markers layer (uses CircleMarker so no icon images required).
- * If you already have your own StationsMarkers component, replace this with your import.
- */
+/* ------------------------------------------------------------
+   Simple markers layer (safe stub; replace with your own if needed)
+------------------------------------------------------------ */
 function StationsMarkersLayer({ stations = [] as Station[] }) {
-  const map = useMap();
-  // stable key to avoid re-mount spam
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
-
   return (
     <>
       {stations.map((s) => (
@@ -132,7 +154,11 @@ function StationsMarkersLayer({ stations = [] as Station[] }) {
           {(s.name || s.addr) && (
             <Tooltip direction="top" offset={[0, -6]} opacity={1}>
               <div style={{ fontSize: 12 }}>
-                {s.name && <div><strong>{s.name}</strong></div>}
+                {s.name && (
+                  <div>
+                    <strong>{s.name}</strong>
+                  </div>
+                )}
                 {s.addr && <div>{s.addr}</div>}
               </div>
             </Tooltip>
@@ -143,19 +169,47 @@ function StationsMarkersLayer({ stations = [] as Station[] }) {
   );
 }
 
-export default function ClientMap({
-  center = [51.522, -0.126], // London-ish
-  zoom = 13,
-  stations = [],
-  defaultShowHeatmap = false,
-  defaultShowMarkers = true,
-  defaultShowCouncil = false,
-}: Props) {
-  const [showHeatmap, setShowHeatmap] = useState(defaultShowHeatmap);
-  const [showMarkers, setShowMarkers] = useState(defaultShowMarkers);
-  const [showCouncil, setShowCouncil] = useState(defaultShowCouncil);
+/* ------------------------------------------------------------
+   Main component
+   - Accepts your prop names (initialCenter/initialZoom + showX)
+   - Also supports center/zoom + defaultShowX for back-compat
+------------------------------------------------------------ */
+export default function ClientMap(props: Props) {
+  // Center/Zoom aliases (prefer initialCenter/initialZoom if provided)
+  const center: [number, number] =
+    props.initialCenter ??
+    props.center ??
+    ([51.522, -0.126] as [number, number]); // London-ish
+  const zoom: number = props.initialZoom ?? props.zoom ?? 13;
 
-  const stationsCount = stations?.length ?? 0;
+  const stations = props.stations ?? [];
+
+  // Report stations count to parent (if callback provided)
+  useEffect(() => {
+    props.onStationsCount?.(stations.length);
+  }, [stations.length, props]);
+
+  // Determine controlled vs uncontrolled toggles
+  const isControlled =
+    typeof props.showHeatmap !== 'undefined' ||
+    typeof props.showMarkers !== 'undefined' ||
+    typeof props.showCouncil !== 'undefined';
+
+  // Local state (used when not controlled)
+  const [heatmapOn, setHeatmapOn] = useState<boolean>(
+    props.defaultShowHeatmap ?? false
+  );
+  const [markersOn, setMarkersOn] = useState<boolean>(
+    props.defaultShowMarkers ?? true
+  );
+  const [councilOn, setCouncilOn] = useState<boolean>(
+    props.defaultShowCouncil ?? false
+  );
+
+  // Effective values (controlled wins if present)
+  const effHeatmap = typeof props.showHeatmap === 'boolean' ? props.showHeatmap : heatmapOn;
+  const effMarkers = typeof props.showMarkers === 'boolean' ? props.showMarkers : markersOn;
+  const effCouncil = typeof props.showCouncil === 'boolean' ? props.showCouncil : councilOn;
 
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
@@ -165,42 +219,38 @@ export default function ClientMap({
         className="w-full h-full rounded-xl overflow-hidden"
       >
         <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
+          attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Council polygons – this is the only addition required for Step 4 */}
-        <CouncilLayer enabled={showCouncil} />
+        {/* ✅ Council polygons (doesn't touch stations fetching) */}
+        <CouncilLayer enabled={effCouncil} />
 
-        {/* Heatmap (replace stub with your actual heatmap component if you have one) */}
-        {showHeatmap && <HeatmapLayer stations={stations} />}
+        {/* Heatmap — replace with your real component if you have one */}
+        {effHeatmap && <HeatmapLayer stations={stations} />}
 
         {/* Markers */}
-        {showMarkers && <StationsMarkersLayer stations={stations} />}
+        {effMarkers && <StationsMarkersLayer stations={stations} />}
 
         {/* UI controls */}
         <LayerToggles
-          showHeatmap={showHeatmap}
-          setShowHeatmap={setShowHeatmap}
-          showMarkers={showMarkers}
-          setShowMarkers={setShowMarkers}
-          showCouncil={showCouncil}
-          setShowCouncil={setShowCouncil}
-          stationsCount={stationsCount}
+          heatmapOn={effHeatmap}
+          setHeatmapOn={setHeatmapOn}
+          markersOn={effMarkers}
+          setMarkersOn={setMarkersOn}
+          councilOn={effCouncil}
+          setCouncilOn={setCouncilOn}
+          stationsCount={stations.length}
+          controlled={isControlled}
         />
       </MapContainer>
     </div>
   );
 }
 
-/* ------------------------------------------------------------------
-   STUBS: Replace with your actual components if you already have them
--------------------------------------------------------------------*/
-
-/**
- * Replace this with your real heatmap implementation.
- * Keeping a stub here prevents TypeScript/compile errors.
- */
+/* ------------------------------------------------------------
+   STUB: Replace with your actual heatmap if present
+------------------------------------------------------------ */
 function HeatmapLayer(_props: { stations: Station[] }) {
   return null;
 }
