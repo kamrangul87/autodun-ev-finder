@@ -1,4 +1,5 @@
 'use client';
+
 import CouncilLayer from '@/components/CouncilLayer';
 
 import React, { useEffect } from 'react';
@@ -10,7 +11,6 @@ import {
   Pane,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import CouncilLayer from '@/components/CouncilLayer';
 
 export type Station = {
   id: string | number;
@@ -21,15 +21,14 @@ export type Station = {
 };
 
 type Props = {
-  // match your page.tsx props
   initialCenter?: [number, number];
   initialZoom?: number;
 
-  showHeatmap?: boolean;   // no-op stub below (safe)
+  showHeatmap?: boolean;   // heatmap stub
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  stations?: Station[];    // page passes stations (your existing flow)
+  stations?: Station[];
   onStationsCount?: (n: number) => void;
 };
 
@@ -42,7 +41,6 @@ export default function ClientMap({
   stations = [],
   onStationsCount,
 }: Props) {
-  // keep your header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
@@ -58,12 +56,11 @@ export default function ClientMap({
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-{showCouncil && <CouncilLayer enabled />}
 
         {/* Council polygons (under markers, above tiles) */}
-        {showCouncil && <CouncilLayer enabled={true} />}
+        {showCouncil && <CouncilLayer enabled />}
 
-        {/* Markers (pane above polygons) */}
+        {/* Markers */}
         {showMarkers && (
           <>
             <Pane name="stations-pane" style={{ zIndex: 400 }} />
@@ -94,7 +91,7 @@ export default function ClientMap({
           </>
         )}
 
-        {/* Heatmap placeholder so builds don’t break; replace with your real heatmap later */}
+        {/* Heatmap stub (safe no-op) */}
         {showHeatmap && <HeatmapLayer stations={stations} />}
       </MapContainer>
     </div>
