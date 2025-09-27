@@ -1,76 +1,66 @@
-import type { Feature, FeatureCollection, Geometry } from 'geojson';
-
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
-
-const UPSTREAM = process.env.COUNCIL_DATA_URL; // e.g. https://your-domain/data/uk-councils.geojson
-
+// 👉 replace the top part of your route with this improved parser + optional debug
 type BBox = [number, number, number, number]; // [w,s,e,n]
 
-function emptyFC(): FeatureCollection {
-  return { type: 'FeatureCollection', features: [] };
-}
+function parseBBox(searchParams: URLSearchParams): BBox | null {
+  // 1) separate params
+  let w = searchParams.get('west');
+  let s = searchParams.get('south');
+  let e = searchParams.get('east');
+  let n = searchParams.get('north');
 
-function parseBBox(q: string | null): BBox | null {
-  if (!q) return null;
-  const parts = q.split(',').map((v) => Number(v.trim()));
-  if (parts.length !== 4 || parts.some((v) => Number.isNaN(v))) return null;
-  const [w, s, e, n] = parts;
-  return [w, s, e, n];
-}
-
-function geomBBox(g: Geometry): BBox {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-  function visit(c: any) {
-    if (typeof c?.[0] === 'number' && typeof c?.[1] === 'number') {
-      const x = c[0], y = c[1];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-      return;
+  // 2) bbox=west,south,east,north
+  if (!(w && s && e && n)) {
+    const bbox = searchParams.get('bbox');
+    if (bbox) {
+      const p = bbox.split(',').map(v => v.trim());
+      if (p.length === 4) [w, s, e, n] = p;
     }
-    for (const ch of c) visit(ch);
   }
+  if (!(w && s && e && n)) return null;
 
-  // @ts-ignore
-  visit((g as any).coordinates);
-  return [minX, minY, maxX, maxY];
+  let W = Number(w), S = Number(s), E = Number(e), N = Number(n);
+  if ([W, S, E, N].some(v => Number.isNaN(v))) return null;
+
+  // normalize in case caller swapped
+  if (E < W) [W, E] = [E, W];
+  if (N < S) [S, N] = [N, S];
+
+  return [W, S, E, N];
 }
 
-function intersects(a: BBox, b: BBox): boolean {
-  const [aw, as, ae, an] = a;
-  const [bw, bs, be, bn] = b;
-  return !(ae < bw || be < aw || an < bs || bn < as);
+// add this tiny helper anywhere above GET:
+function testFeature(bbox: BBox): any {
+  const [W, S, E, N] = bbox;
+  const padX = (E - W) * 0.05;
+  const padY = (N - S) * 0.05;
+  const ring = [
+    [W + padX, S + padY],
+    [E - padX, S + padY],
+    [E - padX, N - padY],
+    [W + padX, N - padY],
+    [W + padX, S + padY],
+  ];
+  return {
+    type: 'Feature',
+    properties: { debug: true },
+    geometry: { type: 'Polygon', coordinates: [ring] }, // lon,lat order
+  };
 }
 
+// then inside GET:
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
-    const bbox = parseBBox(searchParams.get('bbox'));
-    if (!bbox) return new Response(JSON.stringify(emptyFC()), { status: 200 });
+    const bbox = parseBBox(searchParams);
+    if (!bbox) return new Response(JSON.stringify({ type: 'FeatureCollection', features: [] }), { status: 200 });
 
-    if (!UPSTREAM) return new Response(JSON.stringify(emptyFC()), { status: 200 });
-
-    const upstream = await fetch(UPSTREAM, { cache: 'no-store' });
-    if (!upstream.ok) return new Response(JSON.stringify(emptyFC()), { status: 200 });
-
-    const fc = (await upstream.json()) as FeatureCollection;
-    if (!fc?.features?.length) return new Response(JSON.stringify(emptyFC()), { status: 200 });
-
-    const clipped: Feature[] = [];
-    for (const f of fc.features) {
-      if (!f?.geometry) continue;
-      const fb = (f as any).bbox as BBox | undefined;
-      const bb = fb && fb.length === 4 ? fb : geomBBox(f.geometry);
-      if (intersects(bb, bbox)) clipped.push(f);
+    // ✅ quick debug: prove render path without touching dataset
+    if (searchParams.get('debug') === '1') {
+      return new Response(JSON.stringify({
+        type: 'FeatureCollection',
+        features: [testFeature(bbox)],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
 
-    const out: FeatureCollection = { type: 'FeatureCollection', features: clipped };
-    return new Response(JSON.stringify(out), { status: 200, headers: { 'content-type': 'application/json' } });
-  } catch (e) {
-    console.error('Councils route error:', e);
-    return new Response(JSON.stringify(emptyFC()), { status: 200 });
-  }
+    // ...keep your existing UPSTREAM fetch + clipping logic exactly as you have it...
 }
