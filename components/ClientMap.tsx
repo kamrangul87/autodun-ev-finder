@@ -46,24 +46,27 @@ function useDebouncedCallback<T extends (...args: any[]) => void>(fn: T, ms: num
 /** Heatmap layer wrapper (updates when points change). */
 function HeatmapLayer({ points }: { points: Station[] }) {
   const map = useMapEvents({});
-  // NOTE: leaflet.heat doesn't have TS types; use generic L.Layer
+  // leaflet.heat doesn't have TS types; use generic L.Layer
   const layerRef = useRef<L.Layer | null>(null);
 
   useEffect(() => {
     if (!map) return;
+
     if (!layerRef.current) {
+      // Create, add to map, then store in ref so TS never sees a possibly-null when calling addTo.
       // @ts-ignore leaflet.heat augments L at runtime
-      layerRef.current = L.heatLayer([], { radius: 20, blur: 15, maxZoom: 17 });
-      layerRef.current.addTo(map);
+      const layer = L.heatLayer([], { radius: 20, blur: 15, maxZoom: 17 }).addTo(map);
+      layerRef.current = layer as unknown as L.Layer;
     }
 
+    // Update points
     // @ts-ignore setLatLngs is provided by leaflet.heat
     const heat = layerRef.current as any;
     const heatPoints = points.map((p) => [p.lat, p.lon, 0.6] as [number, number, number]);
     heat.setLatLngs(heatPoints);
 
     return () => {
-      // keep the layer (do not remove) during prop updates
+      // keep the layer mounted between updates
     };
   }, [map, points]);
 
