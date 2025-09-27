@@ -1,21 +1,18 @@
-export const dynamic = 'force-dynamic';   // don't prerender/SSG this page
+"use client";
+
+export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import dynamic from "next/dynamic";
+import dynamicImport from "next/dynamic";
+import { useState } from "react";
 
 // Load the map only on the client (no SSR), avoids "window is not defined"
-const ClientMap = dynamic(() => import("@/components/ClientMap"), { ssr: false });
+const ClientMap = dynamicImport(() => import("@/components/ClientMap"), { ssr: false });
+
+const DEFAULT_CENTER: [number, number] = [51.509, -0.118];
+const DEFAULT_ZOOM = 12;
 
 export default function Model1HeatmapPage() {
-  // Inline toggles to keep things simple
-  // Using React only on client (because of ssr:false above)
-  const DEFAULT_CENTER: [number, number] = [51.509, -0.118];
-  const DEFAULT_ZOOM = 12;
-
-  // lazy import of React hooks to avoid server reference
-  const React = require("react");
-  const { useState } = React as typeof import("react");
-
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showCouncil, setShowCouncil] = useState(true);
