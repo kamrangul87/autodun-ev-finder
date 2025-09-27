@@ -1,7 +1,6 @@
 "use client";
 
-export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+export const dynamic = 'force-dynamic'; // disable prerender/SSG for this page
 
 import dynamicImport from "next/dynamic";
 import { useState } from "react";
