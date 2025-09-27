@@ -1,5 +1,7 @@
 /* === AUTODUN DATA-FETCH LOCK ===
-   Contract: GET /api/stations?west&south&east&north&zoom
+   Contract (now backward-compatible):
+   ✅ GET /api/stations?west&south&east&north&zoom
+   ✅ GET /api/stations?bbox=west,south,east,north&zoom
    Returns: { items: Station[], [fallback?: true], [reason?: string] }
    Fallbacks: OpenChargeMap → Overpass(OSM) → Mock
 */
@@ -28,13 +30,13 @@ function normalizeOCM(arr: any[]): Station[] {
     name: d.AddressInfo?.Title ?? null,
     addr: d.AddressInfo?.AddressLine1 ?? null,
     postcode: d.AddressInfo?.Postcode ?? null,
-    lat: d.AddressInfo?.Latitude,
-    lon: d.AddressInfo?.Longitude,
+    lat: Number(d.AddressInfo?.Latitude),
+    lon: Number(d.AddressInfo?.Longitude),
     connectors: d.Connections?.length ?? 0,
     reports: d.UserComments?.length ?? 0,
     downtime: 0,
     source: 'ocm',
-  }));
+  })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
 }
 
 function normalizeOverpass(arr: any[]): Station[] {
@@ -43,14 +45,13 @@ function normalizeOverpass(arr: any[]): Station[] {
     name: el.tags?.name ?? 'EV Charging',
     addr: el.tags?.['addr:street'] ?? null,
     postcode: el.tags?.['addr:postcode'] ?? null,
-    lat: el.lat,
-    lon: el.lon,
-    connectors:
-      Number(el.tags?.sockets ?? el.tags?.capacity ?? el.tags?.connectors ?? 0) || 0,
+    lat: Number(el.lat),
+    lon: Number(el.lon),
+    connectors: Number(el.tags?.sockets ?? el.tags?.capacity ?? el.tags?.connectors ?? 0) || 0,
     reports: 0,
     downtime: 0,
     source: 'osm',
-  }));
+  })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
 }
 
 function mockPayload(reason: string) {
@@ -64,22 +65,57 @@ function mockPayload(reason: string) {
   };
 }
 
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
+function parseBbox(searchParams: URLSearchParams) {
+  // New style
   const west  = searchParams.get('west');
   const south = searchParams.get('south');
   const east  = searchParams.get('east');
   const north = searchParams.get('north');
-  const zoom  = Number(searchParams.get('zoom') ?? 11);
 
-  if (!west || !south || !east || !north) {
-    return NextResponse.json({ error: 'Missing bounding box params' }, { status: 400 });
+  // Back-compat: ?bbox=west,south,east,north
+  let w = west, s = south, e = east, n = north;
+  if (!(w && s && e && n)) {
+    const bbox = searchParams.get('bbox');
+    if (bbox) {
+      const parts = bbox.split(',').map(v => v.trim());
+      if (parts.length === 4) {
+        [w, s, e, n] = parts;
+      }
+    }
+  }
+
+  if (!(w && s && e && n)) return null;
+
+  const W = Number(w), S = Number(s), E = Number(e), N = Number(n);
+  if ([W, S, E, N].some(v => Number.isNaN(v))) return null;
+
+  // Validate loose ranges
+  if (W < -180 || W > 180 || E < -180 || E > 180 || S < -90 || S > 90 || N < -90 || N > 90) {
+    return null;
+  }
+  // Swap if user accidentally sent reversed bbox
+  const westN  = Math.min(W, E);
+  const eastN  = Math.max(W, E);
+  const southN = Math.min(S, N);
+  const northN = Math.max(S, N);
+
+  return { west: westN, south: southN, east: eastN, north: northN };
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const bbox = parseBbox(searchParams);
+  const zoom = Number(searchParams.get('zoom') ?? 11);
+
+  if (!bbox) {
+    return NextResponse.json({ error: 'Missing or invalid bbox' }, { status: 400 });
   }
 
   let lastError = '';
+  // ⚠️ Ensure this env var exists on Vercel: OPENCHARGEMAP_KEY
   const apiKey = process.env.OPENCHARGEMAP_KEY ?? '';
 
-  // 1) OpenChargeMap
+  // 1) OpenChargeMap (expects: south,west,north,east)
   if (apiKey) {
     try {
       let maxResults = 50;
@@ -89,7 +125,7 @@ export async function GET(req: NextRequest) {
 
       const ocmUrl =
         `https://api.openchargemap.io/v3/poi/` +
-        `?output=json&countrycode=GB&boundingbox=${south},${west},${north},${east}` +
+        `?output=json&countrycode=GB&boundingbox=${bbox.south},${bbox.west},${bbox.north},${bbox.east}` +
         `&maxresults=${maxResults}&compact=true&verbose=false`;
 
       const ocmRes = await fetch(ocmUrl, {
@@ -104,10 +140,10 @@ export async function GET(req: NextRequest) {
       if (ocmRes.ok) {
         const json = await ocmRes.json();
         const items = normalizeOCM(Array.isArray(json) ? json : []);
-        if (items.length) return NextResponse.json({ items });
+        if (items.length) return NextResponse.json({ items }, { status: 200 });
         lastError = 'OCM returned 0 items';
       } else {
-        lastError = `OCM ${ocmRes.status}: ${await ocmRes.text().catch(()=>'')}`;
+        lastError = `OCM ${ocmRes.status}: ${await ocmRes.text().catch(()=> '')}`;
       }
     } catch (e: any) {
       lastError = `OCM error: ${e?.message ?? 'unknown'}`;
@@ -116,12 +152,12 @@ export async function GET(req: NextRequest) {
     lastError = 'OPENCHARGEMAP_KEY missing';
   }
 
-  // 2) Overpass fallback
+  // 2) Overpass fallback (expects: south,west,north,east)
   try {
     const query = `
       [out:json][timeout:20];
       (
-        node["amenity"="charging_station"](${south},${west},${north},${east});
+        node["amenity"="charging_station"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
       );
       out body;
     `.trim();
@@ -137,20 +173,19 @@ export async function GET(req: NextRequest) {
       const json = await res.json();
       const items = normalizeOverpass(json?.elements ?? []);
       if (items.length) {
-        return NextResponse.json({
-          items,
-          fallback: true,
-          reason: `Used Overpass. Prior: ${lastError}`,
-        });
+        return NextResponse.json(
+          { items, fallback: true, reason: `Used Overpass. Prior: ${lastError}` },
+          { status: 200 }
+        );
       }
       lastError = `Overpass 0 items (prior: ${lastError})`;
     } else {
-      lastError = `Overpass ${res.status}: ${await res.text().catch(()=>'')}; prior: ${lastError}`;
+      lastError = `Overpass ${res.status}: ${await res.text().catch(()=> '')}; prior: ${lastError}`;
     }
   } catch (e: any) {
     lastError = `Overpass error: ${e?.message ?? 'unknown'}; prior: ${lastError}`;
   }
 
-  // 3) Mock
-  return NextResponse.json(mockPayload(lastError || 'Unknown error'));
+  // 3) Mock (last resort)
+  return NextResponse.json(mockPayload(lastError || 'Unknown error'), { status: 200 });
 }
