@@ -1,4 +1,5 @@
 'use client';
+import CouncilLayer from '@/components/CouncilLayer';
 
 import React, { useEffect } from 'react';
 import {
@@ -57,6 +58,7 @@ export default function ClientMap({
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
+{showCouncil && <CouncilLayer enabled />}
 
         {/* Council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled={true} />}
