@@ -1,169 +1,156 @@
+/* === AUTODUN DATA-FETCH LOCK ===
+   Contract: GET /api/stations?west&south&east&north&zoom
+   Returns: { items: Station[], [fallback?: true], [reason?: string] }
+   Fallbacks: OpenChargeMap → Overpass(OSM) → Mock
+*/
 
+import { NextRequest, NextResponse } from 'next/server';
+
+export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
-import { NextResponse } from 'next/server';
 
-function parseBbox(sp: URLSearchParams): [number, number, number, number] | null {
-  const n = Number(sp.get('north'));
-  const s = Number(sp.get('south'));
-  const e = Number(sp.get('east'));
-  const w = Number(sp.get('west'));
-  if (![n, s, e, w].every(Number.isFinite)) return null;
-  if (n <= s || e <= w) return null;
-  return [n, s, e, w];
+type Station = {
+  id: string | number | null;
+  name: string | null;
+  addr: string | null;
+  postcode: string | null;
+  lat: number;
+  lon: number;
+  connectors: number;
+  reports: number;
+  downtime: number;
+  source: string;
+};
+
+function normalizeOCM(arr: any[]): Station[] {
+  return (arr ?? []).map((d: any) => ({
+    id: d.ID ?? null,
+    name: d.AddressInfo?.Title ?? null,
+    addr: d.AddressInfo?.AddressLine1 ?? null,
+    postcode: d.AddressInfo?.Postcode ?? null,
+    lat: d.AddressInfo?.Latitude,
+    lon: d.AddressInfo?.Longitude,
+    connectors: d.Connections?.length ?? 0,
+    reports: d.UserComments?.length ?? 0,
+    downtime: 0,
+    source: 'ocm',
+  }));
 }
 
-function normalizeOCM(p: any) {
-  const ai = p?.AddressInfo ?? {};
-  const conns = Array.isArray(p?.Connections) ? p.Connections : [];
-  const maxPower = conns.reduce((m: number, c: any) => {
-    const p = Number(c?.PowerKW ?? 0);
-    return isFinite(p) ? Math.max(m, p) : m;
-  }, 0);
-  const connTitles = conns.map((c: any) => (c?.ConnectionType?.Title ?? '').toLowerCase()).join(',');
+function normalizeOverpass(arr: any[]): Station[] {
+  return (arr ?? []).map((el: any) => ({
+    id: el.id ?? null,
+    name: el.tags?.name ?? 'EV Charging',
+    addr: el.tags?.['addr:street'] ?? null,
+    postcode: el.tags?.['addr:postcode'] ?? null,
+    lat: el.lat,
+    lon: el.lon,
+    connectors:
+      Number(el.tags?.sockets ?? el.tags?.capacity ?? el.tags?.connectors ?? 0) || 0,
+    reports: 0,
+    downtime: 0,
+    source: 'osm',
+  }));
+}
+
+function mockPayload(reason: string) {
   return {
-    id: p?.ID ?? null,
-    name: ai?.Title ?? null,
-  // ...existing code...
-    addr: [ai?.AddressLine1, ai?.Town].filter(Boolean).join(', ') || null,
-    postcode: ai?.Postcode ?? null,
-    breakdown: { reports: 0, downtime: 0, connectors: conns.length },
-    power: maxPower || null,
-    network: p?.OperatorInfo?.Title ?? null,
-    updatedAt: p?.DateLastStatusUpdate ?? null,
-    _connTitles: connTitles,
+    items: [
+      { id: 'mock1', name: 'Test Station A', addr: null, postcode: null, lat: 51.509, lon: -0.118, connectors: 4, reports: 2, downtime: 0, source: 'mock' },
+      { id: 'mock2', name: 'Test Station B', addr: null, postcode: null, lat: 51.515, lon: -0.100, connectors: 2, reports: 0, downtime: 0, source: 'mock' },
+    ] as Station[],
+    fallback: true as const,
+    reason,
   };
 }
 
-export async function GET(req: Request) {
-  const url = new URL(req.url);
-  const bbox = parseBbox(sp);
-  if (!bbox) {
-    return NextResponse.json({ error: 'invalid_bbox' }, { status: 400 });
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const west  = searchParams.get('west');
+  const south = searchParams.get('south');
+  const east  = searchParams.get('east');
+  const north = searchParams.get('north');
+  const zoom  = Number(searchParams.get('zoom') ?? 11);
+
+  if (!west || !south || !east || !north) {
+    return NextResponse.json({ error: 'Missing bounding box params' }, { status: 400 });
   }
-  const [north, south, east, west] = bbox;
-  const minPower = Number(sp.get('minPower'));
-  const conn = sp.get('conn');
-  const connList = conn ? conn.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) : null;
 
-  const params = new URLSearchParams({
-    boundingbox: `${south},${west},${north},${east}`,
-    compact: 'true',
+  let lastError = '';
+  const apiKey = process.env.OPENCHARGEMAP_KEY ?? '';
 
-    function parseFloatSafe(val: unknown): number | undefined {
-      if (typeof val === 'string') {
-        const num = parseFloat(val);
-        return isNaN(num) ? undefined : num;
-      }
-      return undefined;
-    }
+  // 1) OpenChargeMap
+  if (apiKey) {
+    try {
+      let maxResults = 50;
+      if (zoom < 8)       maxResults = 20;
+      else if (zoom < 12) maxResults = 100;
+      else                maxResults = 200;
 
-    function computeBBoxFromCenter(lat: number, lon: number, distKm: number) {
-      const earthRadiusKm = 6371;
-      const deltaLat = (distKm / earthRadiusKm) * (180 / Math.PI);
-      const deltaLon = (distKm / earthRadiusKm) * (180 / Math.PI) / Math.cos(lat * Math.PI / 180);
-      return {
-        north: lat + deltaLat,
-        south: lat - deltaLat,
-        east: lon + deltaLon,
-        west: lon - deltaLon,
-      };
-    }
+      const ocmUrl =
+        `https://api.openchargemap.io/v3/poi/` +
+        `?output=json&countrycode=GB&boundingbox=${south},${west},${north},${east}` +
+        `&maxresults=${maxResults}&compact=true&verbose=false`;
 
-    function normalizeOCM(p: any) {
-      const ai = p?.AddressInfo ?? {};
-      const conns = Array.isArray(p?.Connections) ? p.Connections : [];
-      const maxPower = conns.reduce((m: number, c: any) => {
-        const p = Number(c?.PowerKW ?? 0);
-        return isFinite(p) ? Math.max(m, p) : m;
-      }, 0);
-      const connTitles = conns.map((c: any) => (c?.ConnectionType?.Title ?? '').toLowerCase()).join(',');
-      return {
-        id: p?.ID ?? null,
-        name: ai?.Title ?? null,
-        lat: ai?.Latitude,
-        lng: ai?.Longitude,
-        addr: [ai?.AddressLine1, ai?.Town].filter(Boolean).join(', ') || null,
-        postcode: ai?.Postcode ?? null,
-        breakdown: { reports: 0, downtime: 0, connectors: conns.length },
-        power: maxPower || null,
-        network: p?.OperatorInfo?.Title ?? null,
-        updatedAt: p?.DateLastStatusUpdate ?? null,
-        _connTitles: connTitles,
-      };
-    }
+      const ocmRes = await fetch(ocmUrl, {
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey,
+        },
+        cache: 'no-store',
+      });
 
-    export async function GET(req: Request) {
-      const url = new URL(req.url);
-      const sp = url.searchParams;
-
-      // Parse bbox
-      const north = parseFloatSafe(sp.get('north'));
-      const south = parseFloatSafe(sp.get('south'));
-      const east = parseFloatSafe(sp.get('east'));
-      const west = parseFloatSafe(sp.get('west'));
-
-      // Parse center+dist
-      const lat = parseFloatSafe(sp.get('lat'));
-      const lon = parseFloatSafe(sp.get('lon'));
-      let dist = parseFloatSafe(sp.get('dist'));
-      if (dist === undefined) dist = 25;
-
-      let params: Record<string, any> = {
-        maxresults: 200,
-        compact: true,
-        verbose: false,
-      };
-
-      let mode: 'bbox' | 'center' | undefined;
-      if (
-        north !== undefined &&
-        south !== undefined &&
-        east !== undefined &&
-        west !== undefined
-      ) {
-        // Validate bbox
-        if (!(north > south && east > west)) {
-          return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
-        }
-        params.boundingbox = `${north},${south},${east},${west}`;
-        mode = 'bbox';
-      } else if (lat !== undefined && lon !== undefined) {
-        // Validate dist
-        if (dist === undefined || isNaN(dist) || dist <= 0) {
-          return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
-        }
-        params.latitude = lat;
-        params.longitude = lon;
-        params.distance = dist;
-        mode = 'center';
+      if (ocmRes.ok) {
+        const json = await ocmRes.json();
+        const items = normalizeOCM(Array.isArray(json) ? json : []);
+        if (items.length) return NextResponse.json({ items });
+        lastError = 'OCM returned 0 items';
       } else {
-        return NextResponse.json({ error: 'invalid_params' }, { status: 400 });
+        lastError = `OCM ${ocmRes.status}: ${await ocmRes.text().catch(()=>'')}`;
       }
-
-      // OCM API key
-      const apiKey = process.env.OCM_API_KEY;
-      if (apiKey) params.key = apiKey;
-
-      // Build OCM request
-      const ocmUrl = new URL('https://api.openchargemap.io/v3/poi/');
-      Object.entries(params).forEach(([k, v]) => ocmUrl.searchParams.set(k, String(v)));
-
-      let ocmStatus = 200;
-      let items: any[] = [];
-      try {
-        const resp = await fetch(ocmUrl.toString(), { headers: { 'Accept': 'application/json' } });
-        ocmStatus = resp.status;
-        if (resp.status === 401 || resp.status === 429) {
-          console.error(`[stations] OCM error ${resp.status} mode=${mode}`);
-          return NextResponse.json({ error: 'ocm_unavailable' }, { status: 502 });
-        }
-        items = await resp.json();
-        if (!Array.isArray(items)) items = [];
-      } catch (e) {
-        console.error(`[stations] OCM fetch failed mode=${mode} err=${e}`);
-        return NextResponse.json({ error: 'ocm_unavailable' }, { status: 502 });
-      }
-
-      console.log(`[stations] status=${ocmStatus} mode=${mode} count=${items.length}`);
-      return NextResponse.json(items);
+    } catch (e: any) {
+      lastError = `OCM error: ${e?.message ?? 'unknown'}`;
     }
+  } else {
+    lastError = 'OPENCHARGEMAP_KEY missing';
+  }
+
+  // 2) Overpass fallback
+  try {
+    const query = `
+      [out:json][timeout:20];
+      (
+        node["amenity"="charging_station"](${south},${west},${north},${east});
+      );
+      out body;
+    `.trim();
+
+    const res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      body: new URLSearchParams({ data: query }).toString(),
+      cache: 'no-store',
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const items = normalizeOverpass(json?.elements ?? []);
+      if (items.length) {
+        return NextResponse.json({
+          items,
+          fallback: true,
+          reason: `Used Overpass. Prior: ${lastError}`,
+        });
+      }
+      lastError = `Overpass 0 items (prior: ${lastError})`;
+    } else {
+      lastError = `Overpass ${res.status}: ${await res.text().catch(()=>'')}; prior: ${lastError}`;
+    }
+  } catch (e: any) {
+    lastError = `Overpass error: ${e?.message ?? 'unknown'}; prior: ${lastError}`;
+  }
+
+  // 3) Mock
+  return NextResponse.json(mockPayload(lastError || 'Unknown error'));
+}
