@@ -20,15 +20,15 @@ export type Station = {
 };
 
 type Props = {
-  /* match your page.tsx exactly */
+  // match your page.tsx props
   initialCenter?: [number, number];
   initialZoom?: number;
 
-  showHeatmap?: boolean;   // rendered externally (no-op here unless you swap stub)
+  showHeatmap?: boolean;   // no-op stub below (safe)
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  stations?: Station[];    // page passes stations in
+  stations?: Station[];    // page passes stations (your existing flow)
   onStationsCount?: (n: number) => void;
 };
 
@@ -58,10 +58,10 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Council polygons (pane zIndex keeps them under markers, over tiles) */}
-        <CouncilLayer enabled={!!showCouncil} />
+        {/* Council polygons (under markers, above tiles) */}
+        {showCouncil && <CouncilLayer enabled={true} />}
 
-        {/* Markers (use a pane above polygons) */}
+        {/* Markers (pane above polygons) */}
         {showMarkers && (
           <>
             <Pane name="stations-pane" style={{ zIndex: 400 }} />
@@ -92,14 +92,13 @@ export default function ClientMap({
           </>
         )}
 
-        {/* Heatmap placeholder (no UI, no rendering unless you replace it) */}
+        {/* Heatmap placeholder so builds don’t break; replace with your real heatmap later */}
         {showHeatmap && <HeatmapLayer stations={stations} />}
       </MapContainer>
     </div>
   );
 }
 
-/* Stub so builds don’t break; replace with your real heatmap later */
 function HeatmapLayer(_props: { stations: Station[] }) {
   return null;
 }
