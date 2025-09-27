@@ -1,33 +1,32 @@
+// components/ClientMap.tsx
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import L, { LatLngExpression } from "leaflet";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, TileLayer, useMapEvents, CircleMarker, Popup } from "react-leaflet";
+import type { LatLngBounds, LatLngExpression } from "leaflet";
+import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import "leaflet.heat"; // plugin (no TS types)
-
-import {
-  MapContainer,
-  TileLayer,
-  CircleMarker,
-  Popup,
-  useMapEvents,
-} from "react-leaflet";
+import "leaflet.heat";
 
 type Station = {
-  id: string | number | null;
+  id: number | string;
   name: string | null;
-  addr: string | null;
-  postcode: string | null;
   lat: number;
   lon: number;
-  connectors: number;
-  reports: number;
-  downtime: number;
-  source: string;
+  connectors?: number;
+  source?: string;
+};
+
+type CouncilSite = {
+  id: string | number;
+  name: string | null;
+  lat: number;
+  lon: number;
+  source?: string; // "council"
 };
 
 type Props = {
-  initialCenter: [number, number];
+  initialCenter: LatLngExpression;
   initialZoom: number;
   showHeatmap: boolean;
   showMarkers: boolean;
@@ -35,49 +34,71 @@ type Props = {
   onStationsCount?: (n: number) => void;
 };
 
-function useDebouncedCallback<T extends (...args: any[]) => void>(fn: T, ms: number) {
-  const t = useRef<ReturnType<typeof setTimeout> | null>(null);
-  return (...args: Parameters<T>) => {
-    if (t.current) clearTimeout(t.current);
-    t.current = setTimeout(() => fn(...args), ms);
-  };
+const FETCH_DEBOUNCE_MS = 400;
+const COUNCIL_CACHE_TTL_MS = 60_000;
+
+// simple in-memory caches
+const stationsCache = new Map<string, Station[]>();
+const councilCache = new Map<string, { at: number; items: CouncilSite[] }>();
+
+function bboxKey(b: LatLngBounds, zoom: number, pad = 0) {
+  const sw = b.getSouthWest();
+  const ne = b.getNorthEast();
+  const west = sw.lng - pad;
+  const south = sw.lat - pad;
+  const east = ne.lng + pad;
+  const north = ne.lat + pad;
+  return `${west.toFixed(4)}|${south.toFixed(4)}|${east.toFixed(4)}|${north.toFixed(4)}|z${zoom}`;
 }
 
-/** Heatmap layer wrapper (updates when points change). */
+async function fetchJSON<T>(url: string, tries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { headers: { "cache-control": "no-cache" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return (await res.json()) as T;
+    } catch (e) {
+      lastErr = e;
+      await new Promise(r => setTimeout(r, 300 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+function useDebounced(fn: (...args: any[]) => void, delay: number) {
+  const t = useRef<number | null>(null);
+  return useCallback(
+    (...args: any[]) => {
+      if (t.current) window.clearTimeout(t.current);
+      t.current = window.setTimeout(() => fn(...args), delay);
+    },
+    [fn, delay]
+  );
+}
+
 function HeatmapLayer({ points }: { points: Station[] }) {
   const map = useMapEvents({});
-  // leaflet.heat doesn't have TS types; use generic L.Layer
-  const layerRef = useRef<L.Layer | null>(null);
+  const layerRef = useRef<any>(null);
 
   useEffect(() => {
     if (!map) return;
 
     if (!layerRef.current) {
-      // Create, add to map, then store in ref so TS never sees a possibly-null when calling addTo.
       // @ts-ignore leaflet.heat augments L at runtime
-      const layer = L.heatLayer([], { radius: 20, blur: 15, maxZoom: 17 }).addTo(map);
-      layerRef.current = layer as unknown as L.Layer;
+      layerRef.current = L.heatLayer([], { radius: 20, blur: 15, maxZoom: 17 });
+      layerRef.current.addTo(map);
     }
 
-    // Update points
     // @ts-ignore setLatLngs is provided by leaflet.heat
-    const heat = layerRef.current as any;
-    const heatPoints = points.map((p) => [p.lat, p.lon, 0.6] as [number, number, number]);
-    heat.setLatLngs(heatPoints);
-
-    return () => {
-      // keep the layer mounted between updates
-    };
-  }, [map, points]);
-
-  useEffect(() => {
+    layerRef.current.setLatLngs(points.map(p => [p.lat, p.lon, Math.min(1, (p.connectors ?? 1) / 4)]));
     return () => {
       if (layerRef.current) {
-        layerRef.current.remove();
+        map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
     };
-  }, []);
+  }, [map, points]);
 
   return null;
 }
@@ -90,144 +111,134 @@ export default function ClientMap({
   showCouncil,
   onStationsCount,
 }: Props) {
-  // IMPORTANT: MapContainer supports ref to get the Leaflet Map instance
   const mapRef = useRef<L.Map | null>(null);
 
   const [stations, setStations] = useState<Station[]>([]);
-  const [council, setCouncil] = useState<Station[]>([]);
+  const [councilSites, setCouncilSites] = useState<CouncilSite[]>([]);
 
-  const fetchData = async (m: L.Map) => {
-    const b = m.getBounds();
-    const west = b.getWest();
-    const south = b.getSouth();
-    const east = b.getEast();
-    const north = b.getNorth();
-    const zoom = m.getZoom();
+  const tileUrl = useMemo(
+    () => "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+    []
+  );
 
-    // Stations
-    try {
-      const url =
-        `/api/stations?west=${west}&south=${south}` +
-        `&east=${east}&north=${north}&zoom=${zoom}`;
-      const res = await fetch(url, { cache: "no-store" });
-      const json = await res.json();
-      const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-      setStations(items);
-      onStationsCount?.(items.length);
-    } catch {
-      setStations([]);
-      onStationsCount?.(0);
-    }
+  const doFetch = useCallback(
+    async (map: L.Map) => {
+      const bounds = map.getBounds();
+      const zoom = Math.round(map.getZoom());
 
-    // Council (only if enabled)
-    if (showCouncil) {
-      try {
-        const cu =
-          `/api/council?west=${west}&south=${south}` +
-          `&east=${east}&north=${north}&zoom=${zoom}`;
-        const cres = await fetch(cu, { cache: "no-store" });
-        const cjson = await cres.json();
-        const citems: Station[] = Array.isArray(cjson?.items) ? cjson.items : [];
-        setCouncil(citems);
-      } catch {
-        setCouncil([]);
+      // slight padding so items just outside the viewport still render when panning
+      const PAD = 0.02;
+
+      // ----- stations -----
+      const kStations = bboxKey(bounds, zoom, PAD);
+      if (stationsCache.has(kStations)) {
+        const items = stationsCache.get(kStations)!;
+        setStations(items);
+        onStationsCount?.(items.length);
+      } else {
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+        const url =
+          `/api/stations?west=${sw.lng - PAD}&south=${sw.lat - PAD}` +
+          `&east=${ne.lng + PAD}&north=${ne.lat + PAD}&zoom=${zoom}`;
+
+        try {
+          const data = await fetchJSON<{ items: Station[] }>(url, 2);
+          stationsCache.set(kStations, data.items);
+          setStations(data.items);
+          onStationsCount?.(data.items.length);
+        } catch {
+          // leave previous stations on transient failures
+        }
       }
-    } else {
-      setCouncil([]);
-    }
-  };
 
-  const debouncedFetch = useDebouncedCallback((m: L.Map) => fetchData(m), 250);
+      // ----- council (improved) -----
+      const kCouncil = bboxKey(bounds, Math.max(zoom, 11), PAD * 1.5); // a bit more padding & min zoom to get enough data
+      const now = Date.now();
+      const cached = councilCache.get(kCouncil);
+      if (cached && now - cached.at < COUNCIL_CACHE_TTL_MS) {
+        setCouncilSites(cached.items);
+      } else {
+        const sw = bounds.getSouthWest();
+        const ne = bounds.getNorthEast();
+        const url =
+          `/api/council?west=${sw.lng - PAD * 1.5}&south=${sw.lat - PAD * 1.5}` +
+          `&east=${ne.lng + PAD * 1.5}&north=${ne.lat + PAD * 1.5}&zoom=${Math.max(zoom, 11)}`;
 
-  /** Re-fetch on pan/zoom. */
-  function ViewEvents() {
+        try {
+          const data = await fetchJSON<{ items: CouncilSite[] }>(url, 3);
+          const items = data.items ?? [];
+          councilCache.set(kCouncil, { at: now, items });
+          setCouncilSites(items);
+        } catch {
+          // soft-fail: keep the old list if fetch fails
+        }
+      }
+    },
+    [onStationsCount]
+  );
+
+  const debouncedFetch = useDebounced((m: L.Map) => void doFetch(m), FETCH_DEBOUNCE_MS);
+
+  const MapEvents = () => {
     useMapEvents({
-      moveend() {
-        const m = mapRef.current;
-        if (m) debouncedFetch(m);
-      },
-      zoomend() {
-        const m = mapRef.current;
-        if (m) debouncedFetch(m);
-      },
+      moveend: () => mapRef.current && debouncedFetch(mapRef.current),
+      zoomend: () => mapRef.current && debouncedFetch(mapRef.current),
     });
     return null;
-  }
-
-  /** If council toggle changes, refresh current bounds. */
-  useEffect(() => {
-    const m = mapRef.current;
-    if (m) debouncedFetch(m);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCouncil]);
-
-  const center = useMemo<LatLngExpression>(() => initialCenter, [initialCenter]);
+  };
 
   return (
     <MapContainer
-      ref={mapRef as unknown as React.RefObject<L.Map>} // get the map instance
-      center={center}
+      center={initialCenter}
       zoom={initialZoom}
       className="w-full h-[calc(100vh-140px)] rounded-xl overflow-hidden"
-      // react-leaflet v4 expects whenReady: () => void (no args)
-      whenReady={() => {
-        const m = mapRef.current;
-        if (m) {
-          // initial fetch on first ready
-          debouncedFetch(m);
-        }
+      whenReady={(ctx) => {
+        const leafletMap = (ctx as any).target as L.Map;
+        mapRef.current = leafletMap;
+        debouncedFetch(leafletMap);
       }}
     >
-      <TileLayer
-        attribution="&copy; OpenStreetMap contributors"
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
+      <TileLayer url={tileUrl} attribution='&copy; OpenStreetMap contributors' />
 
-      <ViewEvents />
+      {/* live fetch triggers */}
+      <MapEvents />
 
-      {/* HEATMAP */}
+      {/* heatmap over stations */}
       {showHeatmap && stations.length > 0 && <HeatmapLayer points={stations} />}
 
-      {/* MARKERS */}
+      {/* station markers (blue) */}
       {showMarkers &&
         stations.map((s) => (
           <CircleMarker
-            key={`st-${s.id}-${s.lat}-${s.lon}`}
+            key={`st-${s.id}`}
             center={[s.lat, s.lon]}
-            radius={6}
-            weight={1}
-            fillOpacity={0.9}
+            radius={5}
+            pathOptions={{ color: "#1d4ed8", fillOpacity: 0.9 }}
           >
             <Popup>
               <div className="text-sm">
-                <div className="font-medium">{s.name ?? "EV Charging"}</div>
-                {s.addr && <div>{s.addr}</div>}
-                {s.postcode && <div>{s.postcode}</div>}
-                <div>Connectors: {s.connectors}</div>
-                <div>Source: {s.source}</div>
+                <div className="font-medium mb-1">{s.name ?? "EV Charging"}</div>
+                <div>Source: {s.source ?? "osm"}</div>
+                {typeof s.connectors === "number" && <div>Connectors: {s.connectors}</div>}
               </div>
             </Popup>
           </CircleMarker>
         ))}
 
-      {/* COUNCIL */}
+      {/* council markers (teal), with sturdier fetching/caching */}
       {showCouncil &&
-        council.map((c) => (
+        councilSites.map((c) => (
           <CircleMarker
-            key={`c-${c.id}-${c.lat}-${c.lon}`}
+            key={`c-${c.id}`}
             center={[c.lat, c.lon]}
             radius={6}
-            weight={1}
-            fillOpacity={0.9}
-            pathOptions={{ color: "#0a7", fillColor: "#0a7" }}
+            pathOptions={{ color: "#0d9488", fillOpacity: 0.95 }}
           >
             <Popup>
               <div className="text-sm">
-                <div className="font-medium">{c.name ?? "Council EV"}</div>
-                {c.addr && <div>{c.addr}</div>}
-                {c.postcode && <div>{c.postcode}</div>}
-                <div>Connectors: {c.connectors}</div>
-                <div>Source: {c.source}</div>
+                <div className="font-medium mb-1">{c.name ?? "Council site"}</div>
+                <div>Source: {c.source ?? "council"}</div>
               </div>
             </Popup>
           </CircleMarker>
