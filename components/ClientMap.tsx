@@ -1,21 +1,21 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
   useMap,
+  useMapEvents,
   CircleMarker,
   Tooltip,
+  Pane,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
 import CouncilLayer from '@/components/CouncilLayer';
 
-/* ------------------------------------------------------------
-   Types
------------------------------------------------------------- */
-export type Station = {
+/* ---------------- Types ---------------- */
+type Station = {
   id: string | number;
   lat: number;
   lng: number;
@@ -23,61 +23,142 @@ export type Station = {
   addr?: string | null;
 };
 
-type UncontrolledToggleProps = {
-  /** If you manage toggles INSIDE ClientMap */
-  defaultShowHeatmap?: boolean;
-  defaultShowMarkers?: boolean;
-  defaultShowCouncil?: boolean;
-};
+type Props = {
+  initialCenter?: [number, number];
+  initialZoom?: number;
 
-type ControlledToggleProps = {
-  /** If you manage toggles from the parent (as in your page.tsx) */
+  // Parent-controlled toggles (as per your page.tsx)
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
-};
 
-type CenterZoomAliases = {
-  /** Aliases to match your page.tsx */
-  initialCenter?: [number, number];
-  initialZoom?: number;
-};
-
-type CoreProps = {
-  /** Back-compat aliases if you used these earlier */
-  center?: [number, number];
-  zoom?: number;
-
-  /** Optional station list, if you render markers here */
-  stations?: Station[];
-
-  /** Parent callback: report current station count (matches your page.tsx) */
+  // Called whenever station count changes
   onStationsCount?: (n: number) => void;
 };
 
-type Props = CoreProps & CenterZoomAliases & UncontrolledToggleProps & ControlledToggleProps;
+/* ------------- Utilities --------------- */
+function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
+  let t: any;
+  return (...args: Parameters<T>) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), wait);
+  };
+}
 
-/* ------------------------------------------------------------
-   Layer toggles UI
------------------------------------------------------------- */
+/* ----------- Stations Layer ------------ */
+function StationsLayer({ stations = [] as Station[] }) {
+  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
+
+  return (
+    <>
+      {/* keep markers above polygons */}
+      <Pane name="stations-pane" style={{ zIndex: 400 }} />
+      {stations.map((s) => (
+        <CircleMarker
+          key={`${key}-${s.id}`}
+          center={[s.lat, s.lng]}
+          radius={6}
+          weight={2}
+          opacity={1}
+          fillOpacity={0.9}
+          pane="stations-pane"
+        >
+          {(s.name || s.addr) && (
+            <Tooltip direction="top" offset={[0, -6]} opacity={1}>
+              <div style={{ fontSize: 12 }}>
+                {s.name && (
+                  <div>
+                    <strong>{s.name}</strong>
+                  </div>
+                )}
+                {s.addr && <div>{s.addr}</div>}
+              </div>
+            </Tooltip>
+          )}
+        </CircleMarker>
+      ))}
+    </>
+  );
+}
+
+/* ----------- Fetch-on-Bounds ------------ */
+function StationsFetcher({
+  enabled,
+  onData,
+}: {
+  enabled: boolean;
+  onData: (st: Station[]) => void;
+}) {
+  const map = useMap();
+  const abortRef = useRef<AbortController | null>(null);
+
+  const refetch = useMemo(
+    () =>
+      debounce(async () => {
+        if (!enabled) return;
+        if (!map) return;
+
+        const b = map.getBounds();
+        const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+
+        if (abortRef.current) abortRef.current.abort();
+        const ac = new AbortController();
+        abortRef.current = ac;
+
+        try {
+          // NOTE: this assumes your existing stations endpoint already works.
+          const url = `/api/stations?bbox=${encodeURIComponent(bbox)}`;
+          const res = await fetch(url, { signal: ac.signal, cache: 'no-store' });
+          if (!res.ok) throw new Error(`stations fetch ${res.status}`);
+          const data = await res.json();
+
+          // Normalize to Station[]
+          // Adjust mapping if your API shape differs
+          const stations: Station[] = (data?.stations || data || []).map((d: any, i: number) => ({
+            id: d.id ?? i,
+            lat: d.lat ?? d.latitude,
+            lng: d.lng ?? d.longitude,
+            name: d.name ?? d.title ?? null,
+            addr: d.addr ?? d.address ?? null,
+          })).filter((s: Station) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+
+          onData(stations);
+        } catch (err) {
+          if ((err as any)?.name !== 'AbortError') {
+            console.error('Stations fetch failed:', err);
+            onData([]);
+          }
+        } finally {
+          if (abortRef.current === ac) abortRef.current = null;
+        }
+      }, 350),
+    [enabled, map, onData]
+  );
+
+  useEffect(() => {
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]);
+
+  useMapEvents({
+    moveend: refetch,
+    zoomend: refetch,
+  });
+
+  return null;
+}
+
+/* -------------- Controls --------------- */
 function LayerToggles({
   heatmapOn,
-  setHeatmapOn,
   markersOn,
-  setMarkersOn,
   councilOn,
-  setCouncilOn,
   stationsCount,
-  controlled, // when true, disable local toggles (parent controls)
 }: {
   heatmapOn: boolean;
-  setHeatmapOn: (v: boolean) => void;
   markersOn: boolean;
-  setMarkersOn: (v: boolean) => void;
   councilOn: boolean;
-  setCouncilOn: (v: boolean) => void;
   stationsCount: number;
-  controlled: boolean;
 }) {
   return (
     <div
@@ -99,33 +180,18 @@ function LayerToggles({
           fontSize: 14,
         }}
       >
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
-          <input
-            type="checkbox"
-            checked={heatmapOn}
-            onChange={(e) => !controlled && setHeatmapOn(e.target.checked)}
-            disabled={controlled}
-          />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: heatmapOn ? 1 : 0.5 }}>
+          <input type="checkbox" checked={heatmapOn} readOnly />
           Heatmap
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
-          <input
-            type="checkbox"
-            checked={markersOn}
-            onChange={(e) => !controlled && setMarkersOn(e.target.checked)}
-            disabled={controlled}
-          />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: markersOn ? 1 : 0.5 }}>
+          <input type="checkbox" checked={markersOn} readOnly />
           Markers
         </label>
 
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: controlled ? 0.7 : 1 }}>
-          <input
-            type="checkbox"
-            checked={councilOn}
-            onChange={(e) => !controlled && setCouncilOn(e.target.checked)}
-            disabled={controlled}
-          />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: councilOn ? 1 : 0.5 }}>
+          <input type="checkbox" checked={councilOn} readOnly />
           Council
         </label>
 
@@ -135,87 +201,27 @@ function LayerToggles({
   );
 }
 
-/* ------------------------------------------------------------
-   Simple markers layer (safe stub; replace with your own if needed)
------------------------------------------------------------- */
-function StationsMarkersLayer({ stations = [] as Station[] }) {
-  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
-  return (
-    <>
-      {stations.map((s) => (
-        <CircleMarker
-          key={`${key}-${s.id}`}
-          center={[s.lat, s.lng]}
-          radius={6}
-          weight={2}
-          opacity={1}
-          fillOpacity={0.9}
-        >
-          {(s.name || s.addr) && (
-            <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-              <div style={{ fontSize: 12 }}>
-                {s.name && (
-                  <div>
-                    <strong>{s.name}</strong>
-                  </div>
-                )}
-                {s.addr && <div>{s.addr}</div>}
-              </div>
-            </Tooltip>
-          )}
-        </CircleMarker>
-      ))}
-    </>
-  );
-}
+/* ---------------- Main ------------------ */
+export default function ClientMap({
+  initialCenter = [51.522, -0.126],
+  initialZoom = 13,
+  showHeatmap = false,
+  showMarkers = true,
+  showCouncil = false,
+  onStationsCount,
+}: Props) {
+  const [stations, setStations] = useState<Station[]>([]);
 
-/* ------------------------------------------------------------
-   Main component
-   - Accepts your prop names (initialCenter/initialZoom + showX)
-   - Also supports center/zoom + defaultShowX for back-compat
------------------------------------------------------------- */
-export default function ClientMap(props: Props) {
-  // Center/Zoom aliases (prefer initialCenter/initialZoom if provided)
-  const center: [number, number] =
-    props.initialCenter ??
-    props.center ??
-    ([51.522, -0.126] as [number, number]); // London-ish
-  const zoom: number = props.initialZoom ?? props.zoom ?? 13;
-
-  const stations = props.stations ?? [];
-
-  // Report stations count to parent (if callback provided)
+  // keep parent counter in sync
   useEffect(() => {
-    props.onStationsCount?.(stations.length);
-  }, [stations.length, props]);
-
-  // Determine controlled vs uncontrolled toggles
-  const isControlled =
-    typeof props.showHeatmap !== 'undefined' ||
-    typeof props.showMarkers !== 'undefined' ||
-    typeof props.showCouncil !== 'undefined';
-
-  // Local state (used when not controlled)
-  const [heatmapOn, setHeatmapOn] = useState<boolean>(
-    props.defaultShowHeatmap ?? false
-  );
-  const [markersOn, setMarkersOn] = useState<boolean>(
-    props.defaultShowMarkers ?? true
-  );
-  const [councilOn, setCouncilOn] = useState<boolean>(
-    props.defaultShowCouncil ?? false
-  );
-
-  // Effective values (controlled wins if present)
-  const effHeatmap = typeof props.showHeatmap === 'boolean' ? props.showHeatmap : heatmapOn;
-  const effMarkers = typeof props.showMarkers === 'boolean' ? props.showMarkers : markersOn;
-  const effCouncil = typeof props.showCouncil === 'boolean' ? props.showCouncil : councilOn;
+    onStationsCount?.(stations.length);
+  }, [stations.length, onStationsCount]);
 
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
       <MapContainer
-        center={center}
-        zoom={zoom}
+        center={initialCenter}
+        zoom={initialZoom}
         className="w-full h-full rounded-xl overflow-hidden"
       >
         <TileLayer
@@ -223,34 +229,31 @@ export default function ClientMap(props: Props) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* ✅ Council polygons (doesn't touch stations fetching) */}
-        <CouncilLayer enabled={effCouncil} />
+        {/* fetch stations when map moves (does not change your API) */}
+        <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* Heatmap — replace with your real component if you have one */}
-        {effHeatmap && <HeatmapLayer stations={stations} />}
+        {/* council polygons */}
+        <CouncilLayer enabled={showCouncil} />
 
-        {/* Markers */}
-        {effMarkers && <StationsMarkersLayer stations={stations} />}
+        {/* heatmap stub – safe no-op until you replace it */}
+        {showHeatmap && <HeatmapLayer stations={stations} />}
 
-        {/* UI controls */}
+        {/* markers */}
+        {showMarkers && <StationsLayer stations={stations} />}
+
+        {/* toggle bar mirrors current state */}
         <LayerToggles
-          heatmapOn={effHeatmap}
-          setHeatmapOn={setHeatmapOn}
-          markersOn={effMarkers}
-          setMarkersOn={setMarkersOn}
-          councilOn={effCouncil}
-          setCouncilOn={setCouncilOn}
+          heatmapOn={!!showHeatmap}
+          markersOn={!!showMarkers}
+          councilOn={!!showCouncil}
           stationsCount={stations.length}
-          controlled={isControlled}
         />
       </MapContainer>
     </div>
   );
 }
 
-/* ------------------------------------------------------------
-   STUB: Replace with your actual heatmap if present
------------------------------------------------------------- */
+/* --------- Stub heatmap (replace later) --------- */
 function HeatmapLayer(_props: { stations: Station[] }) {
   return null;
 }
