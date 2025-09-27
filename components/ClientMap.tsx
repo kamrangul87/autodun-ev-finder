@@ -2,7 +2,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, useMapEvents, CircleMarker, Popup } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  useMapEvents,
+  CircleMarker,
+  Popup,
+} from "react-leaflet";
 import type { LatLngBounds, LatLngExpression } from "leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -60,7 +66,7 @@ async function fetchJSON<T>(url: string, tries = 2): Promise<T> {
       return (await res.json()) as T;
     } catch (e) {
       lastErr = e;
-      await new Promise(r => setTimeout(r, 300 * (i + 1)));
+      await new Promise((r) => setTimeout(r, 300 * (i + 1)));
     }
   }
   throw lastErr;
@@ -91,7 +97,10 @@ function HeatmapLayer({ points }: { points: Station[] }) {
     }
 
     // @ts-ignore setLatLngs is provided by leaflet.heat
-    layerRef.current.setLatLngs(points.map(p => [p.lat, p.lon, Math.min(1, (p.connectors ?? 1) / 4)]));
+    layerRef.current.setLatLngs(
+      points.map((p) => [p.lat, p.lon, Math.min(1, (p.connectors ?? 1) / 4)])
+    );
+
     return () => {
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
@@ -148,12 +157,12 @@ export default function ClientMap({
           setStations(data.items);
           onStationsCount?.(data.items.length);
         } catch {
-          // leave previous stations on transient failures
+          // keep previous stations on transient failures
         }
       }
 
-      // ----- council (improved) -----
-      const kCouncil = bboxKey(bounds, Math.max(zoom, 11), PAD * 1.5); // a bit more padding & min zoom to get enough data
+      // ----- council (with caching/retry) -----
+      const kCouncil = bboxKey(bounds, Math.max(zoom, 11), PAD * 1.5);
       const now = Date.now();
       const cached = councilCache.get(kCouncil);
       if (cached && now - cached.at < COUNCIL_CACHE_TTL_MS) {
@@ -186,6 +195,7 @@ export default function ClientMap({
       zoomend: () => mapRef.current && debouncedFetch(mapRef.current),
     });
     return null;
+    // (mapRef is set via ref on MapContainer below)
   };
 
   return (
@@ -193,18 +203,18 @@ export default function ClientMap({
       center={initialCenter}
       zoom={initialZoom}
       className="w-full h-[calc(100vh-140px)] rounded-xl overflow-hidden"
-      whenReady={(ctx) => {
-        const leafletMap = (ctx as any).target as L.Map;
-        mapRef.current = leafletMap;
-        debouncedFetch(leafletMap);
+      ref={mapRef as any}               // <-- set the map instance
+      whenReady={() => {                // <-- correct signature: no args
+        const leafletMap = mapRef.current;
+        if (leafletMap) debouncedFetch(leafletMap);
       }}
     >
-      <TileLayer url={tileUrl} attribution='&copy; OpenStreetMap contributors' />
+      <TileLayer url={tileUrl} attribution="&copy; OpenStreetMap contributors" />
 
-      {/* live fetch triggers */}
+      {/* trigger fetches on map interactions */}
       <MapEvents />
 
-      {/* heatmap over stations */}
+      {/* heatmap of stations */}
       {showHeatmap && stations.length > 0 && <HeatmapLayer points={stations} />}
 
       {/* station markers (blue) */}
@@ -220,13 +230,15 @@ export default function ClientMap({
               <div className="text-sm">
                 <div className="font-medium mb-1">{s.name ?? "EV Charging"}</div>
                 <div>Source: {s.source ?? "osm"}</div>
-                {typeof s.connectors === "number" && <div>Connectors: {s.connectors}</div>}
+                {typeof s.connectors === "number" && (
+                  <div>Connectors: {s.connectors}</div>
+                )}
               </div>
             </Popup>
           </CircleMarker>
         ))}
 
-      {/* council markers (teal), with sturdier fetching/caching */}
+      {/* council markers (teal) */}
       {showCouncil &&
         councilSites.map((c) => (
           <CircleMarker
