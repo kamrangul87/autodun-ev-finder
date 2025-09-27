@@ -1,4 +1,4 @@
-export const dynamic = 'force-dynamic';
+export const dynamic = 'force-dynamic';   // disable prerender/SSG on root
 export const viewport = { themeColor: '#0b1220' };
 
 import dynamicImport from "next/dynamic";
