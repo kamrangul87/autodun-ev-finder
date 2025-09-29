@@ -20,7 +20,7 @@ type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number;            // NOTE: server returns "lon"
+  lon: number;            // server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
@@ -30,11 +30,9 @@ type Station = {
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
-
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
-
   onStationsCount?: (n: number) => void;
 };
 
@@ -116,7 +114,7 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Markers (on markerPane so polygons never hide them) ----------
+// ---------- Markers (SVG paths in default overlay pane) ----------
 function StationsMarkers({ stations }: { stations: Station[] }) {
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
 
@@ -130,8 +128,7 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
           weight={2}
           opacity={1}
           fillOpacity={0.9}
-          pane="markerPane"                 // <-- crucial: always above polygon layers
-          bubblingMouseEvents={false}
+          // IMPORTANT: no pane="markerPane" here (CircleMarker is SVG, not an <img>)
           pathOptions={{ color: '#1e73ff', fillColor: '#1e73ff' }}
         >
           {(s.name || s.addr) && (
@@ -190,16 +187,15 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Always fetch; toggle only controls rendering */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* Council polygons are drawn on a lower-z custom pane inside CouncilLayer */}
+        {/* GeoJSON polygons (added first) */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* Heatmap UNDER markers */}
+        {/* Heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-        {/* Markers on markerPane (independent of Council) */}
+        {/* Markers (added last => draw above polygons) */}
         {showMarkers && <StationsMarkers stations={stations} />}
       </MapContainer>
     </div>
