@@ -2,10 +2,11 @@ import type { Feature, FeatureCollection, Geometry } from 'geojson';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
-
-const ENV_SRC = process.env.COUNCIL_DATA_URL || '';
+export const runtime = 'nodejs';
 
 type BBox = [number, number, number, number]; // [west, south, east, north]
+
+const ENV_SRC = process.env.COUNCIL_DATA_URL || '';
 
 function emptyFC(): FeatureCollection {
   return { type: 'FeatureCollection', features: [] };
@@ -17,6 +18,7 @@ function parseBBox(searchParams: URLSearchParams): BBox | null {
   let e = searchParams.get('east');
   let n = searchParams.get('north');
 
+  // allow bbox=west,south,east,north
   if (!(w && s && e && n)) {
     const bbox = searchParams.get('bbox');
     if (bbox) {
@@ -55,6 +57,7 @@ function testFeature(bbox: BBox): Feature {
 
 function geomBBox(g: Geometry): BBox {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
   const visit = (c: any) => {
     if (Array.isArray(c) && typeof c[0] === 'number' && typeof c[1] === 'number') {
       const x = c[0], y = c[1];
@@ -66,6 +69,7 @@ function geomBBox(g: Geometry): BBox {
       for (const cc of c) visit(cc);
     }
   };
+
   // @ts-ignore
   visit((g as any).coordinates);
   return [minX, minY, maxX, maxY];
@@ -82,27 +86,40 @@ export async function GET(req: Request) {
     const url = new URL(req.url);
     const { searchParams, origin } = url;
     const bbox = parseBBox(searchParams);
-    if (!bbox) {
-      return new Response(JSON.stringify(emptyFC()), { status: 200 });
-    }
 
-    // debug rectangle
-    if (searchParams.get('debug') === '1') {
-      const fc: FeatureCollection = { type: 'FeatureCollection', features: [testFeature(bbox)] };
-      return new Response(JSON.stringify(fc), {
+    if (!bbox) {
+      return new Response(JSON.stringify(emptyFC()), {
         status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': 'debug' },
+        headers: { 'content-type': 'application/json' },
       });
     }
 
-    // allow ?src= override; else use env; support relative paths
+    // 1) Debug rectangle
+    if (searchParams.get('debug') === '1') {
+      const fc: FeatureCollection = {
+        type: 'FeatureCollection',
+        features: [testFeature(bbox)],
+      };
+      return new Response(JSON.stringify(fc), {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'x-used-source': 'debug',
+        },
+      });
+    }
+
+    // 2) Source selection: ?src= or ENV
     let src = searchParams.get('src') || ENV_SRC;
     if (src && src.startsWith('/')) src = `${origin}${src}`;
 
     if (!src) {
       return new Response(JSON.stringify(emptyFC()), {
         status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': 'none' },
+        headers: {
+          'content-type': 'application/json',
+          'x-used-source': 'none',
+        },
       });
     }
 
@@ -110,7 +127,10 @@ export async function GET(req: Request) {
     if (!upstream.ok) {
       return new Response(JSON.stringify(emptyFC()), {
         status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': `fetch-failed:${src}` },
+        headers: {
+          'content-type': 'application/json',
+          'x-used-source': `fetch-failed:${src}`,
+        },
       });
     }
 
@@ -118,11 +138,14 @@ export async function GET(req: Request) {
     if (!fc?.features?.length) {
       return new Response(JSON.stringify(emptyFC()), {
         status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': `empty:${src}` },
+        headers: {
+          'content-type': 'application/json',
+          'x-used-source': `empty:${src}`,
+        },
       });
     }
 
-    // bbox-clip
+    // 3) BBox filter (quick clip)
     const clipped: Feature[] = [];
     for (const f of fc.features) {
       if (!f?.geometry) continue;
@@ -132,12 +155,19 @@ export async function GET(req: Request) {
     }
 
     const out: FeatureCollection = { type: 'FeatureCollection', features: clipped };
+
     return new Response(JSON.stringify(out), {
       status: 200,
-      headers: { 'content-type': 'application/json', 'x-used-source': src },
+      headers: {
+        'content-type': 'application/json',
+        'x-used-source': src,
+      },
     });
   } catch (err) {
     console.error('Councils route error:', err);
-    return new Response(JSON.stringify(emptyFC()), { status: 200 });
+    return new Response(JSON.stringify(emptyFC()), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
   }
 }
