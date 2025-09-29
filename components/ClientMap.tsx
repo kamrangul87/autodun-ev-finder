@@ -12,7 +12,7 @@ import {
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer'; // <-- use your existing HeatLayer (points prop)
+import HeatLayer from '@/components/HeatLayer'; // uses `points` prop [lat, lon, weight]
 
 // ---------- Types ----------
 type Station = {
@@ -21,7 +21,7 @@ type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // NOTE: your server returns "lon" (not "lng")
+  lon: number; // server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
@@ -66,7 +66,7 @@ function StationsFetcher({
 
         const b = map.getBounds();
         const z = map.getZoom();
-        // Your route expects separate params: west,south,east,north,zoom
+
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -87,9 +87,7 @@ function StationsFetcher({
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
 
-          // Contract: { items: Station[] }
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-          // Keep only valid coordinates
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
           );
@@ -124,6 +122,7 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
   return (
     <>
+      {/* markers above councils */}
       <Pane name="stations-pane" style={{ zIndex: 400 }} />
       {stations.map((s, i) => (
         <CircleMarker
@@ -164,7 +163,7 @@ export default function ClientMap({
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
 
-  // keep your header counter in sync
+  // keep the header counter in sync (still counts even if markers hidden)
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
@@ -175,9 +174,8 @@ export default function ClientMap({
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
-        // weight by connectors; clamp to [0.2, 1]
         const base = Number(s.connectors ?? 1);
-        const w = Math.max(0.2, Math.min(1, base / 4));
+        const w = Math.max(0.2, Math.min(1, base / 4)); // clamp
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations]);
@@ -194,8 +192,8 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* fetch stations on move/zoom using your locked server API */}
-        <StationsFetcher enabled={true} onData={setStations} />
+        {/* fetch stations ONLY when a layer needs them */}
+        <StationsFetcher enabled={showMarkers || showHeatmap} onData={setStations} />
 
         {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
