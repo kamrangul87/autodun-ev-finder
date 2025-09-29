@@ -12,15 +12,16 @@ import {
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer';
+import HeatLayer from '@/components/HeatLayer'; // expects props: { points, options? }
 
+// ---------- Types ----------
 type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number;
+  lon: number; // NOTE: API uses lon (not lng)
   connectors: number;
   reports: number;
   downtime: number;
@@ -30,12 +31,15 @@ type Station = {
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
+
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
+
   onStationsCount?: (n: number) => void;
 };
 
+// ---------- Small utilities ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -44,14 +48,13 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
+// ---------- Fetcher that follows your locked API contract ----------
 function StationsFetcher({
   enabled,
   onData,
-  onLoading,
 }: {
   enabled: boolean;
   onData: (items: Station[]) => void;
-  onLoading: (loading: boolean) => void;
 }) {
   const map = useMap();
   const abortRef = useRef<AbortController | null>(null);
@@ -61,7 +64,8 @@ function StationsFetcher({
       debounce(async () => {
         if (!enabled || !map) return;
 
-        const b = map.getBounds();
+        // Pad the view by 25% so we fetch a bit wider area → more points for heatmap
+        const b = map.getBounds().pad(0.25);
         const z = map.getZoom();
 
         const params = new URLSearchParams({
@@ -77,7 +81,6 @@ function StationsFetcher({
         abortRef.current = ac;
 
         try {
-          onLoading(true);
           const res = await fetch(`/api/stations?${params.toString()}`, {
             signal: ac.signal,
             cache: 'no-store',
@@ -85,7 +88,9 @@ function StationsFetcher({
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
 
+          // Contract: { items: Station[] }
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
+          // Keep only valid coordinates
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
           );
@@ -97,7 +102,6 @@ function StationsFetcher({
           }
         } finally {
           if (abortRef.current === ac) abortRef.current = null;
-          onLoading(false);
         }
       }, 350),
     [enabled, map]
@@ -116,6 +120,7 @@ function StationsFetcher({
   return null;
 }
 
+// ---------- Markers layer ----------
 function StationsMarkers({ stations }: { stations: Station[] }) {
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
   return (
@@ -149,6 +154,7 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
   );
 }
 
+// ---------- Main component ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -158,32 +164,28 @@ export default function ClientMap({
   onStationsCount,
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
-  const [loading, setLoading] = useState(false);
 
+  // keep your header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
+  // Build heatmap points [lat, lon, weight] from stations
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
+        // Slightly heavier weights → louder heatmap
         const base = Number(s.connectors ?? 1);
-        const w = Math.max(0.2, Math.min(1, base / 4));
+        const boosted = base * 1.4; // +40% intensity
+        const w = Math.max(0.25, Math.min(1, boosted / 4));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations]);
 
   return (
-    <div className="w-full h-[70vh] relative">
-      {/* subtle loading chip */}
-      {loading && (
-        <div className="absolute left-3 top-3 z-[1100] bg-white/90 rounded px-3 py-1 text-sm shadow">
-          Loading stations…
-        </div>
-      )}
-
+    <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
@@ -194,18 +196,21 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <StationsFetcher
-          enabled={true}
-          onData={setStations}
-          onLoading={setLoading}
-        />
+        {/* fetch stations on move/zoom using your locked server API */}
+        <StationsFetcher enabled={true} onData={setStations} />
 
+        {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
+        {/* heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && (
-          <HeatLayer points={heatPoints} />
+          <HeatLayer
+            points={heatPoints}
+            options={{ radius: 60, blur: 34, minOpacity: 0.5 }}
+          />
         )}
 
+        {/* markers */}
         {showMarkers && <StationsMarkers stations={stations} />}
       </MapContainer>
     </div>
