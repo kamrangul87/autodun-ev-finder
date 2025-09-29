@@ -2,10 +2,9 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { FeatureCollection } from 'geojson';
+import type { Feature, FeatureCollection } from 'geojson';
 import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
 
-// tiny debounce
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -14,11 +13,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-type Props = {
-  enabled: boolean;
-  /** Hide below this zoom to avoid clutter */
-  minZoom?: number;
-};
+type Props = { enabled: boolean; minZoom?: number };
 
 export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
   const map = useMap();
@@ -30,38 +25,23 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
     () =>
       debounce(async () => {
         if (!enabled || !map) return;
-
-        const z = map.getZoom();
-        if (z < minZoom) {
-          setData(null);
-          return;
-        }
+        if (map.getZoom() < minZoom) { setData(null); return; }
 
         const b = map.getBounds();
         const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
         const qs = new URLSearchParams({ bbox });
 
-        if (abortRef.current) abortRef.current.abort();
-        const ac = new AbortController();
-        abortRef.current = ac;
+        abortRef.current?.abort();
+        const ac = new AbortController(); abortRef.current = ac;
 
         try {
-          const res = await fetch(`/api/councils?${qs.toString()}`, {
-            cache: 'no-store',
-            signal: ac.signal,
-          });
-          if (!res.ok) throw new Error(`councils ${res.status}`);
+          const res = await fetch(`/api/councils?${qs.toString()}`, { cache: 'no-store', signal: ac.signal });
+          if (!res.ok) throw new Error(String(res.status));
           const fc = (await res.json()) as FeatureCollection;
-
-          const count = Array.isArray(fc?.features) ? fc.features.length : 0;
-          console.log('[council] features=', count);
-          setData(count ? fc : null);
-          setSeq((s) => s + 1);
+          setData(fc?.features?.length ? fc : null);
+          setSeq(s => s + 1);
         } catch (e: any) {
-          if (e?.name !== 'AbortError') {
-            console.error('Council fetch failed:', e);
-            setData(null);
-          }
+          if (e?.name !== 'AbortError') setData(null);
         } finally {
           if (abortRef.current === ac) abortRef.current = null;
         }
@@ -69,17 +49,26 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
     [enabled, map, minZoom]
   );
 
-  useEffect(() => {
-    refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, minZoom]);
+  useEffect(() => { refetch(); /* eslint-disable-next-line */ }, [enabled, minZoom]);
+  useMapEvents({ moveend: refetch, zoomend: refetch });
 
-  useMapEvents({
-    moveend: refetch,
-    zoomend: refetch,
+  // prefer common name keys
+  const getName = (f: Feature) =>
+    (f.properties?.name as string) ??
+    (f.properties?.NAME as string) ??
+    (f.properties?.lad23nm as string) ??
+    (f.properties?.lad22nm as string) ??
+    (f.properties?.borough as string) ??
+    '';
+
+  const style = () => ({
+    color: '#0b7d5c',      // outline
+    weight: 2,             // thicker line
+    opacity: 1,
+    fillColor: '#0b7d5c',  // subtle fill
+    fillOpacity: 0.18,     // more visible than before
   });
 
-  // tiles (~200) < council (300) < markers (400)
   return (
     <>
       <Pane name="council-pane" style={{ zIndex: 300 }} />
@@ -88,15 +77,33 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
           key={`council-${seq}-${data.features.length}`}
           pane="council-pane"
           data={data as any}
-          style={() => ({
-            color: '#1b8e5a',
-            weight: 1.2,
-            opacity: 0.9,
-            fillColor: '#1b8e5a',
-            fillOpacity: 0.08,
-          })}
+          style={style}
+          smoothFactor={1.0}
+          onEachFeature={(feature, layer) => {
+            const name = getName(feature);
+            if (name) {
+              layer.bindTooltip(name, {
+                sticky: true,
+                direction: 'center',
+                opacity: 0.9,
+                className: 'council-label',
+              });
+            }
+            layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.28 }).bringToFront());
+            layer.on('mouseout',  () => layer.setStyle(style() as any));
+          }}
         />
       ) : null}
+      <style jsx global>{`
+        .leaflet-tooltip.council-label {
+          padding: 2px 6px;
+          background: rgba(255,255,255,.85);
+          border: 1px solid rgba(0,0,0,.15);
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 600;
+        }
+      `}</style>
     </>
   );
 }
