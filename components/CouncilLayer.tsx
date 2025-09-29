@@ -3,7 +3,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { Feature, FeatureCollection } from 'geojson';
 import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
+import * as L from 'leaflet';
 
+// debounce helper
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -31,14 +33,18 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
         const qs = new URLSearchParams({ bbox });
 
         abortRef.current?.abort();
-        const ac = new AbortController(); abortRef.current = ac;
+        const ac = new AbortController();
+        abortRef.current = ac;
 
         try {
-          const res = await fetch(`/api/councils?${qs.toString()}`, { cache: 'no-store', signal: ac.signal });
+          const res = await fetch(`/api/councils?${qs.toString()}`, {
+            cache: 'no-store',
+            signal: ac.signal,
+          });
           if (!res.ok) throw new Error(String(res.status));
           const fc = (await res.json()) as FeatureCollection;
           setData(fc?.features?.length ? fc : null);
-          setSeq(s => s + 1);
+          setSeq((s) => s + 1);
         } catch (e: any) {
           if (e?.name !== 'AbortError') setData(null);
         } finally {
@@ -59,13 +65,17 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
     (f.properties as any)?.borough ??
     '';
 
-  const style = () => ({
+  const baseStyle: L.PathOptions = {
     color: '#0b7d5c',
     weight: 2,
     opacity: 1,
     fillColor: '#0b7d5c',
     fillOpacity: 0.18,
-  });
+  };
+
+  // type guard: does this layer support setStyle?
+  const isPath = (layer: L.Layer): layer is L.Path =>
+    typeof (layer as any).setStyle === 'function';
 
   return (
     <>
@@ -75,19 +85,26 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
           key={`council-${seq}-${data.features.length}`}
           pane="council-pane"
           data={data as any}
-          style={style}
+          style={() => baseStyle}
           onEachFeature={(feature, layer) => {
             const name = getName(feature);
             if (name) {
-              layer.bindTooltip(name, {
+              (layer as any).bindTooltip(name, {
                 sticky: true,
                 direction: 'center',
                 opacity: 0.9,
                 className: 'council-label',
               });
             }
-            layer.on('mouseover', () => layer.setStyle({ weight: 3, fillOpacity: 0.28 }).bringToFront());
-            layer.on('mouseout',  () => layer.setStyle(style() as any));
+            if (isPath(layer)) {
+              layer.on('mouseover', () => {
+                layer.setStyle({ weight: 3, fillOpacity: 0.28 } as L.PathOptions);
+                (layer as any).bringToFront?.();
+              });
+              layer.on('mouseout', () => {
+                layer.setStyle(baseStyle);
+              });
+            }
           }}
         />
       ) : null}
