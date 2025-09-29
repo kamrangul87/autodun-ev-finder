@@ -10,6 +10,8 @@ export type HeatOptions = {
   blur?: number;        // px
   max?: number;         // 0..1
   minOpacity?: number;  // 0..1
+  /** Custom intensity multiplier we add on top of leaflet.heat */
+  boost?: number;       // e.g. 0.5 .. 3
 };
 
 export default function HeatLayer({
@@ -31,17 +33,21 @@ export default function HeatLayer({
 
       if (cancelled || !map) return;
 
-      // remove previous layer if any
+      // Remove any previous instance
       if (layerRef.current) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
+        try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
       if (!points.length) return;
 
-      // defaults with overrides from options
-      const layer = (L as any).heatLayer(points, {
+      // Apply optional boost to the weight and clamp to [0,1]
+      const boost = options?.boost ?? 1;
+      const boosted: HeatPoint[] =
+        boost === 1
+          ? points
+          : points.map(([lat, lon, w]) => [lat, lon, Math.max(0, Math.min(1, w * boost))] as HeatPoint);
+
+      const layer = (L as any).heatLayer(boosted, {
         radius: options?.radius ?? 45,
         blur: options?.blur ?? 25,
         max: options?.max ?? 1.0,
@@ -55,13 +61,20 @@ export default function HeatLayer({
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
+        try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
     };
-  }, [map, points, options?.radius, options?.blur, options?.max, options?.minOpacity]);
+  // include every option we read so React updates when they change
+  }, [
+    map,
+    points,
+    options?.radius,
+    options?.blur,
+    options?.max,
+    options?.minOpacity,
+    options?.boost,
+  ]);
 
   return null;
 }
