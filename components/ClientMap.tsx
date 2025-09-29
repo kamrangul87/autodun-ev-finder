@@ -8,11 +8,10 @@ import {
   useMapEvents,
   CircleMarker,
   Tooltip,
-  Pane,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer'; // uses `points` prop [lat, lon, weight]
+import HeatLayer from '@/components/HeatLayer';
 
 // ---------- Types ----------
 type Station = {
@@ -21,7 +20,7 @@ type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // server returns "lon"
+  lon: number;            // NOTE: server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
@@ -39,7 +38,7 @@ type Props = {
   onStationsCount?: (n: number) => void;
 };
 
-// ---------- Small utilities ----------
+// ---------- Utils ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -48,7 +47,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// ---------- Fetcher that follows your locked API contract ----------
+// ---------- Fetcher ----------
 function StationsFetcher({
   enabled,
   onData,
@@ -117,13 +116,12 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Markers layer ----------
+// ---------- Markers (on markerPane so polygons never hide them) ----------
 function StationsMarkers({ stations }: { stations: Station[] }) {
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
+
   return (
     <>
-      {/* markers above councils */}
-      <Pane name="stations-pane" style={{ zIndex: 400 }} />
       {stations.map((s, i) => (
         <CircleMarker
           key={`${key}-${s.id ?? i}`}
@@ -132,7 +130,9 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
           weight={2}
           opacity={1}
           fillOpacity={0.9}
-          pane="stations-pane"
+          pane="markerPane"                 // <-- crucial: always above polygon layers
+          bubblingMouseEvents={false}
+          pathOptions={{ color: '#1e73ff', fillColor: '#1e73ff' }}
         >
           {(s.name || s.addr) && (
             <Tooltip direction="top" offset={[0, -6]} opacity={1}>
@@ -152,7 +152,7 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
   );
 }
 
-// ---------- Main component ----------
+// ---------- Main ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -163,19 +163,17 @@ export default function ClientMap({
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
 
-  // keep the header counter in sync (still counts even if markers hidden)
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
-        const w = Math.max(0.2, Math.min(1, base / 4)); // clamp
+        const w = Math.max(0.2, Math.min(1, base / 4));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations]);
@@ -192,16 +190,16 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* fetch stations ONLY when a layer needs them */}
-        <StationsFetcher enabled={showMarkers || showHeatmap} onData={setStations} />
+        {/* Always fetch; toggle only controls rendering */}
+        <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* council polygons (under markers, above tiles) */}
+        {/* Council polygons are drawn on a lower-z custom pane inside CouncilLayer */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* heatmap UNDER markers */}
+        {/* Heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-        {/* markers */}
+        {/* Markers on markerPane (independent of Council) */}
         {showMarkers && <StationsMarkers stations={stations} />}
       </MapContainer>
     </div>
