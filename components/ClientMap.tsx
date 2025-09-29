@@ -12,7 +12,7 @@ import {
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer'; // expects props: { points, options? }
+import HeatLayer from '@/components/HeatLayer'; // accepts { points, options? }
 
 // ---------- Types ----------
 type Station = {
@@ -21,11 +21,20 @@ type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // NOTE: API uses lon (not lng)
+  lon: number; // server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
   source: string;
+};
+
+export type HeatOptions = {
+  radius?: number;     // px
+  blur?: number;       // px
+  minOpacity?: number; // 0..1
+  max?: number;        // 0..1
+  maxZoom?: number;    // Leaflet zoom
+  boost?: number;      // multiplies station weight
 };
 
 type Props = {
@@ -35,6 +44,8 @@ type Props = {
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
+
+  heatOptions?: HeatOptions;
 
   onStationsCount?: (n: number) => void;
 };
@@ -64,10 +75,8 @@ function StationsFetcher({
       debounce(async () => {
         if (!enabled || !map) return;
 
-        // Pad the view by 25% so we fetch a bit wider area → more points for heatmap
-        const b = map.getBounds().pad(0.25);
+        const b = map.getBounds();
         const z = map.getZoom();
-
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -88,9 +97,7 @@ function StationsFetcher({
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
 
-          // Contract: { items: Station[] }
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-          // Keep only valid coordinates
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
           );
@@ -161,11 +168,12 @@ export default function ClientMap({
   showHeatmap = false,
   showMarkers = true,
   showCouncil = true,
+  heatOptions,
   onStationsCount,
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
 
-  // keep your header counter in sync
+  // keep the header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
@@ -173,16 +181,34 @@ export default function ClientMap({
   // Build heatmap points [lat, lon, weight] from stations
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
+    const boost = Number(heatOptions?.boost ?? 1);
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
-        // Slightly heavier weights → louder heatmap
+        // base weight by connectors; clamp to [0.2, 1]
         const base = Number(s.connectors ?? 1);
-        const boosted = base * 1.4; // +40% intensity
-        const w = Math.max(0.25, Math.min(1, boosted / 4));
-        return [Number(s.lat), Number(s.lon), w] as HeatPoint;
+        const weighted = Math.max(0.2, Math.min(1, (base / 4) * boost));
+        return [Number(s.lat), Number(s.lon), weighted] as HeatPoint;
       });
-  }, [stations]);
+  }, [stations, heatOptions?.boost]);
+
+  // Defaults for heat layer rendering
+  const heatLayerOptions = useMemo(
+    () => ({
+      radius: heatOptions?.radius ?? 60,
+      blur: heatOptions?.blur ?? 34,
+      minOpacity: heatOptions?.minOpacity ?? 0.5,
+      max: heatOptions?.max ?? 1.0,
+      maxZoom: heatOptions?.maxZoom ?? 17,
+    }),
+    [
+      heatOptions?.radius,
+      heatOptions?.blur,
+      heatOptions?.minOpacity,
+      heatOptions?.max,
+      heatOptions?.maxZoom,
+    ]
+  );
 
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
@@ -204,10 +230,7 @@ export default function ClientMap({
 
         {/* heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && (
-          <HeatLayer
-            points={heatPoints}
-            options={{ radius: 60, blur: 34, minOpacity: 0.5 }}
-          />
+          <HeatLayer points={heatPoints} options={heatLayerOptions as any} />
         )}
 
         {/* markers */}
