@@ -4,12 +4,12 @@ import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 
 type HeatPoint = [number, number, number];
-type HeatOptions = {
-  radius?: number;
-  blur?: number;
-  maxZoom?: number;
-  max?: number;
-  minOpacity?: number;
+
+export type HeatOptions = {
+  radius?: number;      // px
+  blur?: number;        // px
+  max?: number;         // 0..1
+  minOpacity?: number;  // 0..1
 };
 
 export default function HeatLayer({
@@ -31,21 +31,23 @@ export default function HeatLayer({
 
       if (cancelled || !map) return;
 
+      // remove previous layer if any
       if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
       if (!points.length) return;
 
-      // stronger defaults
+      // defaults with overrides from options
       const layer = (L as any).heatLayer(points, {
-        radius: 55,
-        blur: 30,
-        maxZoom: 17,
-        max: 1.0,
-        minOpacity: 0.45,
-        ...(options || {}),
+        radius: options?.radius ?? 45,
+        blur: options?.blur ?? 25,
+        max: options?.max ?? 1.0,
+        minOpacity: options?.minOpacity ?? 0.35,
       });
+
       layer.addTo(map);
       layerRef.current = layer;
     })();
@@ -53,11 +55,13 @@ export default function HeatLayer({
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
     };
-  }, [map, points, options]);
+  }, [map, points, options?.radius, options?.blur, options?.max, options?.minOpacity]);
 
   return null;
 }
