@@ -1,4 +1,3 @@
-// components/CouncilLayer.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -52,21 +51,20 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
   useEffect(() => { refetch(); /* eslint-disable-next-line */ }, [enabled, minZoom]);
   useMapEvents({ moveend: refetch, zoomend: refetch });
 
-  // prefer common name keys
   const getName = (f: Feature) =>
-    (f.properties?.name as string) ??
-    (f.properties?.NAME as string) ??
-    (f.properties?.lad23nm as string) ??
-    (f.properties?.lad22nm as string) ??
-    (f.properties?.borough as string) ??
+    (f.properties as any)?.name ??
+    (f.properties as any)?.NAME ??
+    (f.properties as any)?.lad23nm ??
+    (f.properties as any)?.lad22nm ??
+    (f.properties as any)?.borough ??
     '';
 
   const style = () => ({
-    color: '#0b7d5c',      // outline
-    weight: 2,             // thicker line
+    color: '#0b7d5c',
+    weight: 2,
     opacity: 1,
-    fillColor: '#0b7d5c',  // subtle fill
-    fillOpacity: 0.18,     // more visible than before
+    fillColor: '#0b7d5c',
+    fillOpacity: 0.18,
   });
 
   return (
@@ -78,7 +76,6 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
           pane="council-pane"
           data={data as any}
           style={style}
-          smoothFactor={1.0}
           onEachFeature={(feature, layer) => {
             const name = getName(feature);
             if (name) {
