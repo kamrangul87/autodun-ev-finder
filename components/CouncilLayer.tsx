@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { Feature, FeatureCollection } from 'geojson';
 import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
-import * as L from 'leaflet';
+import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import type * as L from 'leaflet';
 
-// debounce helper
+// ---------- small helpers ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -14,9 +14,45 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-type Props = { enabled: boolean; minZoom?: number };
+function getName(f: Feature<Geometry, any>): string | null {
+  const p = (f.properties || {}) as Record<string, any>;
+  return (
+    p.name ??
+    p.lad23nm ??
+    p.lad20nm ??
+    p.lad17nm ??
+    p.borough ??
+    p.LAD13NM ??
+    p.LAD17NM ??
+    p.LAD19NM ??
+    p.NM_MNCP ??
+    null
+  );
+}
 
-export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
+// TS type guard: only path-like layers have setStyle / bringToFront
+function isPath(layer: any): layer is L.Path {
+  return !!layer && typeof layer.setStyle === 'function';
+}
+
+// ---------- props ----------
+type Props = {
+  enabled: boolean;
+  /** Hide layer below this zoom level (default 9) */
+  minZoom?: number;
+  /** Show tooltips from this zoom level (default 12) */
+  labelMinZoom?: number;
+};
+
+// Enable debug rectangles only if you explicitly set this env in the client build
+const DEBUG = process.env.NEXT_PUBLIC_COUNCIL_DEBUG === '1';
+
+// ---------- component ----------
+export default function CouncilLayer({
+  enabled,
+  minZoom = 9,
+  labelMinZoom = 12,
+}: Props) {
   const map = useMap();
   const [data, setData] = useState<FeatureCollection | null>(null);
   const [seq, setSeq] = useState(0);
@@ -26,13 +62,19 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
     () =>
       debounce(async () => {
         if (!enabled || !map) return;
-        if (map.getZoom() < minZoom) { setData(null); return; }
+
+        const z = map.getZoom();
+        if (z < minZoom) {
+          setData(null);
+          return;
+        }
 
         const b = map.getBounds();
         const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
         const qs = new URLSearchParams({ bbox });
+        if (DEBUG) qs.set('debug', '1');
 
-        abortRef.current?.abort();
+        if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
         abortRef.current = ac;
 
@@ -41,12 +83,17 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
             cache: 'no-store',
             signal: ac.signal,
           });
-          if (!res.ok) throw new Error(String(res.status));
+          if (!res.ok) throw new Error(`councils ${res.status}`);
           const fc = (await res.json()) as FeatureCollection;
-          setData(fc?.features?.length ? fc : null);
+
+          const count = Array.isArray(fc?.features) ? fc.features.length : 0;
+          setData(count ? fc : null);
           setSeq((s) => s + 1);
         } catch (e: any) {
-          if (e?.name !== 'AbortError') setData(null);
+          if (e?.name !== 'AbortError') {
+            console.error('Council fetch failed:', e);
+            setData(null);
+          }
         } finally {
           if (abortRef.current === ac) abortRef.current = null;
         }
@@ -54,28 +101,31 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
     [enabled, map, minZoom]
   );
 
-  useEffect(() => { refetch(); /* eslint-disable-next-line */ }, [enabled, minZoom]);
-  useMapEvents({ moveend: refetch, zoomend: refetch });
+  useEffect(() => {
+    refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, minZoom]);
 
-  const getName = (f: Feature) =>
-    (f.properties as any)?.name ??
-    (f.properties as any)?.NAME ??
-    (f.properties as any)?.lad23nm ??
-    (f.properties as any)?.lad22nm ??
-    (f.properties as any)?.borough ??
-    '';
+  useMapEvents({
+    moveend: refetch,
+    zoomend: refetch,
+  });
 
-  const baseStyle: L.PathOptions = {
-    color: '#0b7d5c',
-    weight: 2,
-    opacity: 1,
-    fillColor: '#0b7d5c',
-    fillOpacity: 0.18,
-  };
+  // map tiles (~200) < councils (300) < markers (400)
+  const baseStyle = useMemo(
+    () =>
+      ({
+        color: '#136f63',
+        weight: 1.5,
+        opacity: 0.9,
+        dashArray: '4,3', // subtle dashed border; remove if you prefer solid
+        fillColor: '#136f63',
+        fillOpacity: 0.10,
+      }) as L.PathOptions,
+    []
+  );
 
-  // type guard: does this layer support setStyle?
-  const isPath = (layer: L.Layer): layer is L.Path =>
-    typeof (layer as any).setStyle === 'function';
+  const style = () => baseStyle;
 
   return (
     <>
@@ -85,39 +135,41 @@ export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
           key={`council-${seq}-${data.features.length}`}
           pane="council-pane"
           data={data as any}
-          style={() => baseStyle}
-          onEachFeature={(feature, layer) => {
+          style={style}
+          onEachFeature={(feature: Feature<Geometry, any>, layer) => {
+            // Bind a tooltip with the best-guess name
             const name = getName(feature);
-            if (name) {
+            if (name && (layer as any).bindTooltip) {
               (layer as any).bindTooltip(name, {
-                sticky: true,
                 direction: 'center',
-                opacity: 0.9,
                 className: 'council-label',
+                permanent: false, // we'll toggle open/close by zoom
+                opacity: 0.9,
               });
             }
+
+            // Hover highlight for path-like layers
             if (isPath(layer)) {
               layer.on('mouseover', () => {
-                layer.setStyle({ weight: 3, fillOpacity: 0.28 } as L.PathOptions);
+                layer.setStyle({ weight: 3, fillOpacity: 0.22 } as L.PathOptions);
                 (layer as any).bringToFront?.();
               });
               layer.on('mouseout', () => {
                 layer.setStyle(baseStyle);
               });
+
+              // Show/hide label by zoom level
+              const toggleLabel = () => {
+                const show = map.getZoom() >= labelMinZoom;
+                if (show) (layer as any).openTooltip?.();
+                else (layer as any).closeTooltip?.();
+              };
+              toggleLabel();
+              map.on('zoomend', toggleLabel);
             }
           }}
         />
       ) : null}
-      <style jsx global>{`
-        .leaflet-tooltip.council-label {
-          padding: 2px 6px;
-          background: rgba(255,255,255,.85);
-          border: 1px solid rgba(0,0,0,.15);
-          border-radius: 6px;
-          font-size: 11px;
-          font-weight: 600;
-        }
-      `}</style>
     </>
   );
 }
