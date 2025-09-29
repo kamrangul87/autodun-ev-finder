@@ -1,0 +1,9 @@
+{
+  "type":"FeatureCollection",
+  "features":[
+    {"type":"Feature","properties":{"name":"Test Council"},
+     "geometry":{"type":"Polygon","coordinates":[[
+       [-0.20,51.48],[-0.08,51.48],[-0.08,51.56],[-0.20,51.56],[-0.20,51.48]
+     ]]}}
+  ]
+}
