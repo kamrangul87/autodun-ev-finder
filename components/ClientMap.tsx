@@ -12,7 +12,7 @@ import {
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer';
+import HeatLayer, { type HeatOptions } from '@/components/HeatLayer';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L, { DivIcon } from 'leaflet';
 import StationPanel from '@/components/StationPanel';
@@ -40,6 +40,9 @@ type Props = {
   showCouncil?: boolean;
 
   onStationsCount?: (n: number) => void;
+
+  // NEW: thread heatmap UI controls from the page into the layer
+  heatOptions?: HeatOptions;
 };
 
 // ---------- Utilities ----------
@@ -51,7 +54,6 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// nice blue dot as a DivIcon
 function circleDivIcon(size = 12, color = '#1e90ff'): DivIcon {
   const d = size * 2;
   const html = `<span style="
@@ -61,7 +63,6 @@ function circleDivIcon(size = 12, color = '#1e90ff'): DivIcon {
   return L.divIcon({ html, className: '', iconSize: [d, d], iconAnchor: [size, size] });
 }
 
-// cluster bubble with count
 function clusterDivIcon(count: number): DivIcon {
   const s = count < 10 ? 32 : count < 100 ? 38 : 46;
   const html = `<div style="
@@ -127,8 +128,7 @@ function StationsFetcher({
 
   useEffect(() => {
     refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [refetch]);
 
   useMapEvents({
     moveend: refetch,
@@ -197,16 +197,15 @@ export default function ClientMap({
   showMarkers = true,
   showCouncil = true,
   onStationsCount,
+  heatOptions, // NEW
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<Station | null>(null);
 
-  // Keep header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight]
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return stations.map((s) => {
@@ -228,22 +227,19 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* fetch stations on move/zoom */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* heatmap UNDER markers */}
-        {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
+        {showHeatmap && heatPoints.length > 0 && (
+          <HeatLayer points={heatPoints} options={heatOptions} />
+        )}
 
-        {/* clustered markers */}
         {showMarkers && (
           <StationsMarkers stations={stations} onSelect={(s) => setSelected(s)} />
         )}
       </MapContainer>
 
-      {/* right-side info panel */}
       <StationPanel station={selected} onClose={() => setSelected(null)} />
     </div>
   );
