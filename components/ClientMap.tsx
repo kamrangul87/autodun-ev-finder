@@ -12,6 +12,7 @@ import {
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
+import HeatLayer from '@/components/HeatLayer'; // <-- use your existing HeatLayer (points prop)
 
 // ---------- Types ----------
 type Station = {
@@ -31,7 +32,7 @@ type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
 
-  showHeatmap?: boolean; // stubbed; safe no-op until you wire a real heatmap
+  showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
 
@@ -168,6 +169,19 @@ export default function ClientMap({
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
+  // Build heatmap points [lat, lon, weight] from stations
+  type HeatPoint = [number, number, number];
+  const heatPoints = useMemo<HeatPoint[]>(() => {
+    return (stations ?? [])
+      .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
+      .map((s) => {
+        // weight by connectors; clamp to [0.2, 1]
+        const base = Number(s.connectors ?? 1);
+        const w = Math.max(0.2, Math.min(1, base / 4));
+        return [Number(s.lat), Number(s.lon), w] as HeatPoint;
+      });
+  }, [stations]);
+
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
       <MapContainer
@@ -186,17 +200,12 @@ export default function ClientMap({
         {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
+        {/* heatmap UNDER markers */}
+        {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
+
         {/* markers */}
         {showMarkers && <StationsMarkers stations={stations} />}
-
-        {/* heatmap stub (safe no-op until you add a real one) */}
-        {showHeatmap && <HeatmapLayer stations={stations} />}
       </MapContainer>
     </div>
   );
-}
-
-// --------- stub heatmap so builds never break ---------
-function HeatmapLayer(_props: { stations: Station[] }) {
-  return null;
 }
