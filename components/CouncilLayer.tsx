@@ -19,6 +19,8 @@ type Props = {
   minZoom?: number;
 };
 
+const DEBUG = process.env.NEXT_PUBLIC_COUNCIL_DEBUG === '1';
+
 export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
   const map = useMap();
   const [data, setData] = useState<FeatureCollection | null>(null);
@@ -38,14 +40,15 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
 
         const b = map.getBounds();
         const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
+        const qs = new URLSearchParams({ bbox });
+        if (DEBUG) qs.set('debug', '1'); // <-- add debug=1 automatically when env is set
 
-        // cancel any in-flight request
         if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
         abortRef.current = ac;
 
         try {
-          const res = await fetch(`/api/councils?bbox=${encodeURIComponent(bbox)}`, {
+          const res = await fetch(`/api/councils?${qs.toString()}`, {
             cache: 'no-store',
             signal: ac.signal,
           });
@@ -53,8 +56,7 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
           const fc = (await res.json()) as FeatureCollection;
 
           const count = Array.isArray(fc?.features) ? fc.features.length : 0;
-          console.log('[council] bbox=', bbox, 'zoom=', z, 'features=', count);
-
+          console.log('[council] bbox=', bbox, 'zoom=', z, 'features=', count, DEBUG ? '(debug mode)' : '');
           setData(count ? fc : null);
           setSeq((s) => s + 1);
         } catch (e: any) {
@@ -69,19 +71,17 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
     [enabled, map, minZoom]
   );
 
-  // initial + when toggle/zoom limit changes
   useEffect(() => {
     refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, minZoom]);
 
-  // re-fetch after pan/zoom
   useMapEvents({
     moveend: refetch,
     zoomend: refetch,
   });
 
-  // dedicated pane so polygons sit under markers (tile≈200 < council=300 < markers=400)
+  // tiles (~200) < council (300) < markers (400)
   return (
     <>
       <Pane name="council-pane" style={{ zIndex: 300 }} />
