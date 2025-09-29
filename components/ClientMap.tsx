@@ -179,10 +179,11 @@ export default function ClientMap({
         zoom={initialZoom}
         className="w-full h-full rounded-xl overflow-hidden"
       >
-        <TileLayer
-          attribution="&copy; OpenStreetMap contributors"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+       <TileLayer
+  attribution="&copy; OpenStreetMap &copy; CARTO"
+  url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+/>
+
 
         <StationsFetcher enabled={true} onData={setStations} />
 
