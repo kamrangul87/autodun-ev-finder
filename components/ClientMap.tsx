@@ -13,14 +13,13 @@ import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
 import HeatLayer from '@/components/HeatLayer';
 
-// ---------- Types ----------
 type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number;            // server returns "lon"
+  lon: number; // server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
@@ -36,7 +35,7 @@ type Props = {
   onStationsCount?: (n: number) => void;
 };
 
-// ---------- Utils ----------
+// --- debounce ---
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -45,7 +44,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// ---------- Fetcher ----------
+// --- fetch stations from your locked API ---
 function StationsFetcher({
   enabled,
   onData,
@@ -114,10 +113,9 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Markers (SVG paths in default overlay pane) ----------
+// --- circle markers (SVG in default overlay pane) ---
 function StationsMarkers({ stations }: { stations: Station[] }) {
   const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
-
   return (
     <>
       {stations.map((s, i) => (
@@ -128,7 +126,7 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
           weight={2}
           opacity={1}
           fillOpacity={0.9}
-          // IMPORTANT: no pane="markerPane" here (CircleMarker is SVG, not an <img>)
+          // IMPORTANT: no pane="markerPane" here
           pathOptions={{ color: '#1e73ff', fillColor: '#1e73ff' }}
         >
           {(s.name || s.addr) && (
@@ -149,7 +147,6 @@ function StationsMarkers({ stations }: { stations: Station[] }) {
   );
 }
 
-// ---------- Main ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -170,7 +167,7 @@ export default function ClientMap({
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
-        const w = Math.max(0.2, Math.min(1, base / 4));
+        const w = Math.max(0.2, Math.min(1, base / 4)); // clamp
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations]);
@@ -189,13 +186,13 @@ export default function ClientMap({
 
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* GeoJSON polygons (added first) */}
+        {/* council polygons first (so they draw under markers) */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* Heatmap under markers */}
+        {/* heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-        {/* Markers (added last => draw above polygons) */}
+        {/* station dots last (draw above polygons/heat) */}
         {showMarkers && <StationsMarkers stations={stations} />}
       </MapContainer>
     </div>
