@@ -4,15 +4,18 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
+  Pane,
   useMap,
   useMapEvents,
-  CircleMarker,
-  Tooltip,
-  Pane,
+  Marker,
+  Tooltip as RLTooltip,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer'; // accepts { points, options? }
+import HeatLayer from '@/components/HeatLayer';
+import MarkerClusterGroup from 'react-leaflet-cluster';
+import L, { DivIcon } from 'leaflet';
+import StationPanel from '@/components/StationPanel';
 
 // ---------- Types ----------
 type Station = {
@@ -28,15 +31,6 @@ type Station = {
   source: string;
 };
 
-export type HeatOptions = {
-  radius?: number;     // px
-  blur?: number;       // px
-  minOpacity?: number; // 0..1
-  max?: number;        // 0..1
-  maxZoom?: number;    // Leaflet zoom
-  boost?: number;      // multiplies station weight
-};
-
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
@@ -45,12 +39,10 @@ type Props = {
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  heatOptions?: HeatOptions;
-
   onStationsCount?: (n: number) => void;
 };
 
-// ---------- Small utilities ----------
+// ---------- Utilities ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -59,7 +51,29 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// ---------- Fetcher that follows your locked API contract ----------
+// nice blue dot as a DivIcon
+function circleDivIcon(size = 12, color = '#1e90ff'): DivIcon {
+  const d = size * 2;
+  const html = `<span style="
+    display:block;width:${d}px;height:${d}px;border-radius:50%;
+    background:${color};border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25);
+  "></span>`;
+  return L.divIcon({ html, className: '', iconSize: [d, d], iconAnchor: [size, size] });
+}
+
+// cluster bubble with count
+function clusterDivIcon(count: number): DivIcon {
+  const s = count < 10 ? 32 : count < 100 ? 38 : 46;
+  const html = `<div style="
+    display:flex;align-items:center;justify-content:center;
+    width:${s}px;height:${s}px;border-radius:9999px;
+    color:#fff;background:#2563eb;border:2px solid #fff;
+    box-shadow:0 0 0 1px rgba(0,0,0,.25);font:600 12px/1.2 system-ui,Arial;
+  ">${count}</div>`;
+  return L.divIcon({ html, className: '', iconSize: [s, s], iconAnchor: [s / 2, s / 2] });
+}
+
+// ---------- Fetcher ----------
 function StationsFetcher({
   enabled,
   onData,
@@ -96,11 +110,8 @@ function StationsFetcher({
           });
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
-
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-          const clean = items.filter(
-            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
-          );
+          const clean = items.filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
           onData(clean);
         } catch (e: any) {
           if (e?.name !== 'AbortError') {
@@ -127,91 +138,86 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Markers layer ----------
-function StationsMarkers({ stations }: { stations: Station[] }) {
-  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
+// ---------- Markers (clustered) ----------
+function StationsMarkers({
+  stations,
+  onSelect,
+}: {
+  stations: Station[];
+  onSelect: (s: Station) => void;
+}) {
+  const icon = useMemo(() => circleDivIcon(12, '#1e90ff'), []);
+  const clusterIconFn = useMemo(
+    () => (cluster: any) => clusterDivIcon(cluster.getChildCount()),
+    []
+  );
+
   return (
     <>
       <Pane name="stations-pane" style={{ zIndex: 400 }} />
-      {stations.map((s, i) => (
-        <CircleMarker
-          key={`${key}-${s.id ?? i}`}
-          center={[s.lat, s.lon]}
-          radius={6}
-          weight={2}
-          opacity={1}
-          fillOpacity={0.9}
-          pane="stations-pane"
-        >
-          {(s.name || s.addr) && (
-            <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-              <div style={{ fontSize: 12 }}>
-                {s.name && (
-                  <div>
-                    <strong>{s.name}</strong>
-                  </div>
-                )}
-                {s.addr && <div>{s.addr}</div>}
-              </div>
-            </Tooltip>
-          )}
-        </CircleMarker>
-      ))}
+      <MarkerClusterGroup
+        chunkedLoading
+        pane="stations-pane"
+        maxClusterRadius={55}
+        spiderfyOnEveryZoom={false}
+        showCoverageOnHover={false}
+        iconCreateFunction={clusterIconFn}
+      >
+        {stations.map((s, i) => (
+          <Marker
+            key={`st-${s.id ?? i}`}
+            position={[s.lat, s.lon]}
+            icon={icon}
+            eventHandlers={{ click: () => onSelect(s) }}
+          >
+            {(s.name || s.addr) && (
+              <RLTooltip direction="top" offset={[0, -6]} opacity={1}>
+                <div style={{ fontSize: 12 }}>
+                  {s.name && (
+                    <div>
+                      <strong>{s.name}</strong>
+                    </div>
+                  )}
+                  {s.addr && <div>{s.addr}</div>}
+                </div>
+              </RLTooltip>
+            )}
+          </Marker>
+        ))}
+      </MarkerClusterGroup>
     </>
   );
 }
 
-// ---------- Main component ----------
+// ---------- Main ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
-  showHeatmap = false,
+  showHeatmap = true,
   showMarkers = true,
   showCouncil = true,
-  heatOptions,
   onStationsCount,
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
+  const [selected, setSelected] = useState<Station | null>(null);
 
-  // keep the header counter in sync
+  // Keep header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations
+  // Build heatmap points [lat, lon, weight]
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
-    const boost = Number(heatOptions?.boost ?? 1);
-    return (stations ?? [])
-      .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
-      .map((s) => {
-        // base weight by connectors; clamp to [0.2, 1]
-        const base = Number(s.connectors ?? 1);
-        const weighted = Math.max(0.2, Math.min(1, (base / 4) * boost));
-        return [Number(s.lat), Number(s.lon), weighted] as HeatPoint;
-      });
-  }, [stations, heatOptions?.boost]);
-
-  // Defaults for heat layer rendering
-  const heatLayerOptions = useMemo(
-    () => ({
-      radius: heatOptions?.radius ?? 60,
-      blur: heatOptions?.blur ?? 34,
-      minOpacity: heatOptions?.minOpacity ?? 0.5,
-      max: heatOptions?.max ?? 1.0,
-      maxZoom: heatOptions?.maxZoom ?? 17,
-    }),
-    [
-      heatOptions?.radius,
-      heatOptions?.blur,
-      heatOptions?.minOpacity,
-      heatOptions?.max,
-      heatOptions?.maxZoom,
-    ]
-  );
+    return stations.map((s) => {
+      const base = Number(s.connectors ?? 1);
+      const w = Math.max(0.2, Math.min(1, base / 4));
+      return [Number(s.lat), Number(s.lon), w] as HeatPoint;
+    });
+  }, [stations]);
 
   return (
-    <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
+    <div className="relative w-full h-[70vh]">
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
@@ -222,20 +228,23 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* fetch stations on move/zoom using your locked server API */}
+        {/* fetch stations on move/zoom */}
         <StationsFetcher enabled={true} onData={setStations} />
 
         {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
         {/* heatmap UNDER markers */}
-        {showHeatmap && heatPoints.length > 0 && (
-          <HeatLayer points={heatPoints} options={heatLayerOptions as any} />
-        )}
+        {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
 
-        {/* markers */}
-        {showMarkers && <StationsMarkers stations={stations} />}
+        {/* clustered markers */}
+        {showMarkers && (
+          <StationsMarkers stations={stations} onSelect={(s) => setSelected(s)} />
+        )}
       </MapContainer>
+
+      {/* right-side info panel */}
+      <StationPanel station={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }
