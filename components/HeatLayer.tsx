@@ -1,4 +1,3 @@
-// components/HeatLayer.tsx
 'use client';
 
 import { useEffect, useRef } from 'react';
@@ -13,7 +12,7 @@ export default function HeatLayer({ points }: { points: HeatPoint[] }) {
   useEffect(() => {
     if (!map) return;
 
-    // pane sits between council (300) and markers (default overlay ~400)
+    // Pane between council (z=300) and markers (≈400)
     if (!map.getPane('heatmap-pane')) {
       const p = map.createPane('heatmap-pane');
       p.style.zIndex = '350';
@@ -23,21 +22,25 @@ export default function HeatLayer({ points }: { points: HeatPoint[] }) {
       const L = (await import('leaflet')).default as any;
       await import('leaflet.heat');
 
-      // clear old layer
+      // remove existing layer
       if (layerRef.current) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
-      if (!points.length) return;
+      if (!points?.length) {
+        console.log('[heat] no points');
+        return;
+      }
 
-      // stronger defaults so it’s visible at city zoom
+      console.log('[heat] adding layer, points=', points.length);
       const layer = (L as any).heatLayer(points, {
         pane: 'heatmap-pane',
-        radius: 32,
+        // stronger, very obvious defaults so you SEE it
+        radius: 36,
         blur: 20,
-        maxZoom: 18,
         max: 1.0,
-        minOpacity: 0.45,
+        minOpacity: 0.55,
+        maxZoom: 19,
       });
       layer.addTo(map);
       layerRef.current = layer;
