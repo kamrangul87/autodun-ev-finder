@@ -4,56 +4,60 @@ import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 
 type HeatPoint = [number, number, number];
+type HeatOptions = {
+  radius?: number;
+  blur?: number;
+  maxZoom?: number;
+  max?: number;
+  minOpacity?: number;
+};
 
-export default function HeatLayer({ points }: { points: HeatPoint[] }) {
+export default function HeatLayer({
+  points,
+  options,
+}: {
+  points: HeatPoint[];
+  options?: HeatOptions;
+}) {
   const map = useMap();
   const layerRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!map) return;
-
-    // Draw between council (z=300) and markers (z≈400)
-    if (!map.getPane('heatmap-pane')) {
-      const p = map.createPane('heatmap-pane');
-      p.style.zIndex = '350';
-    }
+    let cancelled = false;
 
     (async () => {
       const L = (await import('leaflet')).default as any;
       await import('leaflet.heat');
 
-      // nuke previous
+      if (cancelled || !map) return;
+
       if (layerRef.current) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
+      if (!points.length) return;
 
-      if (!points?.length) {
-        console.log('[heat] no points');
-        return;
-      }
-
-      console.log('[heat] adding layer, points=', points.length, 'sample=', points.slice(0, 3));
+      // stronger defaults
       const layer = (L as any).heatLayer(points, {
-        pane: 'heatmap-pane',
-        radius: 36,
-        blur: 20,
+        radius: 55,
+        blur: 30,
+        maxZoom: 17,
         max: 1.0,
-        minOpacity: 0.55,
-        maxZoom: 19,
+        minOpacity: 0.45,
+        ...(options || {}),
       });
-
       layer.addTo(map);
       layerRef.current = layer;
     })();
 
     return () => {
-      if (layerRef.current) {
+      cancelled = true;
+      if (layerRef.current && map) {
         try { map.removeLayer(layerRef.current); } catch {}
         layerRef.current = null;
       }
     };
-  }, [map, points]);
+  }, [map, points, options]);
 
   return null;
 }
