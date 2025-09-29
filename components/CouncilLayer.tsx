@@ -1,10 +1,11 @@
+// components/CouncilLayer.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { FeatureCollection } from 'geojson';
 import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
 
-// --- helpers ---
+// tiny debounce
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -15,17 +16,11 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
 
 type Props = {
   enabled: boolean;
-  /** Hide below this zoom (lowered so you can see polygons sooner) */
+  /** Hide below this zoom to avoid clutter */
   minZoom?: number;
 };
 
-// Env flags:
-// - set NEXT_PUBLIC_COUNCIL_DEBUG=1 to force the DEBUG rectangle from the API
-// - set NEXT_PUBLIC_COUNCIL_SRC=/data/council-test.geojson to pass ?src= to the API
-const DEBUG = process.env.NEXT_PUBLIC_COUNCIL_DEBUG === '1';
-const SRC = process.env.NEXT_PUBLIC_COUNCIL_SRC || '';
-
-export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
+export default function CouncilLayer({ enabled, minZoom = 9 }: Props) {
   const map = useMap();
   const [data, setData] = useState<FeatureCollection | null>(null);
   const [seq, setSeq] = useState(0);
@@ -45,8 +40,6 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
         const b = map.getBounds();
         const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
         const qs = new URLSearchParams({ bbox });
-        if (DEBUG) qs.set('debug', '1');      // debug rectangle from API
-        if (SRC) qs.set('src', SRC);          // point API to your GeoJSON source (optional)
 
         if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
@@ -61,17 +54,7 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
           const fc = (await res.json()) as FeatureCollection;
 
           const count = Array.isArray(fc?.features) ? fc.features.length : 0;
-          console.log(
-            '[council] bbox=',
-            bbox,
-            'zoom=',
-            z,
-            'features=',
-            count,
-            DEBUG ? '(debug mode)' : '',
-            SRC ? `(src=${SRC})` : ''
-          );
-
+          console.log('[council] features=', count);
           setData(count ? fc : null);
           setSeq((s) => s + 1);
         } catch (e: any) {
@@ -106,21 +89,12 @@ export default function CouncilLayer({ enabled, minZoom = 6 }: Props) {
           pane="council-pane"
           data={data as any}
           style={() => ({
-            color: '#2b7',
-            weight: 1.5,
+            color: '#1b8e5a',
+            weight: 1.2,
             opacity: 0.9,
-            fillColor: '#2b7',
-            fillOpacity: 0.12,
+            fillColor: '#1b8e5a',
+            fillOpacity: 0.08,
           })}
-          onEachFeature={(f: any, layer: any) => {
-            const name =
-              f?.properties?.name ??
-              f?.properties?.NAME ??
-              f?.properties?.lad23nm ??
-              f?.properties?.LAD23NM ??
-              null;
-            if (name) layer.bindTooltip(String(name), { sticky: true });
-          }}
         />
       ) : null}
     </>
