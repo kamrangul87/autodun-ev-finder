@@ -4,40 +4,39 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
+  Pane,
+  Tooltip,
+  Popup,
+  Marker,
   useMap,
   useMapEvents,
-  CircleMarker,
-  Tooltip,
-  Pane,
 } from 'react-leaflet';
-import type { Feature, Geometry } from 'geojson';
 import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+import MarkerClusterGroup from 'react-leaflet-cluster';
 
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatmapWithScaling'; // your heat component that accepts { points, options? }
 import SearchControl from '@/components/SearchControl';
+import StationPanel from '@/components/StationPanel';
 
-import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
-import { point } from '@turf/helpers';
+// ✅ Import the heat layer AND its public types
+import HeatLayer, {
+  type Point as HeatPoint,
+  type HeatOptions,
+} from '@/components/HeatmapWithScaling';
 
-/* ----------------------- Types ----------------------- */
+// ---------- Types ----------
 type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number;
+  lon: number; // server returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
   source: string;
-};
-
-type HeatOptions = {
-  radius?: number;
-  blur?: number;
-  minOpacity?: number;
 };
 
 type Props = {
@@ -50,11 +49,11 @@ type Props = {
 
   onStationsCount?: (n: number) => void;
 
-  /** Heat layer visual options */
+  /** Optional heatmap tuning coming from the page controls */
   heatOptions?: HeatOptions;
 };
 
-/* --------------------- Utilities --------------------- */
+// ---------- utils ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -63,7 +62,16 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-/* ---------------- Stations Fetcher ------------------- */
+// Simple blue dot as a DivIcon (no image assets needed)
+const dotIcon = L.divIcon({
+  className: '', // avoid extra leaflet default classes
+  html:
+    '<span style="display:block;width:10px;height:10px;border:2px solid #2D6CDF;border-radius:50%;background:#2F80ED;box-shadow:0 0 0 2px rgba(255,255,255,0.9)"></span>',
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
+});
+
+// ---------- Fetcher that follows your API contract ----------
 function StationsFetcher({
   enabled,
   onData,
@@ -81,6 +89,7 @@ function StationsFetcher({
 
         const b = map.getBounds();
         const z = map.getZoom();
+
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -88,16 +97,6 @@ function StationsFetcher({
           north: String(b.getNorth()),
           zoom: String(z),
         });
-
-        // keep bbox mirrored in URL so CouncilLayer can re-use it
-        try {
-          const sp = new URLSearchParams(window.location.search);
-          sp.set('bbox', `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`);
-          const u = `${window.location.pathname}?${sp.toString()}`;
-          window.history.replaceState(null, '', u);
-        } catch {
-          /* no-op */
-        }
 
         if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
@@ -110,6 +109,7 @@ function StationsFetcher({
           });
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
+
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
@@ -140,41 +140,72 @@ function StationsFetcher({
   return null;
 }
 
-/* ---------------- Markers Layer ---------------------- */
-function StationsMarkers({ stations }: { stations: Station[] }) {
-  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
-  return (
-    <>
-      <Pane name="stations-pane" style={{ zIndex: 400 }} />
-      {stations.map((s, i) => (
-        <CircleMarker
-          key={`${key}-${s.id ?? i}`}
-          center={[s.lat, s.lon]}
-          radius={6}
-          weight={2}
-          opacity={1}
-          fillOpacity={0.9}
-          pane="stations-pane"
-        >
-          {(s.name || s.addr) && (
-            <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-              <div style={{ fontSize: 12 }}>
-                {s.name && (
-                  <div>
-                    <strong>{s.name}</strong>
-                  </div>
-                )}
-                {s.addr && <div>{s.addr}</div>}
-              </div>
-            </Tooltip>
-          )}
-        </CircleMarker>
-      ))}
-    </>
-  );
+// ---------- Small controls (Locate / Reset) ----------
+function LocateResetControls({
+  homeCenter,
+  homeZoom,
+}: {
+  homeCenter: [number, number];
+  homeZoom: number;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    const Control = L.Control.extend({
+      onAdd: () => {
+        const container = L.DomUtil.create('div', 'leaflet-bar');
+        container.style.background = 'white';
+        container.style.padding = '8px';
+        container.style.borderRadius = '8px';
+        container.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+        container.style.display = 'flex';
+        container.style.flexDirection = 'column';
+        container.style.gap = '6px';
+
+        const locate = L.DomUtil.create('button', '', container);
+        locate.type = 'button';
+        locate.textContent = '📍 Locate';
+        locate.style.cursor = 'pointer';
+        locate.style.padding = '6px 8px';
+        locate.style.border = '1px solid #e5e7eb';
+        locate.style.borderRadius = '6px';
+        locate.style.background = '#fff';
+
+        const reset = L.DomUtil.create('button', '', container);
+        reset.type = 'button';
+        reset.textContent = '↺ Reset';
+        reset.style.cursor = 'pointer';
+        reset.style.padding = '6px 8px';
+        reset.style.border = '1px solid #e5e7eb';
+        reset.style.borderRadius = '6px';
+        reset.style.background = '#fff';
+
+        L.DomEvent.on(locate, 'click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          map.locate({ setView: true, maxZoom: 16 });
+        });
+
+        L.DomEvent.on(reset, 'click', (e) => {
+          L.DomEvent.stopPropagation(e);
+          map.setView(homeCenter, homeZoom);
+        });
+
+        return container;
+      },
+      onRemove: () => void 0,
+    });
+
+    const ctl = new Control({ position: 'bottomright' });
+    map.addControl(ctl);
+    return () => {
+      map.removeControl(ctl);
+    };
+  }, [map, homeCenter, homeZoom]);
+
+  return null;
 }
 
-/* --------------------- Main Map ---------------------- */
+// ---------- Main component ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -186,54 +217,24 @@ export default function ClientMap({
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
 
-  // Council selection (click a polygon)
-  const [selectedCouncil, setSelectedCouncil] = useState<{
-    name: string;
-    geom: Geometry;
-  } | null>(null);
-
-  const filteredStations = useMemo(() => {
-    if (!selectedCouncil?.geom) return stations;
-    try {
-      return stations.filter((s) =>
-        booleanPointInPolygon(point([s.lon, s.lat]), selectedCouncil.geom as any)
-      );
-    } catch {
-      return stations;
-    }
-  }, [stations, selectedCouncil]);
-
+  // Keep header counter in sync
   useEffect(() => {
-    onStationsCount?.(filteredStations.length);
-  }, [filteredStations.length, onStationsCount]);
+    onStationsCount?.(stations.length);
+  }, [stations.length, onStationsCount]);
 
-  type HeatPoint = [number, number, number];
+  // Build heatmap points [lat, lon, weight] from stations (✅ typed from HeatmapWithScaling)
   const heatPoints = useMemo<HeatPoint[]>(() => {
-    return (filteredStations ?? [])
+    return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
         const w = Math.max(0.2, Math.min(1, base / 4));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
-  }, [filteredStations]);
+  }, [stations]);
 
   return (
     <div className="w-full h-[70vh] relative">
-      {/* Selection chip */}
-      {selectedCouncil && (
-        <div className="absolute z-[1001] left-3 top-[76px] bg-white/90 rounded-md shadow px-3 py-1 text-sm">
-          Filter: <strong>{selectedCouncil.name}</strong>{' '}
-          <button
-            className="ml-2 underline"
-            onClick={() => setSelectedCouncil(null)}
-            title="Clear council filter"
-          >
-            Clear
-          </button>
-        </div>
-      )}
-
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
@@ -244,22 +245,14 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Search box */}
+        {/* Search box (top-left) */}
         <SearchControl />
 
-        {/* Fetch stations on move/zoom */}
+        {/* Fetch stations on move/zoom using your API */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* Councils: click to filter */}
-        {showCouncil && (
-          <CouncilLayer
-            enabled
-            selectedName={selectedCouncil?.name ?? null}
-            onPick={(name: string, feature: Feature<Geometry, any>) =>
-              setSelectedCouncil({ name, geom: feature.geometry })
-            }
-          />
-        )}
+        {/* Council polygons (under markers, above tiles) */}
+        {showCouncil && <CouncilLayer enabled />}
 
         {/* Heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && (
@@ -269,12 +262,63 @@ export default function ClientMap({
               radius: heatOptions?.radius ?? 28,
               blur: heatOptions?.blur ?? 25,
               minOpacity: heatOptions?.minOpacity ?? 0.35,
+              max: heatOptions?.max ?? 1.0,
             }}
           />
         )}
 
-        {/* markers */}
-        {showMarkers && <StationsMarkers stations={filteredStations} />}
+        {/* Markers (clustered) */}
+        {showMarkers && (
+          <>
+            <Pane name="stations-pane" style={{ zIndex: 400 }} />
+            <MarkerClusterGroup
+              chunkedLoading
+              showCoverageOnHover={false}
+              spiderfyOnMaxZoom
+              maxClusterRadius={42}
+            >
+              {stations.map((s, i) => (
+                <Marker
+                  key={`${s.id ?? i}`}
+                  position={[s.lat, s.lon]}
+                  icon={dotIcon}
+                >
+                  {(s.name || s.addr) && (
+                    <Tooltip direction="top" offset={[0, -6]} opacity={1}>
+                      <div style={{ fontSize: 12 }}>
+                        {s.name && (
+                          <div>
+                            <strong>{s.name}</strong>
+                          </div>
+                        )}
+                        {s.addr && <div>{s.addr}</div>}
+                      </div>
+                    </Tooltip>
+                  )}
+                  <Popup>
+                    <StationPanel
+                      station={{
+                        id: s.id,
+                        name: s.name,
+                        addr: s.addr,
+                        postcode: s.postcode,
+                        lat: s.lat,
+                        lon: s.lon,
+                        connectors: s.connectors,
+                        reports: s.reports,
+                        downtime: s.downtime,
+                        source: s.source,
+                      }}
+                    />
+                  </Popup>
+                </Marker>
+              ))}
+            </MarkerClusterGroup>
+          </>
+        )}
+
+        {/* Locate / Reset controls (bottom-right) */}
+        <LocateResetControls homeCenter={initialCenter} homeZoom={initialZoom} />
       </MapContainer>
     </div>
   );
