@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Pane, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Pane, Marker, Popup } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
 import HeatmapWithScaling, { type HeatPoint } from '@/components/HeatmapWithScaling';
 
@@ -19,23 +19,6 @@ type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
 };
-
-function EnsurePanes() {
-  const map = useMap();
-  React.useEffect(() => {
-    const defs: Array<[string, number, ('auto' | 'none')?]> = [
-      ['base', 100, 'auto'],
-      ['heatmap', 200, 'auto'],
-      ['markers', 300, 'auto'],
-    ];
-    defs.forEach(([name, z, pe]) => {
-      const pane = map.getPane(name) ?? map.createPane(name);
-      pane.style.zIndex = String(z);
-      pane.style.pointerEvents = pe ?? 'auto';
-    });
-  }, [map]);
-  return null;
-}
 
 export default function ClientMap({
   initialCenter = [51.5072, -0.1276],
@@ -56,6 +39,7 @@ export default function ClientMap({
   const [query, setQuery] = useState('');
   const [searchPin, setSearchPin] = useState<[number, number] | null>(null);
 
+  // Load stations via your /api/ocm proxy
   useEffect(() => {
     const load = async () => {
       try {
@@ -66,6 +50,7 @@ export default function ClientMap({
         );
         if (!res.ok) throw new Error(`API ${res.status}`);
         const data = await res.json();
+
         const mapped: Station[] = (Array.isArray(data) ? data : [])
           .map((p: any) => ({
             id: p?.ID ?? `${p?.AddressInfo?.Latitude},${p?.AddressInfo?.Longitude}`,
@@ -77,16 +62,18 @@ export default function ClientMap({
             connectors: Array.isArray(p?.Connections) ? p.Connections.length : 0,
           }))
           .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+
         setStations(mapped);
         setError(null);
       } catch (e: any) {
-        setError(e?.message ?? 'Failed to load stations');
         console.error('Stations fetch failed:', e);
+        setError(e?.message ?? 'Failed to load stations');
       }
     };
     load();
   }, [initialCenter]);
 
+  // Heatmap points (value = connectors fallback 1)
   const heatPoints: HeatPoint[] = useMemo(
     () =>
       stations.map((s) => ({
@@ -97,6 +84,7 @@ export default function ClientMap({
     [stations]
   );
 
+  // Nominatim search
   const doSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -149,11 +137,19 @@ export default function ClientMap({
           {/* Toggles */}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={showHeatmap}
+                onChange={(e) => setShowHeatmap(e.target.checked)}
+              />
               Heatmap
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={showMarkers}
+                onChange={(e) => setShowMarkers(e.target.checked)}
+              />
               Markers
             </label>
           </div>
@@ -161,11 +157,32 @@ export default function ClientMap({
           {/* Sliders */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
-            <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} />
+            <input
+              type="range"
+              min={0.5}
+              max={5}
+              step={0.5}
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+            />
             <span style={{ fontSize: 12, color: '#444' }}>Radius</span>
-            <input type="range" min={8} max={40} step={2} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
+            <input
+              type="range"
+              min={8}
+              max={40}
+              step={2}
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+            />
             <span style={{ fontSize: 12, color: '#444' }}>Blur</span>
-            <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e) => setBlur(Number(e.target.value))} />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={blur}
+              onChange={(e) => setBlur(Number(e.target.value))}
+            />
           </div>
 
           {/* Search */}
@@ -209,23 +226,24 @@ export default function ClientMap({
         preferCanvas
         style={{ height: 'calc(100vh - 120px)' }}
       >
-        <EnsurePanes />
-
-        <Pane name="base">
+        {/* Base tiles */}
+        <Pane name="base" style={{ zIndex: 100 }}>
           <TileLayer
             attribution="&copy; OpenStreetMap contributors · Charging location data © Open Charge Map (CC BY 4.0)"
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
         </Pane>
 
+        {/* Heatmap (click-through) */}
         {showHeatmap && (
-          <Pane name="heatmap">
+          <Pane name="heatmap" style={{ zIndex: 200, pointerEvents: 'none' }}>
             <HeatmapWithScaling points={heatPoints} intensity={intensity} radius={radius} blur={blur} />
           </Pane>
         )}
 
+        {/* Markers */}
         {showMarkers && (
-          <Pane name="markers">
+          <Pane name="markers" style={{ zIndex: 300 }}>
             {stations.map((s) => (
               <Marker key={s.id} position={[s.lat, s.lng]}>
                 <Popup>
@@ -235,7 +253,11 @@ export default function ClientMap({
                     <div>{s.postcode}</div>
                     <div>Connectors: {s.connectors ?? 0}</div>
                     <div style={{ marginTop: 8 }}>
-                      <a href={`https://maps.google.com/?q=${s.lat},${s.lng}`} target="_blank" rel="noreferrer">
+                      <a
+                        href={`https://maps.google.com/?q=${s.lat},${s.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Open in Google Maps
                       </a>
                     </div>
@@ -248,6 +270,7 @@ export default function ClientMap({
         )}
       </MapContainer>
 
+      {/* Non-blocking error notice */}
       {error && (
         <div
           style={{
