@@ -5,18 +5,20 @@ import {
   MapContainer,
   TileLayer,
   Pane,
+  Polygon,
   CircleMarker,
   Popup,
-  GeoJSON,
-  Tooltip,
-  useMap,
 } from 'react-leaflet';
-import type { Map as LeafletMap } from 'leaflet';
+import type { Map as LeafletMap, LatLngTuple } from 'leaflet';
 
-import SearchControl from '@/components/SearchControl';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
+import SearchControl from '@/components/SearchControl';
 
-// ---- Types -----------------------------------------------------------------
+type HeatOptions = {
+  intensity: number; // 0..1 scale to multiply each point's weight
+  radius: number;    // heatmap radius in px
+  blur: number;      // heatmap blur in px
+};
 
 type Props = {
   initialCenter: [number, number];
@@ -24,7 +26,7 @@ type Props = {
   showHeatmap: boolean;
   showMarkers: boolean;
   showCouncil: boolean;
-  heatOptions: { intensity: number; radius: number; blur: number };
+  heatOptions: HeatOptions;
   onStationsCount?: (n: number) => void;
 };
 
@@ -33,33 +35,68 @@ type Station = {
   name?: string;
   address?: string;
   postcode?: string;
-  lat: number;     // NOTE: expect lat/lon keys from /public/data/ev_heat.json
-  lon: number;
   source?: string;
   connectors?: number;
-  reports?: number;
-  downtime_mins?: number;
+  lat: number;
+  lng: number;
 };
 
-type CouncilFC = GeoJSON.FeatureCollection<
-  GeoJSON.Geometry,
-  { name?: string }
->;
+type CouncilGeoJSON = {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    properties?: { name?: string };
+    geometry: {
+      type: 'Polygon' | 'MultiPolygon';
+      coordinates:
+        | number[][][]          // Polygon
+        | number[][][][];       // MultiPolygon
+    };
+  }>;
+};
 
-// HeatmapWithScaling expects points as {lat, lng, value}
-type HeatPoint = { lat: number; lng: number; value: number };
+// -------- helpers ------------------------------------------------------------
 
-// ---- Helpers ----------------------------------------------------------------
-
-function MapInit({ onReady }: { onReady: (m: LeafletMap) => void }) {
-  const map = useMap();
-  useEffect(() => {
-    onReady(map);
-  }, [map, onReady]);
-  return null;
+function normalizeStations(raw: any): Station[] {
+  // Accept several shapes and normalize to {lat,lng,connectors?,...}
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    // Could be: [{lat,lng,connectors,...}] OR [[lat,lng,(connectors)]]
+    return raw
+      .map((r: any): Station | null => {
+        if (r && typeof r === 'object' && 'lat' in r && 'lng' in r) {
+          return {
+            id: r.id ?? undefined,
+            name: r.name ?? undefined,
+            address: r.address ?? undefined,
+            postcode: r.postcode ?? undefined,
+            source: r.source ?? undefined,
+            connectors: Number.isFinite(r.connectors) ? Number(r.connectors) : undefined,
+            lat: Number(r.lat),
+            lng: Number(r.lng),
+          };
+        }
+        if (Array.isArray(r) && (r.length === 2 || r.length === 3)) {
+          const [lat, lng, connectors] = r;
+          return {
+            lat: Number(lat),
+            lng: Number(lng),
+            connectors: Number.isFinite(connectors) ? Number(connectors) : undefined,
+          };
+        }
+        return null;
+      })
+      .filter(Boolean) as Station[];
+  }
+  return [];
 }
 
-// ---- Component --------------------------------------------------------------
+function ringToLatLngs(ring: number[][]): LatLngTuple[] {
+  // GeoJSON ring [lng,lat] -> Leaflet [lat,lng]
+  return ring.map(([lng, lat]) => [lat, lng]);
+}
+
+// -------- component ----------------------------------------------------------
 
 export default function ClientMap({
   initialCenter,
@@ -73,48 +110,56 @@ export default function ClientMap({
   const mapRef = useRef<LeafletMap | null>(null);
 
   const [stations, setStations] = useState<Station[]>([]);
-  const [council, setCouncil] = useState<CouncilFC | null>(null);
-  const [dataError, setDataError] = useState<string | null>(null);
+  const [council, setCouncil] = useState<CouncilGeoJSON | null>(null);
 
-  // Fetch stations (from public/data/* so it works on Vercel static hosting)
+  // Load stations (JSON preferred; CSV fallback if needed)
   useEffect(() => {
     let cancelled = false;
 
     const load = async () => {
       try {
-        setDataError(null);
-        // Prefer JSON; if you only have CSV, adapt parsing here.
+        // Primary: JSON
         const r = await fetch('/data/ev_heat.json', { cache: 'no-store' });
-        if (!r.ok) throw new Error(`stations ${r.status}`);
-        const raw = await r.json();
-
-        // Accept both array-of-objects or {stations:[...]}
-        const arr: any[] = Array.isArray(raw) ? raw : raw?.stations ?? [];
-        const parsed: Station[] = arr
-          .map((s) => ({
-            id: s.id ?? s._id ?? undefined,
-            name: s.name ?? s.Name ?? 'EV Charging',
-            address: s.address ?? s.Address ?? '',
-            postcode: s.postcode ?? s.Postcode ?? '',
-            lat: Number(s.lat ?? s.latitude),
-            lon: Number(s.lon ?? s.lng ?? s.longitude),
-            source: s.source ?? s.Source ?? 'osm',
-            connectors: Number(s.connectors ?? s.Connectors ?? 0),
-            reports: Number(s.reports ?? s.Reports ?? 0),
-            downtime_mins: Number(s.downtime_mins ?? s.Downtime ?? 0),
-          }))
-          .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon));
-
-        if (!cancelled) {
-          setStations(parsed);
-          onStationsCount?.(parsed.length);
+        if (r.ok) {
+          const json = await r.json();
+          const norm = normalizeStations(json);
+          if (!cancelled) setStations(norm);
+          return;
         }
-      } catch (err: any) {
-        if (!cancelled) {
-          setDataError(err?.message || 'Failed to fetch stations');
-          setStations([]);
-          onStationsCount?.(0);
+        // Fallback: CSV
+        const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
+        if (rcsv.ok) {
+          const text = await rcsv.text();
+          const rows = text
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          // naive CSV parser expecting headers lat,lng[,connectors]
+          const [header, ...data] = rows;
+          const cols = header.split(',').map((s) => s.trim().toLowerCase());
+          const latIdx = cols.indexOf('lat');
+          const lngIdx = cols.indexOf('lng') >= 0 ? cols.indexOf('lng') : cols.indexOf('lon');
+          const connIdx = cols.indexOf('connectors');
+
+          const parsed: Station[] = data
+            .map((line) => line.split(','))
+            .map((arr) => {
+              const lat = Number(arr[latIdx]);
+              const lng = Number(arr[lngIdx]);
+              const connectors =
+                connIdx >= 0 && Number.isFinite(Number(arr[connIdx]))
+                  ? Number(arr[connIdx])
+                  : undefined;
+              return Number.isFinite(lat) && Number.isFinite(lng)
+                ? ({ lat, lng, connectors } as Station)
+                : null;
+            })
+            .filter(Boolean) as Station[];
+
+          if (!cancelled) setStations(parsed);
         }
+      } catch {
+        if (!cancelled) setStations([]);
       }
     };
 
@@ -122,19 +167,20 @@ export default function ClientMap({
     return () => {
       cancelled = true;
     };
-  }, [onStationsCount]);
+  }, []);
 
-  // Fetch council test polygons
+  // Load council test polygons (optional)
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/data/council-test.geojson?v=now', {
-          cache: 'no-store',
-        });
-        if (!r.ok) throw new Error(`council ${r.status}`);
-        const gj = (await r.json()) as CouncilFC;
-        if (!cancelled) setCouncil(gj);
+        const r = await fetch('/data/council-test.geojson?v=now', { cache: 'no-store' });
+        if (r.ok) {
+          const gj = (await r.json()) as CouncilGeoJSON;
+          if (!cancelled) setCouncil(gj);
+        } else {
+          if (!cancelled) setCouncil(null);
+        }
       } catch {
         if (!cancelled) setCouncil(null);
       }
@@ -145,107 +191,77 @@ export default function ClientMap({
     };
   }, []);
 
-  // Heatmap points
-  const heatPoints: HeatPoint[] = useMemo(
+  // Report station count up to parent (if provided)
+  useEffect(() => {
+    if (onStationsCount) onStationsCount(stations.length);
+  }, [stations.length, onStationsCount]);
+
+  // Heatmap points = lat/lng + value (connectors * intensity; default 1)
+  const heatPoints = useMemo(
     () =>
       stations.map((s) => ({
         lat: s.lat,
-        lng: s.lon,
-        value: Math.max(1, Number(s.connectors ?? 1)),
+        lng: s.lng,
+        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heatOptions.intensity || 1)),
       })),
-    [stations]
+    [stations, heatOptions.intensity]
   );
-
-  // Simple marker color by connectors to give users a hint
-  const markerColor = (n?: number) => {
-    const c = Number(n ?? 0);
-    if (c >= 6) return '#1976d2';
-    if (c >= 3) return '#2e7d32';
-    return '#d32f2f';
-  };
-
-  // ---- Render ---------------------------------------------------------------
 
   return (
     <div className="relative">
-      {/* Optional soft error (doesn't crash UI) */}
-      {dataError && (
-        <div className="absolute z-[9999] left-1/2 -translate-x-1/2 top-2 px-3 py-1 rounded bg-red-600 text-white text-sm shadow">
-          Data load error: {dataError}
-        </div>
-      )}
-
       <MapContainer
+        ref={mapRef as any} // TS: react-leaflet MapContainer accepts a Map ref
         center={initialCenter}
         zoom={initialZoom}
-        preferCanvas
         className="leaflet-map"
-        style={{ height: 'calc(100vh - 140px)' }}
+        preferCanvas
+        style={{ height: 'calc(100vh - 120px)' }}
       >
-        {/* Provide Leaflet map instance safely without using deprecated whenCreated */}
-        <MapInit onReady={(m) => (mapRef.current = m)} />
-
-        {/* Base map – keep default panes to avoid “pane already exists” */}
+        {/* Base OSM layer */}
         <TileLayer
-          attribution='&copy; OpenStreetMap contributors'
+          attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Search bar control (already fixed cleanup in your repo) */}
-        <SearchControl mapRef={mapRef} />
+        {/* Search bar (no props; uses useMap() internally) */}
+        <SearchControl />
 
-        {/* Heatmap */}
+        {/* Heatmap (custom component) */}
         {showHeatmap && heatPoints.length > 0 && (
           <Pane name="heatmap" style={{ zIndex: 350 }}>
             <HeatmapWithScaling
               points={heatPoints}
-              intensity={heatOptions.intensity}
-              radius={heatOptions.radius}
-              blur={heatOptions.blur}
+              radius={Math.max(1, Math.round(heatOptions.radius))}
+              blur={Math.max(0, Math.round(heatOptions.blur))}
             />
           </Pane>
         )}
 
-        {/* Station markers */}
+        {/* Simple markers (circles + popup) */}
         {showMarkers && stations.length > 0 && (
-          <Pane name="markers" style={{ zIndex: 450 }}>
+          <Pane name="markers" style={{ zIndex: 400 }}>
             {stations.map((s, i) => (
               <CircleMarker
                 key={s.id ?? i}
-                center={[s.lat, s.lon]}
-                radius={6}
-                pathOptions={{
-                  color: markerColor(s.connectors),
-                  weight: 1.5,
-                  fillOpacity: 0.85,
-                }}
+                center={[s.lat, s.lng]}
+                radius={4}
+                weight={1}
+                pathOptions={{ color: '#2563eb', fillColor: '#60a5fa', fillOpacity: 0.8 }}
               >
-                <Tooltip direction="top" offset={[0, -6]} opacity={0.9}>
-                  {s.name || 'EV Charging'}
-                </Tooltip>
                 <Popup>
-                  <div className="space-y-1 text-sm">
-                    <div className="font-semibold">
-                      {s.name || 'EV Charging'}
-                    </div>
-                    <div>{s.address || '-'}</div>
-                    <div>{s.postcode || '-'}</div>
-                    <div className="text-xs opacity-70">
-                      Source: {s.source || '-'}
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-4 text-xs pt-1">
-                      <span>Connectors</span>
-                      <span>{Number(s.connectors ?? 0)}</span>
-                      <span>Reports</span>
-                      <span>{Number(s.reports ?? 0)}</span>
-                      <span>Downtime (mins)</span>
-                      <span>{Number(s.downtime_mins ?? 0)}</span>
+                  <div style={{ minWidth: 220 }}>
+                    <strong>{s.name ?? 'EV Charging'}</strong>
+                    <div>{s.address ?? '—'}</div>
+                    <div>{s.postcode ?? '—'}</div>
+                    <div>Source: {s.source ?? 'osm'}</div>
+                    <div>Connectors: {s.connectors ?? 1}</div>
+                    <div>
+                      Coordinates: {s.lat.toFixed(6)}, {s.lng.toFixed(6)}
                     </div>
                     <a
-                      className="inline-block mt-2 text-blue-600 underline"
+                      href={`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`}
                       target="_blank"
                       rel="noreferrer"
-                      href={`https://www.google.com/maps?q=${s.lat},${s.lon}`}
                     >
                       Open in Google Maps
                     </a>
@@ -256,25 +272,49 @@ export default function ClientMap({
           </Pane>
         )}
 
-        {/* Council polygons (test data) */}
-        {showCouncil && council && (
+        {/* Council test polygons */}
+        {showCouncil && council && council.features?.length > 0 && (
           <Pane name="council" style={{ zIndex: 300 }}>
-            <GeoJSON
-              data={council as any}
-              style={() => ({
-                color: '#14827a',
-                weight: 2,
-                fillColor: '#14827a',
-                fillOpacity: 0.15,
-              })}
-              onEachFeature={(feature, layer) => {
-                const nm =
-                  (feature?.properties as any)?.name ??
-                  (feature?.properties as any)?.NAME ??
-                  'Council';
-                layer.bindPopup(`<strong>${nm}</strong>`);
-              }}
-            />
+            {council.features.map((f, idx) => {
+              const g = f.geometry;
+              const name = f.properties?.name ?? `Area ${idx + 1}`;
+
+              if (g.type === 'Polygon') {
+                const rings = g.coordinates as number[][][];
+                return (
+                  <Polygon
+                    key={`poly-${idx}`}
+                    positions={rings.map(ringToLatLngs)}
+                    pathOptions={{
+                      color: '#0284c7',
+                      weight: 2,
+                      fillOpacity: 0.12,
+                    }}
+                  >
+                    <Popup>{name}</Popup>
+                  </Polygon>
+                );
+              }
+
+              if (g.type === 'MultiPolygon') {
+                const polys = g.coordinates as number[][][][];
+                return polys.map((poly, i2) => (
+                  <Polygon
+                    key={`mpoly-${idx}-${i2}`}
+                    positions={poly.map(ringToLatLngs)}
+                    pathOptions={{
+                      color: '#0284c7',
+                      weight: 2,
+                      fillOpacity: 0.12,
+                    }}
+                  >
+                    <Popup>{name}</Popup>
+                  </Polygon>
+                ));
+              }
+
+              return null;
+            })}
           </Pane>
         )}
       </MapContainer>
