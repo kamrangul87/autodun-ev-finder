@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Pane, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, Pane } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
 import HeatmapWithScaling, { type HeatPoint } from '@/components/HeatmapWithScaling';
+import ClusterLayer from '@/components/ClusterLayer';
+import CouncilLayer from '@/components/CouncilLayer';
 
 type Station = {
   id: number | string;
@@ -31,6 +33,7 @@ export default function ClientMap({
   // UI
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
+  const [showCouncil, setShowCouncil] = useState(true);
   const [intensity, setIntensity] = useState(1);
   const [radius, setRadius] = useState(18);
   const [blur, setBlur] = useState(0.35);
@@ -39,7 +42,6 @@ export default function ClientMap({
   const [query, setQuery] = useState('');
   const [searchPin, setSearchPin] = useState<[number, number] | null>(null);
 
-  // Load stations via your /api/ocm proxy
   useEffect(() => {
     const load = async () => {
       try {
@@ -73,7 +75,7 @@ export default function ClientMap({
     load();
   }, [initialCenter]);
 
-  // Heatmap points (value = connectors fallback 1)
+  // Heatmap data
   const heatPoints: HeatPoint[] = useMemo(
     () =>
       stations.map((s) => ({
@@ -137,52 +139,27 @@ export default function ClientMap({
           {/* Toggles */}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <input
-                type="checkbox"
-                checked={showHeatmap}
-                onChange={(e) => setShowHeatmap(e.target.checked)}
-              />
+              <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
               Heatmap
             </label>
             <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-              <input
-                type="checkbox"
-                checked={showMarkers}
-                onChange={(e) => setShowMarkers(e.target.checked)}
-              />
+              <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
               Markers
+            </label>
+            <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <input type="checkbox" checked={showCouncil} onChange={(e) => setShowCouncil(e.target.checked)} />
+              Council
             </label>
           </div>
 
           {/* Sliders */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
-            <input
-              type="range"
-              min={0.5}
-              max={5}
-              step={0.5}
-              value={intensity}
-              onChange={(e) => setIntensity(Number(e.target.value))}
-            />
+            <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} />
             <span style={{ fontSize: 12, color: '#444' }}>Radius</span>
-            <input
-              type="range"
-              min={8}
-              max={40}
-              step={2}
-              value={radius}
-              onChange={(e) => setRadius(Number(e.target.value))}
-            />
+            <input type="range" min={8} max={40} step={2} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
             <span style={{ fontSize: 12, color: '#444' }}>Blur</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={blur}
-              onChange={(e) => setBlur(Number(e.target.value))}
-            />
+            <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e) => setBlur(Number(e.target.value))} />
           </div>
 
           {/* Search */}
@@ -241,31 +218,19 @@ export default function ClientMap({
           </Pane>
         )}
 
-        {/* Markers */}
+        {/* Council overlay */}
+        {showCouncil && (
+          <Pane name="council" style={{ zIndex: 250, pointerEvents: 'none' }}>
+            <CouncilLayer url="/data/london_boroughs.geojson" />
+          </Pane>
+        )}
+
+        {/* Clustered markers */}
         {showMarkers && (
           <Pane name="markers" style={{ zIndex: 300 }}>
-            {stations.map((s) => (
-              <Marker key={s.id} position={[s.lat, s.lng]}>
-                <Popup>
-                  <div style={{ minWidth: 220 }}>
-                    <strong>{s.name}</strong>
-                    <div>{s.address}</div>
-                    <div>{s.postcode}</div>
-                    <div>Connectors: {s.connectors ?? 0}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <a
-                        href={`https://maps.google.com/?q=${s.lat},${s.lng}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open in Google Maps
-                      </a>
-                    </div>
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-            {searchPin && <Marker position={searchPin} />}
+            <ClusterLayer stations={stations} />
+            {/* Search pin can sit on top of clusters if you want:
+            {searchPin && <Marker position={searchPin} />} */}
           </Pane>
         )}
       </MapContainer>
