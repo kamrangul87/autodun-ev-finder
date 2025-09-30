@@ -14,7 +14,7 @@ import 'leaflet/dist/leaflet.css';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer';
+import HeatLayer, { type HeatOptions, type HeatPoint } from '@/components/HeatLayer';
 import SearchControl from '@/components/SearchControl';
 
 // ---------- Types ----------
@@ -24,22 +24,11 @@ type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // NOTE: backend uses "lon"
+  lon: number; // NOTE: backend returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
   source: string;
-};
-
-type HeatOptions = {
-  radius?: number;
-  blur?: number;
-  minOpacity?: number;
-  /** weight multiplier we apply when building points (not a leaflet.heat option) */
-  intensity?: number;
-  /** leaflet.heat accepts these; include them so TS doesn't complain */
-  maxZoom?: number;
-  max?: number;
 };
 
 type Props = {
@@ -50,7 +39,8 @@ type Props = {
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  heatOptions?: HeatOptions;
+  /** UI passes these; we also allow an extra "intensity" multiplier for weighting */
+  heatOptions?: HeatOptions & { intensity?: number };
 
   onStationsCount?: (n: number) => void;
 };
@@ -82,7 +72,6 @@ function StationsFetcher({
 
         const b = map.getBounds();
         const z = map.getZoom();
-        // Your route expects separate params: west,south,east,north,zoom
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -102,10 +91,7 @@ function StationsFetcher({
           });
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
-
-          // Contract: { items: Station[] }
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-          // Keep only valid coordinates
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon),
           );
@@ -252,19 +238,16 @@ export default function ClientMap({
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<Station | null>(null);
 
-  // keep your header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
   // Build heatmap points [lat, lon, weight] from stations
-  type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     const mult = Number(heatOptions?.intensity ?? 1);
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
-        // weight by connectors; clamp to [0.2, 1]
         const base = Number(s.connectors ?? 1);
         let w = Math.max(0.2, Math.min(1, base / 4));
         w = Math.max(0, Math.min(1, w * mult));
