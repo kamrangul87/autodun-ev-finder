@@ -19,7 +19,7 @@ import CouncilLayer from '@/components/CouncilLayer';
 import SearchControl from '@/components/SearchControl';
 import StationPanel from '@/components/StationPanel';
 
-// ✅ Import only what actually exists from HeatmapWithScaling
+// Import HeatLayer + its Point type
 import HeatLayer, { type Point as HeatPoint } from '@/components/HeatmapWithScaling';
 
 // ---------- Types ----------
@@ -36,7 +36,6 @@ type Station = {
   source: string;
 };
 
-// Minimal options we pass through to HeatLayer
 type HeatOpts = {
   radius?: number;
   blur?: number;
@@ -47,14 +46,10 @@ type HeatOpts = {
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
-
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
-
   onStationsCount?: (n: number) => void;
-
-  /** Optional heatmap tuning coming from the page controls */
   heatOptions?: HeatOpts;
 };
 
@@ -67,7 +62,6 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// Simple blue dot as a DivIcon (no image assets needed)
 const dotIcon = L.divIcon({
   className: '',
   html:
@@ -76,7 +70,7 @@ const dotIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-// ---------- Fetcher that follows your API contract ----------
+// ---------- Fetcher ----------
 function StationsFetcher({
   enabled,
   onData,
@@ -94,7 +88,6 @@ function StationsFetcher({
 
         const b = map.getBounds();
         const z = map.getZoom();
-
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -134,8 +127,7 @@ function StationsFetcher({
 
   useEffect(() => {
     refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled]);
+  }, [refetch]);
 
   useMapEvents({
     moveend: refetch,
@@ -145,7 +137,7 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Small controls (Locate / Reset) ----------
+// ---------- Locate / Reset ----------
 function LocateResetControls({
   homeCenter,
   homeZoom,
@@ -210,7 +202,7 @@ function LocateResetControls({
   return null;
 }
 
-// ---------- Main component ----------
+// ---------- Main ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -222,19 +214,18 @@ export default function ClientMap({
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
 
-  // Keep header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations
+  // Heatmap input: { lat, lng, value }
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
-        const w = Math.max(0.2, Math.min(1, base / 4));
-        return [Number(s.lat), Number(s.lon), w] as HeatPoint;
+        const value = Math.max(0.2, Math.min(1, base / 4));
+        return { lat: Number(s.lat), lng: Number(s.lon), value } as HeatPoint;
       });
   }, [stations]);
 
@@ -250,16 +241,12 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Search box (top-left) */}
         <SearchControl />
 
-        {/* Fetch stations on move/zoom using your API */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* Council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* Heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && (
           <HeatLayer
             points={heatPoints}
@@ -272,7 +259,6 @@ export default function ClientMap({
           />
         )}
 
-        {/* Markers (clustered) */}
         {showMarkers && (
           <>
             <Pane name="stations-pane" style={{ zIndex: 400 }} />
@@ -322,7 +308,6 @@ export default function ClientMap({
           </>
         )}
 
-        {/* Locate / Reset controls (bottom-right) */}
         <LocateResetControls homeCenter={initialCenter} homeZoom={initialZoom} />
       </MapContainer>
     </div>
