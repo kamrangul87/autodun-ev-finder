@@ -1,7 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo } from 'react';
-import { X } from 'lucide-react';
+import React, { useMemo } from 'react';
 import type { Station } from '@/types';
 
 type Props = {
@@ -10,19 +9,36 @@ type Props = {
 };
 
 export default function PopupPanel({ station, onClose }: Props) {
-  // If nothing selected, render nothing to keep DOM clean
   if (!station) return null;
 
-  // Compute Google Maps link lazily
   const gmapsHref = useMemo(() => {
-    const lat = station?.lat ?? station?.latitude;
-    const lng = station?.lng ?? station?.longitude;
+    const lat = (station as any).lat ?? (station as any).latitude;
+    const lng = (station as any).lng ?? (station as any).longitude;
     return `https://maps.google.com/?q=${lat},${lng}`;
   }, [station]);
 
+  // Minimal inline "X" icon to avoid extra dependencies
+  const XIcon = (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M18 6L6 18M6 6l12 12"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+
   return (
     <>
-      {/* Backdrop only on small screens to emulate a sheet */}
+      {/* Backdrop for mobile bottom sheet */}
       <div
         className="fixed inset-0 z-[1199] bg-black/20 md:hidden"
         onClick={onClose}
@@ -61,7 +77,7 @@ export default function PopupPanel({ station, onClose }: Props) {
               bg-white hover:bg-gray-100 border border-black/5
             "
           >
-            <X size={16} />
+            {XIcon}
           </button>
 
           {/* Title */}
@@ -72,32 +88,34 @@ export default function PopupPanel({ station, onClose }: Props) {
           <dl className="mt-3 space-y-1.5 text-sm">
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Address</dt>
-              <dd className="flex-1">{station.address ?? '—'}</dd>
+              <dd className="flex-1">{(station as any).address ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Postcode</dt>
-              <dd className="flex-1">{station.postcode ?? '—'}</dd>
+              <dd className="flex-1">{(station as any).postcode ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Source</dt>
-              <dd className="flex-1">{station.source ?? 'osm'}</dd>
+              <dd className="flex-1">{(station as any).source ?? 'osm'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Connectors</dt>
-              <dd className="flex-1">{station.connectors ?? '—'}</dd>
+              <dd className="flex-1">{(station as any).connectors ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Reports</dt>
-              <dd className="flex-1">{station.reports ?? 0}</dd>
+              <dd className="flex-1">{(station as any).reports ?? 0}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Downtime (mins)</dt>
-              <dd className="flex-1">{station.downtimeMins ?? 0}</dd>
+              <dd className="flex-1">{(station as any).downtimeMins ?? 0}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Coordinates</dt>
               <dd className="flex-1">
-                {(station.lat ?? station.latitude)?.toFixed(6)}, {(station.lng ?? station.longitude)?.toFixed(6)}
+                {(((station as any).lat ?? (station as any).latitude) as number)?.toFixed(6)}
+                ,{' '}
+                {(((station as any).lng ?? (station as any).longitude) as number)?.toFixed(6)}
               </dd>
             </div>
           </dl>
