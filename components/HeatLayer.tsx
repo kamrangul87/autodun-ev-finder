@@ -3,15 +3,15 @@
 import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 
-type HeatPoint = [number, number, number];
+export type HeatPoint = [number, number, number];
 
 export type HeatOptions = {
-  radius?: number;      // px
-  blur?: number;        // px
-  max?: number;         // 0..1
-  minOpacity?: number;  // 0..1
-  /** Custom intensity multiplier we add on top of leaflet.heat */
-  boost?: number;       // e.g. 0.5 .. 3
+  radius?: number;
+  blur?: number;
+  minOpacity?: number;
+  /** extras supported by leaflet.heat */
+  maxZoom?: number;
+  max?: number;
 };
 
 export default function HeatLayer({
@@ -33,25 +33,21 @@ export default function HeatLayer({
 
       if (cancelled || !map) return;
 
-      // Remove any previous instance
+      // remove previous layer (if any)
       if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
-      if (!points.length) return;
+      if (!points?.length) return;
 
-      // Apply optional boost to the weight and clamp to [0,1]
-      const boost = options?.boost ?? 1;
-      const boosted: HeatPoint[] =
-        boost === 1
-          ? points
-          : points.map(([lat, lon, w]) => [lat, lon, Math.max(0, Math.min(1, w * boost))] as HeatPoint);
-
-      const layer = (L as any).heatLayer(boosted, {
+      const layer = (L as any).heatLayer(points, {
         radius: options?.radius ?? 45,
         blur: options?.blur ?? 25,
-        max: options?.max ?? 1.0,
         minOpacity: options?.minOpacity ?? 0.35,
+        maxZoom: options?.maxZoom ?? 17,
+        max: options?.max ?? 1.0,
       });
 
       layer.addTo(map);
@@ -61,20 +57,13 @@ export default function HeatLayer({
     return () => {
       cancelled = true;
       if (layerRef.current && map) {
-        try { map.removeLayer(layerRef.current); } catch {}
+        try {
+          map.removeLayer(layerRef.current);
+        } catch {}
         layerRef.current = null;
       }
     };
-  // include every option we read so React updates when they change
-  }, [
-    map,
-    points,
-    options?.radius,
-    options?.blur,
-    options?.max,
-    options?.minOpacity,
-    options?.boost,
-  ]);
+  }, [map, points, options?.radius, options?.blur, options?.minOpacity, options?.maxZoom, options?.max]);
 
   return null;
 }
