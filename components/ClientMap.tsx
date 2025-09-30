@@ -1,317 +1,127 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
   Pane,
-  Tooltip,
-  Popup,
-  Marker,
   useMap,
-  useMapEvents,
 } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
-import L from 'leaflet';
-import MarkerClusterGroup from 'react-leaflet-cluster';
+import type { Map as LeafletMap } from 'leaflet';
 
-import CouncilLayer from '@/components/CouncilLayer';
-import SearchControl from '@/components/SearchControl';
-import StationPanel from '@/components/StationPanel';
-import HeatLayer, { type Point as HeatPoint } from '@/components/HeatmapWithScaling';
+import TopControls type { CouncilOption } from '@/components/TopControls';
+import PopupPanel from '@/components/PopupPanel';
+import HeatmapWithScaling from '@/components/HeatmapWithScaling';
+import ClusterLayer from '@/components/ClusterLayer';
 
-// ---------- Types ----------
+/** Minimal station shape shared across layers (kept local to avoid aliases) */
 type Station = {
-  id: string | number | null;
-  name: string | null;
-  addr: string | null;
-  postcode: string | null;
-  lat: number;
-  lon: number; // server returns "lon"
-  connectors: number;
-  reports: number;
-  downtime: number;
-  source: string;
-};
-
-type HeatOpts = {
-  radius?: number;
-  blur?: number;
-  minOpacity?: number;
-  max?: number;
+  id?: string | number;
+  name?: string;
+  address?: string;
+  postcode?: string;
+  source?: string;
+  connectors?: number | string;
+  reports?: number;
+  downtimeMins?: number;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
+  councilCode?: string;
 };
 
 type Props = {
+  /** Optional preloaded stations (else your layers can fetch internally) */
+  stations?: Station[];
   initialCenter?: [number, number];
   initialZoom?: number;
-
-  showHeatmap?: boolean;
-  showMarkers?: boolean;
-  showCouncil?: boolean;
-
-  onStationsCount?: (n: number) => void;
-
-  heatOptions?: HeatOpts;
 };
 
-// ---------- utils ----------
-function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
-  let t: any;
-  return (...args: Parameters<T>) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
-  };
-}
-
-const dotIcon = L.divIcon({
-  className: '',
-  html:
-    '<span style="display:block;width:10px;height:10px;border:2px solid #2D6CDF;border-radius:50%;background:#2F80ED;box-shadow:0 0 0 2px rgba(255,255,255,0.9)"></span>',
-  iconSize: [16, 16],
-  iconAnchor: [8, 8],
-});
-
-// ---------- Fetcher ----------
-function StationsFetcher({
-  enabled,
-  onData,
-}: {
-  enabled: boolean;
-  onData: (items: Station[]) => void;
-}) {
+/** Create/normalize panes with predictable stacking */
+function EnsurePanes() {
   const map = useMap();
-  const abortRef = useRef<AbortController | null>(null);
-
-  const refetch = useMemo(
-    () =>
-      debounce(async () => {
-        if (!enabled || !map) return;
-
-        const b = map.getBounds();
-        const z = map.getZoom();
-        const params = new URLSearchParams({
-          west: String(b.getWest()),
-          south: String(b.getSouth()),
-          east: String(b.getEast()),
-          north: String(b.getNorth()),
-          zoom: String(z),
-        });
-
-        if (abortRef.current) abortRef.current.abort();
-        const ac = new AbortController();
-        abortRef.current = ac;
-
-        try {
-          const res = await fetch(`/api/stations?${params.toString()}`, {
-            signal: ac.signal,
-            cache: 'no-store',
-          });
-          if (!res.ok) throw new Error(`stations ${res.status}`);
-          const json = await res.json();
-
-          const items: Station[] = Array.isArray(json?.items) ? json.items : [];
-          const clean = items.filter(
-            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
-          );
-          onData(clean);
-        } catch (e: any) {
-          if (e?.name !== 'AbortError') {
-            console.error('Stations fetch failed:', e);
-            onData([]);
-          }
-        } finally {
-          if (abortRef.current === ac) abortRef.current = null;
-        }
-      }, 350),
-    [enabled, map]
-  );
-
   useEffect(() => {
-    refetch();
-  }, [refetch]);
-
-  useMapEvents({
-    moveend: refetch,
-    zoomend: refetch,
-  });
-
-  return null;
-}
-
-// ---------- Locate / Reset ----------
-function LocateResetControls({
-  homeCenter,
-  homeZoom,
-}: {
-  homeCenter: [number, number];
-  homeZoom: number;
-}) {
-  const map = useMap();
-
-  useEffect(() => {
-    const Control = L.Control.extend({
-      onAdd: () => {
-        const container = L.DomUtil.create('div', 'leaflet-bar');
-        container.style.background = 'white';
-        container.style.padding = '8px';
-        container.style.borderRadius = '8px';
-        container.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
-        container.style.display = 'flex';
-        container.style.flexDirection = 'column';
-        container.style.gap = '6px';
-
-        const locate = L.DomUtil.create('button', '', container);
-        locate.type = 'button';
-        locate.textContent = '📍 Locate';
-        locate.style.cursor = 'pointer';
-        locate.style.padding = '6px 8px';
-        locate.style.border = '1px solid #e5e7eb';
-        locate.style.borderRadius = '6px';
-        locate.style.background = '#fff';
-
-        const reset = L.DomUtil.create('button', '', container);
-        reset.type = 'button';
-        reset.textContent = '↺ Reset';
-        reset.style.cursor = 'pointer';
-        reset.style.padding = '6px 8px';
-        reset.style.border = '1px solid #e5e7eb';
-        reset.style.borderRadius = '6px';
-        reset.style.background = '#fff';
-
-        L.DomEvent.on(locate, 'click', (e) => {
-          L.DomEvent.stopPropagation(e);
-          map.locate({ setView: true, maxZoom: 16 });
-        });
-
-        L.DomEvent.on(reset, 'click', (e) => {
-          L.DomEvent.stopPropagation(e);
-          map.setView(homeCenter, homeZoom);
-        });
-
-        return container;
-      },
-      onRemove: () => void 0,
+    const defs: Array<[string, number, ('auto' | 'none')?]> = [
+      ['base', 100, 'auto'],      // tiles
+      ['heatmap', 200, 'auto'],   // heat layer
+      ['clusters', 300, 'auto'],  // markers / clusters
+      ['popups', 400, 'auto'],    // (Leaflet default popups if ever used)
+      ['ui', 1000, 'none'],       // reserved for in-map UI
+    ];
+    defs.forEach(([name, z, pe]) => {
+      const pane = map.getPane(name) ?? map.createPane(name);
+      pane.style.zIndex = String(z);
+      pane.style.pointerEvents = pe ?? 'auto';
     });
-
-    const ctl = new Control({ position: 'bottomright' });
-    map.addControl(ctl);
-    return () => {
-      map.removeControl(ctl);
-    };
-  }, [map, homeCenter, homeZoom]);
-
+  }, [map]);
   return null;
 }
 
-// ---------- Main ----------
 export default function ClientMap({
-  initialCenter = [51.509, -0.118],
-  initialZoom = 12,
-  showHeatmap = true,
-  showMarkers = true,
-  showCouncil = true,
-  onStationsCount,
-  heatOptions,
+  stations = [],
+  initialCenter = [51.5072, -0.1276], // London
+  initialZoom = 9,
 }: Props) {
-  const [stations, setStations] = useState<Station[]>([]);
+  const mapRef = useRef<LeafletMap | null>(null);
 
-  useEffect(() => {
-    onStationsCount?.(stations.length);
-  }, [stations.length, onStationsCount]);
+  // Right-docked/bottom-sheet panel state
+  const [activeStation, setActiveStation] = useState<Station | null>(null);
 
-  // Heatmap input: { lat, lng, value }
-  const heatPoints = useMemo<HeatPoint[]>(() => {
-    return (stations ?? [])
-      .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
-      .map((s) => {
-        const base = Number(s.connectors ?? 1);
-        const value = Math.max(0.2, Math.min(1, base / 4));
-        return { lat: Number(s.lat), lng: Number(s.lon), value } as HeatPoint;
-      });
-  }, [stations]);
+  // Optional council filter state (TopControls shows a clear chip; expand as needed)
+  const [council, setCouncil] = useState<CouncilOption | null>(null);
+
+  // Apply council filtering locally (adjust to your station schema)
+  const filteredStations = useMemo(() => {
+    if (!council) return stations;
+    return stations.filter((s) => s.councilCode === council.value);
+  }, [stations, council]);
+
+  const handleMarkerClick = (s: Station) => setActiveStation(s);
+  const handleClosePanel = () => setActiveStation(null);
 
   return (
-    <div className="w-full h-[70vh] relative">
+    <div className="map-root">
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
-        className="w-full h-full rounded-xl overflow-hidden"
+        ref={(ref) => { if (ref) mapRef.current = ref; }}
+        className="leaflet-map"
+        preferCanvas
       >
-        <TileLayer
-          attribution="&copy; OpenStreetMap contributors"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <EnsurePanes />
 
-        <SearchControl />
-
-        <StationsFetcher enabled={true} onData={setStations} />
-
-        {showCouncil && <CouncilLayer enabled />}
-
-        {showHeatmap && heatPoints.length > 0 && (
-          <HeatLayer
-            points={heatPoints}
-            options={{
-              radius: heatOptions?.radius ?? 28,
-              blur: heatOptions?.blur ?? 25,
-              minOpacity: heatOptions?.minOpacity ?? 0.35,
-              max: heatOptions?.max ?? 1.0,
-            }}
+        {/* Base tiles */}
+        <Pane name="base">
+          <TileLayer
+            attribution="&copy; OpenStreetMap contributors"
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-        )}
+        </Pane>
 
-        {showMarkers && (
-          <>
-            <Pane name="stations-pane" style={{ zIndex: 400 }} />
-            <MarkerClusterGroup
-              chunkedLoading
-              showCoverageOnHover={false}
-              spiderfyOnMaxZoom
-              maxClusterRadius={42}
-            >
-              {stations.map((s, i) => (
-                <Marker
-                  key={`${s.id ?? i}`}
-                  position={[s.lat, s.lon]}
-                  icon={dotIcon}
-                >
-                  {(s.name || s.addr) && (
-                    <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-                      <div style={{ fontSize: 12 }}>
-                        {s.name && (
-                          <div>
-                            <strong>{s.name}</strong>
-                          </div>
-                        )}
-                        {s.addr && <div>{s.addr}</div>}
-                      </div>
-                    </Tooltip>
-                  )}
-                  <Popup>
-                    <StationPanel
-                      station={{
-                        id: s.id,
-                        name: s.name,
-                        addr: s.addr,
-                        postcode: s.postcode,
-                        lat: s.lat,
-                        lon: s.lon,
-                        connectors: s.connectors,
-                        reports: s.reports,
-                        downtime: s.downtime,
-                        source: s.source,
-                      }}
-                      onClose={() => {}}
-                    />
-                  </Popup>
-                </Marker>
-              ))}
-            </MarkerClusterGroup>
-          </>
-        )}
+        {/* Heatmap */}
+        <Pane name="heatmap">
+          <HeatmapWithScaling points={filteredStations} />
+        </Pane>
 
-        <LocateResetControls homeCenter={initialCenter} homeZoom={initialZoom} />
+        {/* Markers / clusters (no Leaflet <Popup>; click opens React panel) */}
+        <Pane name="clusters">
+          <ClusterLayer
+            stations={filteredStations}
+            onMarkerClick={handleMarkerClick}
+          />
+        </Pane>
+
+        {/* Absolute top controls (measures height and sets CSS vars) */}
+        <TopControls
+          mapRef={mapRef}
+          council={council}
+          onCouncilChange={setCouncil}
+        />
       </MapContainer>
+
+      {/* Right-docked details panel (desktop) / bottom sheet (mobile) */}
+      <PopupPanel station={activeStation} onClose={handleClosePanel} />
     </div>
   );
 }
