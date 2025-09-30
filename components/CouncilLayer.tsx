@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import type * as L from 'leaflet';
+import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
 
-// ---------- small helpers ----------
-function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
+// tiny debounce helper
+function debounce<T extends (...a: any[]) => void>(fn: T, wait = 300) {
   let t: any;
   return (...args: Parameters<T>) => {
     clearTimeout(t);
@@ -14,44 +13,24 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-function getName(f: Feature<Geometry, any>): string | null {
-  const p = (f.properties || {}) as Record<string, any>;
-  return (
-    p.name ??
-    p.lad23nm ??
-    p.lad20nm ??
-    p.lad17nm ??
-    p.borough ??
-    p.LAD13NM ??
-    p.LAD17NM ??
-    p.LAD19NM ??
-    p.NM_MNCP ??
-    null
-  );
-}
-
-// TS type guard: only path-like layers have setStyle / bringToFront
-function isPath(layer: any): layer is L.Path {
-  return !!layer && typeof layer.setStyle === 'function';
-}
-
-// ---------- props ----------
 type Props = {
   enabled: boolean;
-  /** Hide layer below this zoom level (default 9) */
+  /** polygons are hidden below this zoom */
   minZoom?: number;
-  /** Show tooltips from this zoom level (default 12) */
-  labelMinZoom?: number;
+  /** called when user clicks a polygon */
+  onSelect?: (f: Feature) => void;
+  /** name (or id) of the currently selected polygon for highlight */
+  selectedKey?: string | null;
+  /** which feature property to use as the id/key (default "name") */
+  keyProp?: string;
 };
 
-// Enable debug rectangles only if you explicitly set this env in the client build
-const DEBUG = process.env.NEXT_PUBLIC_COUNCIL_DEBUG === '1';
-
-// ---------- component ----------
 export default function CouncilLayer({
   enabled,
-  minZoom = 9,
-  labelMinZoom = 12,
+  minZoom = 10,
+  onSelect,
+  selectedKey,
+  keyProp = 'name',
 }: Props) {
   const map = useMap();
   const [data, setData] = useState<FeatureCollection | null>(null);
@@ -72,7 +51,6 @@ export default function CouncilLayer({
         const b = map.getBounds();
         const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
         const qs = new URLSearchParams({ bbox });
-        if (DEBUG) qs.set('debug', '1');
 
         if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
@@ -97,7 +75,7 @@ export default function CouncilLayer({
         } finally {
           if (abortRef.current === ac) abortRef.current = null;
         }
-      }, 350),
+      }, 300),
     [enabled, map, minZoom]
   );
 
@@ -111,62 +89,48 @@ export default function CouncilLayer({
     zoomend: refetch,
   });
 
-  // map tiles (~200) < councils (300) < markers (400)
-  const baseStyle = useMemo(
-    () =>
-      ({
-        color: '#136f63',
-        weight: 1.5,
-        opacity: 0.9,
-        dashArray: '4,3', // subtle dashed border; remove if you prefer solid
-        fillColor: '#136f63',
-        fillOpacity: 0.10,
-      }) as L.PathOptions,
-    []
-  );
-
-  const style = () => baseStyle;
+  const style = (feature?: Feature) => {
+    const k = String(feature?.properties?.[keyProp] ?? '');
+    const selected = selectedKey && k === selectedKey;
+    return {
+      color: selected ? '#0a7' : '#1d6b66',
+      weight: selected ? 2.5 : 1.5,
+      opacity: selected ? 1 : 0.9,
+      fillColor: selected ? '#0a7' : '#1d6b66',
+      fillOpacity: selected ? 0.18 : 0.10,
+    };
+  };
 
   return (
     <>
+      {/* tiles (~200) < council (300) < markers (400) */}
       <Pane name="council-pane" style={{ zIndex: 300 }} />
       {enabled && data ? (
         <GeoJSON
-          key={`council-${seq}-${data.features.length}`}
+          key={`council-${seq}-${data.features.length}-${selectedKey ?? 'none'}`}
           pane="council-pane"
           data={data as any}
           style={style}
-          onEachFeature={(feature: Feature<Geometry, any>, layer) => {
-            // Bind a tooltip with the best-guess name
-            const name = getName(feature);
-            if (name && (layer as any).bindTooltip) {
-              (layer as any).bindTooltip(name, {
-                direction: 'center',
-                className: 'council-label',
-                permanent: false, // we'll toggle open/close by zoom
-                opacity: 0.9,
-              });
+          onEachFeature={(feature: Feature<Geometry, any>, layer: any) => {
+            const name = feature?.properties?.[keyProp];
+            if (name) {
+              try {
+                layer.bindTooltip(String(name), { direction: 'auto' });
+              } catch {}
             }
 
-            // Hover highlight for path-like layers
-            if (isPath(layer)) {
-              layer.on('mouseover', () => {
-                layer.setStyle({ weight: 3, fillOpacity: 0.22 } as L.PathOptions);
-                (layer as any).bringToFront?.();
-              });
-              layer.on('mouseout', () => {
-                layer.setStyle(baseStyle);
-              });
+            // hover highlight
+            layer.on('mouseover', () => {
+              layer.setStyle({ weight: 2.5, fillOpacity: 0.18 }).bringToFront();
+            });
+            layer.on('mouseout', () => {
+              layer.setStyle(style(feature));
+            });
 
-              // Show/hide label by zoom level
-              const toggleLabel = () => {
-                const show = map.getZoom() >= labelMinZoom;
-                if (show) (layer as any).openTooltip?.();
-                else (layer as any).closeTooltip?.();
-              };
-              toggleLabel();
-              map.on('zoomend', toggleLabel);
-            }
+            // click to select
+            layer.on('click', () => {
+              onSelect?.(feature);
+            });
           }}
         />
       ) : null}
