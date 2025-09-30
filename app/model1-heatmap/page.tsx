@@ -2,12 +2,11 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import dynamic from 'next/dynamic';
+import NextDynamic from 'next/dynamic';
 
-// Leaflet/Map component must be client-only:
-const ClientMap = dynamic(() => import('@/components/ClientMap'), {
+// Client-only map (no SSR) to avoid `window is not defined`
+const ClientMap = NextDynamic(() => import('@/components/ClientMap'), {
   ssr: false,
-  // optional: show a lightweight loader while the client bundle hydrates
   loading: () => <div className="p-4 text-sm">Loading map…</div>,
 });
 
