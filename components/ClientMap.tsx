@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Pane, useMap } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
 
@@ -9,7 +9,28 @@ import PopupPanel from '@/components/PopupPanel';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 
-/** Station shape kept local */
+/** ---- Error boundary (local, client-only) ---- */
+class PartBoundary extends React.Component<
+  { label: string; onTrip?: (label: string, err: any) => void; children: React.ReactNode },
+  { tripped: boolean; msg?: string }
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { tripped: false };
+  }
+  static getDerivedStateFromError(err: any) {
+    return { tripped: true, msg: String(err?.message ?? err) };
+  }
+  componentDidCatch(error: any) {
+    this.props.onTrip?.(this.props.label, error);
+  }
+  render() {
+    if (this.state.tripped) return null;
+    return this.props.children as any;
+  }
+}
+
+/** ---- Local shapes ---- */
 type Station = {
   id?: string | number;
   name?: string;
@@ -35,12 +56,11 @@ type Props = {
 
   showHeatmap?: boolean;
   showMarkers?: boolean;
-  showCouncil?: boolean;
-  onStationsCount?: (n: number) => void;
+  showCouncil?: boolean; // reserved for future overlay
   heatOptions?: Record<string, any>;
 };
 
-/** Make panes with stable z-indices */
+/** ---- Pane setup ---- */
 function EnsurePanes() {
   const map = useMap();
   useEffect(() => {
@@ -60,28 +80,23 @@ function EnsurePanes() {
   return null;
 }
 
-/** Defensive wrapper so a heatmap error can’t crash the whole page */
+/** ---- Safe heatmap wrapper ---- */
 function SafeHeatmap({ points, options }: { points: HeatPoint[]; options: Record<string, any> }) {
-  try {
-    if (!Array.isArray(points) || points.length === 0) return null;
-    // Validate items
-    const safe = points.filter(
-      (p) =>
-        typeof p?.lat === 'number' &&
-        typeof p?.lng === 'number' &&
-        Number.isFinite(p.lat) &&
-        Number.isFinite(p.lng) &&
-        typeof p?.value === 'number' &&
-        Number.isFinite(p.value)
-    );
-    if (safe.length === 0) return null;
-    return <HeatmapWithScaling points={safe} {...options} />;
-  } catch {
-    // swallow runtime errors to avoid white screen
-    return null;
-  }
+  if (!Array.isArray(points) || points.length === 0) return null;
+  const safe = points.filter(
+    (p) =>
+      typeof p?.lat === 'number' &&
+      typeof p?.lng === 'number' &&
+      Number.isFinite(p.lat) &&
+      Number.isFinite(p.lng) &&
+      typeof p?.value === 'number' &&
+      Number.isFinite(p.value)
+  );
+  if (safe.length === 0) return null;
+  return <HeatmapWithScaling points={safe} {...options} />;
 }
 
+/** ---- Map ---- */
 export default function ClientMap({
   stations = [],
   initialCenter = [51.5072, -0.1276],
@@ -89,8 +104,7 @@ export default function ClientMap({
 
   showHeatmap = true,
   showMarkers = true,
-  showCouncil = true, // reserved for future council overlay toggle
-  onStationsCount,
+  showCouncil = true, // (not used yet)
   heatOptions = {},
 }: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
@@ -98,19 +112,19 @@ export default function ClientMap({
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [council, setCouncil] = useState<CouncilOption | null>(null);
 
+  // Flags that auto-disable a feature if it trips the boundary
+  const [heatOk, setHeatOk] = useState(true);
+  const [markersOk, setMarkersOk] = useState(true);
+  const [controlsOk, setControlsOk] = useState(true);
+
   const filteredStations = useMemo(() => {
     if (!council) return stations;
     return stations.filter((s) => s.councilCode === council.value);
   }, [stations, council]);
 
-  useEffect(() => {
-    onStationsCount?.(filteredStations.length);
-  }, [filteredStations.length, onStationsCount]);
-
   const handleMarkerClick = (s: Station) => setActiveStation(s);
   const handleClosePanel = () => setActiveStation(null);
 
-  // Map to heat points safely
   const heatPoints: HeatPoint[] = useMemo(() => {
     return filteredStations
       .map((s) => {
@@ -143,7 +157,7 @@ export default function ClientMap({
       >
         <EnsurePanes />
 
-        {/* Base tiles */}
+        {/* Base tiles (never disable) */}
         <Pane name="base">
           <TileLayer
             attribution="&copy; OpenStreetMap contributors"
@@ -151,22 +165,30 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Heatmap (toggleable, sandboxed) */}
-        {showHeatmap && (
+        {/* Heatmap */}
+        {showHeatmap && heatOk && (
           <Pane name="heatmap">
-            <SafeHeatmap points={heatPoints} options={heatOptions} />
+            <PartBoundary label="heatmap" onTrip={() => setHeatOk(false)}>
+              <SafeHeatmap points={heatPoints} options={heatOptions} />
+            </PartBoundary>
           </Pane>
         )}
 
-        {/* Markers / clusters (toggleable) */}
-        {showMarkers && (
+        {/* Markers / clusters */}
+        {showMarkers && markersOk && (
           <Pane name="clusters">
-            <ClusterLayer stations={filteredStations} onMarkerClick={handleMarkerClick} visible />
+            <PartBoundary label="markers" onTrip={() => setMarkersOk(false)}>
+              <ClusterLayer stations={filteredStations} onMarkerClick={handleMarkerClick} visible />
+            </PartBoundary>
           </Pane>
         )}
 
-        {/* Top controls (measures height, sets CSS vars) */}
-        <TopControls mapRef={mapRef} council={council} onCouncilChange={setCouncil} />
+        {/* Top controls */}
+        {controlsOk && (
+          <PartBoundary label="controls" onTrip={() => setControlsOk(false)}>
+            <TopControls mapRef={mapRef} council={council} onCouncilChange={setCouncil} />
+          </PartBoundary>
+        )}
       </MapContainer>
 
       {/* Right-docked details panel / bottom sheet */}
