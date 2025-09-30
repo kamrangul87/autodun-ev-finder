@@ -27,7 +27,6 @@ function EnsurePanes() {
       ['base', 100, 'auto'],
       ['heatmap', 200, 'auto'],
       ['markers', 300, 'auto'],
-      ['ui', 1000, 'none'],
     ];
     defs.forEach(([name, z, pe]) => {
       const pane = map.getPane(name) ?? map.createPane(name);
@@ -162,32 +161,11 @@ export default function ClientMap({
           {/* Simple sliders */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
-            <input
-              type="range"
-              min={0.5}
-              max={5}
-              step={0.5}
-              value={intensity}
-              onChange={(e) => setIntensity(Number(e.target.value))}
-            />
+            <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} />
             <span style={{ fontSize: 12, color: '#444' }}>Radius</span>
-            <input
-              type="range"
-              min={8}
-              max={40}
-              step={2}
-              value={radius}
-              onChange={(e) => setRadius(Number(e.target.value))}
-            />
+            <input type="range" min={8} max={40} step={2} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
             <span style={{ fontSize: 12, color: '#444' }}>Blur</span>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={blur}
-              onChange={(e) => setBlur(Number(e.target.value))}
-            />
+            <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e) => setBlur(Number(e.target.value))} />
           </div>
 
           {/* Search bar */}
@@ -240,14 +218,12 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Heatmap */}
         {showHeatmap && (
           <Pane name="heatmap">
             <HeatmapWithScaling points={heatPoints} intensity={intensity} radius={radius} blur={blur} />
           </Pane>
         )}
 
-        {/* Markers */}
         {showMarkers && (
           <Pane name="markers">
             {stations.map((s) => (
@@ -272,7 +248,6 @@ export default function ClientMap({
         )}
       </MapContainer>
 
-      {/* Non-blocking error notice */}
       {error && (
         <div
           style={{
