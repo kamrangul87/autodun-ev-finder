@@ -4,38 +4,37 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
-  Pane,
-  Tooltip,
   useMap,
   useMapEvents,
-  Marker,
+  CircleMarker,
+  Tooltip,
+  Pane,
 } from 'react-leaflet';
+import type { Feature, Geometry } from 'geojson';
 import 'leaflet/dist/leaflet.css';
 
-import L from 'leaflet';
-import MarkerClusterGroup from 'react-leaflet-cluster';
-
 import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer from '@/components/HeatLayer';
+import HeatLayer from '@/components/HeatmapWithScaling'; // your heat component that accepts { points, options? }
 import SearchControl from '@/components/SearchControl';
-import StationPanel from '@/components/StationPanel';
-import MapButtons from '@/components/MapButtons';
 
-/* ---------- Types ---------- */
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
+import { point } from '@turf/helpers';
+
+/* ----------------------- Types ----------------------- */
 type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // upstream returns "lon"
+  lon: number;
   connectors: number;
   reports: number;
   downtime: number;
   source: string;
 };
 
-export type HeatOptions = {
+type HeatOptions = {
   radius?: number;
   blur?: number;
   minOpacity?: number;
@@ -49,12 +48,13 @@ type Props = {
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  heatOptions?: HeatOptions;
-
   onStationsCount?: (n: number) => void;
+
+  /** Heat layer visual options */
+  heatOptions?: HeatOptions;
 };
 
-/* ---------- Utilities ---------- */
+/* --------------------- Utilities --------------------- */
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -63,7 +63,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-/* ---------- Stations fetcher (follows the locked API) ---------- */
+/* ---------------- Stations Fetcher ------------------- */
 function StationsFetcher({
   enabled,
   onData,
@@ -88,6 +88,16 @@ function StationsFetcher({
           north: String(b.getNorth()),
           zoom: String(z),
         });
+
+        // keep bbox mirrored in URL so CouncilLayer can re-use it
+        try {
+          const sp = new URLSearchParams(window.location.search);
+          sp.set('bbox', `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`);
+          const u = `${window.location.pathname}?${sp.toString()}`;
+          window.history.replaceState(null, '', u);
+        } catch {
+          /* no-op */
+        }
 
         if (abortRef.current) abortRef.current.abort();
         const ac = new AbortController();
@@ -130,55 +140,99 @@ function StationsFetcher({
   return null;
 }
 
-/* ---------- Small, crisp dot icon for markers (no image assets) ---------- */
-const dotIcon = L.divIcon({
-  className: 'ev-dot',
-  html: '',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
-});
+/* ---------------- Markers Layer ---------------------- */
+function StationsMarkers({ stations }: { stations: Station[] }) {
+  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
+  return (
+    <>
+      <Pane name="stations-pane" style={{ zIndex: 400 }} />
+      {stations.map((s, i) => (
+        <CircleMarker
+          key={`${key}-${s.id ?? i}`}
+          center={[s.lat, s.lon]}
+          radius={6}
+          weight={2}
+          opacity={1}
+          fillOpacity={0.9}
+          pane="stations-pane"
+        >
+          {(s.name || s.addr) && (
+            <Tooltip direction="top" offset={[0, -6]} opacity={1}>
+              <div style={{ fontSize: 12 }}>
+                {s.name && (
+                  <div>
+                    <strong>{s.name}</strong>
+                  </div>
+                )}
+                {s.addr && <div>{s.addr}</div>}
+              </div>
+            </Tooltip>
+          )}
+        </CircleMarker>
+      ))}
+    </>
+  );
+}
 
-/* ---------- Main component ---------- */
+/* --------------------- Main Map ---------------------- */
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
-  showHeatmap = false,
+  showHeatmap = true,
   showMarkers = true,
   showCouncil = true,
-  heatOptions,
   onStationsCount,
+  heatOptions,
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
-  const [selected, setSelected] = useState<Station | null>(null);
 
-  // keep header counter in sync
+  // Council selection (click a polygon)
+  const [selectedCouncil, setSelectedCouncil] = useState<{
+    name: string;
+    geom: Geometry;
+  } | null>(null);
+
+  const filteredStations = useMemo(() => {
+    if (!selectedCouncil?.geom) return stations;
+    try {
+      return stations.filter((s) =>
+        booleanPointInPolygon(point([s.lon, s.lat]), selectedCouncil.geom as any)
+      );
+    } catch {
+      return stations;
+    }
+  }, [stations, selectedCouncil]);
+
   useEffect(() => {
-    onStationsCount?.(stations.length);
-  }, [stations.length, onStationsCount]);
+    onStationsCount?.(filteredStations.length);
+  }, [filteredStations.length, onStationsCount]);
 
-  // Heatmap points: [lat, lon, weight]
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
-    return (stations ?? [])
+    return (filteredStations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
         const w = Math.max(0.2, Math.min(1, base / 4));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
-  }, [stations]);
+  }, [filteredStations]);
 
   return (
     <div className="w-full h-[70vh] relative">
-      {/* global CSS for dot markers */}
-      <style jsx global>{`
-        .ev-dot {
-          background: radial-gradient(#2b72ff 35%, rgba(43, 114, 255, 0.35));
-          border: 2px solid #ffffff;
-          border-radius: 50%;
-          box-shadow: 0 0 0 2px rgba(43, 114, 255, 0.35);
-        }
-      `}</style>
+      {/* Selection chip */}
+      {selectedCouncil && (
+        <div className="absolute z-[1001] left-3 top-[76px] bg-white/90 rounded-md shadow px-3 py-1 text-sm">
+          Filter: <strong>{selectedCouncil.name}</strong>{' '}
+          <button
+            className="ml-2 underline"
+            onClick={() => setSelectedCouncil(null)}
+            title="Clear council filter"
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       <MapContainer
         center={initialCenter}
@@ -190,14 +244,22 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Search box (top-left) */}
+        {/* Search box */}
         <SearchControl />
 
-        {/* Fetch stations when moving/zooming */}
+        {/* Fetch stations on move/zoom */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* Council polygons under markers */}
-        {showCouncil && <CouncilLayer enabled />}
+        {/* Councils: click to filter */}
+        {showCouncil && (
+          <CouncilLayer
+            enabled
+            selectedName={selectedCouncil?.name ?? null}
+            onPick={(name: string, feature: Feature<Geometry, any>) =>
+              setSelectedCouncil({ name, geom: feature.geometry })
+            }
+          />
+        )}
 
         {/* Heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && (
@@ -211,51 +273,9 @@ export default function ClientMap({
           />
         )}
 
-        {/* Markers with clustering */}
-        {showMarkers && stations.length > 0 && (
-          <>
-            <Pane name="stations-pane" style={{ zIndex: 400 }} />
-            <MarkerClusterGroup
-              // chunked loading keeps map snappy
-              chunkedLoading
-              showCoverageOnHover={false}
-              spiderfyDistanceMultiplier={1.2}
-            >
-              {stations.map((s, i) => (
-                <Marker
-                  key={`${s.id ?? i}`}
-                  position={[s.lat, s.lon]}
-                  icon={dotIcon}
-                  eventHandlers={{
-                    click: () => setSelected(s),
-                  }}
-                >
-                  {(s.name || s.addr) && (
-                    <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-                      <div style={{ fontSize: 12 }}>
-                        {s.name && (
-                          <div>
-                            <strong>{s.name}</strong>
-                          </div>
-                        )}
-                        {s.addr && <div>{s.addr}</div>}
-                      </div>
-                    </Tooltip>
-                  )}
-                </Marker>
-              ))}
-            </MarkerClusterGroup>
-          </>
-        )}
-
-        {/* Floating map actions */}
-        <MapButtons resetCenter={initialCenter} resetZoom={initialZoom} />
+        {/* markers */}
+        {showMarkers && <StationsMarkers stations={filteredStations} />}
       </MapContainer>
-
-      {/* Side details panel */}
-      {selected && (
-        <StationPanel station={selected} onClose={() => setSelected(null)} />
-      )}
     </div>
   );
 }
