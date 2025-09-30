@@ -2,17 +2,17 @@
 
 export const dynamic = 'force-dynamic';
 
-import dynamic from 'next/dynamic';
+import dynamicImport from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 
-/** Load map-only on client to avoid SSR "window is not defined". */
-const ClientMap = dynamic(() => import('@/components/ClientMap'), { ssr: false });
+/** Load map only on the client (avoid “window is not defined”). */
+const ClientMap = dynamicImport(() => import('@/components/ClientMap'), { ssr: false });
 
 const DEFAULT_CENTER: [number, number] = [51.509, -0.118];
 const DEFAULT_ZOOM = 12;
 
 /* ---------- Safe search-params helpers ---------- */
-/** A minimal “duck-typed” interface so we can accept URLSearchParams, ReadonlyURLSearchParams, or null. */
+/** Accept URLSearchParams, Next’s ReadonlyURLSearchParams, or null. */
 type AnySearch =
   | URLSearchParams
   | {
@@ -49,13 +49,11 @@ function readNum(
   return out;
 }
 
-/** Write a small subset of UI state to the URL (no page reload). */
+/** Update URL query without reloading. */
 function writeQuery(updates: Record<string, string | number | boolean>) {
   if (typeof window === 'undefined') return;
   const sp = new URLSearchParams(window.location.search);
-  for (const [k, v] of Object.entries(updates)) {
-    sp.set(k, String(v));
-  }
+  for (const [k, v] of Object.entries(updates)) sp.set(k, String(v));
   const url = `${window.location.pathname}?${sp.toString()}`;
   window.history.replaceState(null, '', url);
 }
@@ -77,7 +75,7 @@ export default function Model1HeatmapPage() {
 
   const [stationsCount, setStationsCount] = useState(0);
 
-  // keep URL in sync (so you can share links with the same UI state)
+  // keep URL in sync with UI
   useEffect(() => {
     writeQuery({
       hm: showHeatmap ? 1 : 0,
@@ -89,12 +87,11 @@ export default function Model1HeatmapPage() {
     });
   }, [showHeatmap, showMarkers, showCouncil, heatRadius, heatBlur, heatIntensity]);
 
-  // Map HeatLayer options
+  // HeatLayer options
   const heatOptions = useMemo(
     () => ({
       radius: heatRadius,
       blur: heatBlur,
-      // map intensity (0..1) to a reasonable minOpacity range
       minOpacity: Math.max(0, Math.min(1, 0.15 + heatIntensity * 0.65)),
     }),
     [heatRadius, heatBlur, heatIntensity]
