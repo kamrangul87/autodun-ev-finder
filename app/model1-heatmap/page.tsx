@@ -2,136 +2,184 @@
 
 export const dynamic = 'force-dynamic';
 
-import dynamicImport from 'next/dynamic';
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
 
-// Load the map only on the client (no SSR)
-const ClientMap = dynamicImport(() => import('@/components/ClientMap'), { ssr: false });
+/** Load map-only on client to avoid SSR "window is not defined". */
+const ClientMap = dynamic(() => import('@/components/ClientMap'), { ssr: false });
 
 const DEFAULT_CENTER: [number, number] = [51.509, -0.118];
 const DEFAULT_ZOOM = 12;
 
-// tiny helpers to read/write query params
-function readBool(sp: URLSearchParams, key: string, fallback: boolean) {
-  const v = sp.get(key);
-  if (v === '1' || v === 'true') return true;
-  if (v === '0' || v === 'false') return false;
-  return fallback;
+/* ---------- Safe search-params helpers ---------- */
+/** A minimal “duck-typed” interface so we can accept URLSearchParams, ReadonlyURLSearchParams, or null. */
+type AnySearch =
+  | URLSearchParams
+  | {
+      get: (key: string) => string | null;
+    }
+  | null;
+
+function getSearch(): AnySearch {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search);
 }
-function readNum(sp: URLSearchParams, key: string, fallback: number) {
-  const v = Number(sp.get(key));
-  return Number.isFinite(v) ? v : fallback;
+
+function readBool(sp: AnySearch, key: string, def: boolean): boolean {
+  const v = sp?.get?.(key) ?? null;
+  if (v == null) return def;
+  const s = v.toLowerCase();
+  return s === '1' || s === 'true' || s === 't' || s === 'yes' || s === 'y';
+}
+
+function readNum(
+  sp: AnySearch,
+  key: string,
+  def: number,
+  min?: number,
+  max?: number
+): number {
+  const raw = sp?.get?.(key);
+  if (raw == null) return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  let out = n;
+  if (typeof min === 'number') out = Math.max(min, out);
+  if (typeof max === 'number') out = Math.min(max, out);
+  return out;
+}
+
+/** Write a small subset of UI state to the URL (no page reload). */
+function writeQuery(updates: Record<string, string | number | boolean>) {
+  if (typeof window === 'undefined') return;
+  const sp = new URLSearchParams(window.location.search);
+  for (const [k, v] of Object.entries(updates)) {
+    sp.set(k, String(v));
+  }
+  const url = `${window.location.pathname}?${sp.toString()}`;
+  window.history.replaceState(null, '', url);
 }
 
 export default function Model1HeatmapPage() {
-  const router = useRouter();
-  const search = useSearchParams();
+  const search = useMemo(getSearch, []);
 
   // UI state (init from URL)
   const [showHeatmap, setShowHeatmap] = useState(() => readBool(search, 'hm', true));
   const [showMarkers, setShowMarkers] = useState(() => readBool(search, 'mk', true));
   const [showCouncil, setShowCouncil] = useState(() => readBool(search, 'co', true));
 
-  const [heatRadius, setHeatRadius] = useState(() => readNum(search, 'r', 28));
-  const [heatBlur, setHeatBlur] = useState(() => readNum(search, 'b', 25));
-  const [heatMinOpacity, setHeatMinOpacity] = useState(() => readNum(search, 'i', 0.35));
-
-  const initialCenter: [number, number] = useMemo(() => {
-    const lat = Number(search.get('lat'));
-    const lng = Number(search.get('lng'));
-    if (Number.isFinite(lat) && Number.isFinite(lng)) return [lat, lng];
-    return DEFAULT_CENTER;
-  }, [search]);
-
-  const initialZoom = useMemo(() => {
-    const z = Number(search.get('z'));
-    return Number.isFinite(z) ? z : DEFAULT_ZOOM;
-  }, [search]);
+  // Sliders: radius, blur, intensity (0..1 used to drive minOpacity)
+  const [heatRadius, setHeatRadius] = useState(() => readNum(search, 'r', 28, 2, 80));
+  const [heatBlur, setHeatBlur] = useState(() => readNum(search, 'b', 25, 2, 80));
+  const [heatIntensity, setHeatIntensity] = useState(() =>
+    readNum(search, 'i', 0.5, 0, 1)
+  );
 
   const [stationsCount, setStationsCount] = useState(0);
 
-  // write state to the URL (debounced-ish via microtask)
+  // keep URL in sync (so you can share links with the same UI state)
   useEffect(() => {
-    const params = new URLSearchParams(search.toString());
-    params.set('hm', showHeatmap ? '1' : '0');
-    params.set('mk', showMarkers ? '1' : '0');
-    params.set('co', showCouncil ? '1' : '0');
-    params.set('r', String(heatRadius));
-    params.set('b', String(heatBlur));
-    params.set('i', String(heatMinOpacity));
-    // Keep lat/lng/z updates driven by map itself (ClientMap can update later if needed)
+    writeQuery({
+      hm: showHeatmap ? 1 : 0,
+      mk: showMarkers ? 1 : 0,
+      co: showCouncil ? 1 : 0,
+      r: heatRadius,
+      b: heatBlur,
+      i: Number(heatIntensity.toFixed(2)),
+    });
+  }, [showHeatmap, showMarkers, showCouncil, heatRadius, heatBlur, heatIntensity]);
 
-    router.replace(`?${params.toString()}`, { scroll: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showHeatmap, showMarkers, showCouncil, heatRadius, heatBlur, heatMinOpacity]);
+  // Map HeatLayer options
+  const heatOptions = useMemo(
+    () => ({
+      radius: heatRadius,
+      blur: heatBlur,
+      // map intensity (0..1) to a reasonable minOpacity range
+      minOpacity: Math.max(0, Math.min(1, 0.15 + heatIntensity * 0.65)),
+    }),
+    [heatRadius, heatBlur, heatIntensity]
+  );
 
   return (
     <div className="relative">
-      {/* Top controls */}
-      <div className="absolute left-1/2 -translate-x-1/2 top-3 z-[1000] rounded-md bg-white/92 backdrop-blur shadow px-3 py-2 text-sm flex items-center gap-4">
+      {/* Controls header */}
+      <div className="absolute left-3 right-3 top-3 z-[1000] rounded-md bg-white/92 shadow px-3 py-2 text-sm flex items-center gap-4 flex-wrap">
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={showHeatmap} onChange={e => setShowHeatmap(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={showHeatmap}
+            onChange={(e) => setShowHeatmap(e.target.checked)}
+          />
           Heatmap
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={showMarkers} onChange={e => setShowMarkers(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={showMarkers}
+            onChange={(e) => setShowMarkers(e.target.checked)}
+          />
           Markers
         </label>
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={showCouncil} onChange={e => setShowCouncil(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={showCouncil}
+            onChange={(e) => setShowCouncil(e.target.checked)}
+          />
           Council
         </label>
 
+        {/* Radius */}
         <div className="flex items-center gap-2">
           <span>Radius</span>
           <input
             type="range"
-            min={10}
-            max={60}
+            min={2}
+            max={80}
             step={1}
             value={heatRadius}
-            onChange={e => setHeatRadius(Number(e.target.value))}
+            onChange={(e) => setHeatRadius(Number(e.target.value))}
           />
         </div>
+
+        {/* Blur */}
         <div className="flex items-center gap-2">
           <span>Blur</span>
           <input
             type="range"
-            min={5}
-            max={60}
+            min={2}
+            max={80}
             step={1}
             value={heatBlur}
-            onChange={e => setHeatBlur(Number(e.target.value))}
+            onChange={(e) => setHeatBlur(Number(e.target.value))}
           />
         </div>
+
+        {/* Intensity */}
         <div className="flex items-center gap-2">
           <span>Intensity</span>
           <input
             type="range"
-            min={0.1}
+            min={0}
             max={1}
             step={0.05}
-            value={heatMinOpacity}
-            onChange={e => setHeatMinOpacity(Number(e.target.value))}
+            value={heatIntensity}
+            onChange={(e) => setHeatIntensity(Number(e.target.value))}
           />
         </div>
 
         <span className="opacity-70">stations: {stationsCount}</span>
       </div>
 
+      {/* Map */}
       <ClientMap
-        initialCenter={initialCenter}
-        initialZoom={initialZoom}
+        initialCenter={DEFAULT_CENTER}
+        initialZoom={DEFAULT_ZOOM}
         showHeatmap={showHeatmap}
         showMarkers={showMarkers}
         showCouncil={showCouncil}
         onStationsCount={setStationsCount}
-        heatOptions={{
-          radius: heatRadius,
-          blur: heatBlur,
-          minOpacity: heatMinOpacity,
-        }}
+        heatOptions={heatOptions}
       />
     </div>
   );
