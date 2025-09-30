@@ -1,84 +1,74 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { useMap } from 'react-leaflet';
+import React, { useMemo } from 'react';
+import { LayerGroup, CircleMarker } from 'react-leaflet';
 
-/** Point shape expected by this component */
-export type Point = {
-  lat: number;
-  lng: number;
-  value: number; // 0..1 weight
-};
-
-export type HeatOptions = {
-  radius?: number;     // default 28
-  blur?: number;       // default 25
-  minOpacity?: number; // default 0.35
-  max?: number;        // default 1.0
-};
+export type HeatPoint = { lat: number; lng: number; value: number };
 
 type Props = {
-  points: Point[];
-  options?: HeatOptions;
+  points: HeatPoint[];
+  /** Multiplier for how “strong” each point looks (default 1) */
+  intensity?: number;
+  /** Base radius in pixels (default 18) */
+  radius?: number;
+  /** Cosmetic softening; we map it into opacity (0..1); default 0.35 */
+  blur?: number;
 };
 
-/**
- * Leaflet heat layer wrapper that accepts points as {lat,lng,value}
- * and optional visual options via `options`.
- */
-export default function HeatmapWithScaling({ points, options }: Props) {
-  const map = useMap();
-  const layerRef = useRef<any>(null);
+export default function HeatmapWithScaling({
+  points,
+  intensity = 1,
+  radius = 18,
+  blur = 0.35,
+}: Props) {
+  const safePoints = useMemo(
+    () =>
+      (Array.isArray(points) ? points : [])
+        .filter(
+          (p) =>
+            p &&
+            typeof p.lat === 'number' &&
+            typeof p.lng === 'number' &&
+            Number.isFinite(p.lat) &&
+            Number.isFinite(p.lng) &&
+            typeof p.value === 'number' &&
+            Number.isFinite(p.value)
+        )
+        .slice(0, 5000), // hard cap just in case
+    [points]
+  );
 
-  useEffect(() => {
-    let cancelled = false;
+  if (safePoints.length === 0) return null;
 
-    (async () => {
-      // load leaflet + plugin only on client
-      const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat');
+  const clampedBlur = Math.max(0, Math.min(1, blur));
+  const baseOpacity = 0.18 + clampedBlur * 0.22; // 0.18..0.40
 
-      if (cancelled || !map) return;
+  return (
+    <LayerGroup>
+      {safePoints.map((p, i) => {
+        // scale radius & opacity by value * intensity (with clamps)
+        const v = Math.max(0.5, Math.min(10, p.value * intensity));
+        const r = Math.max(6, Math.min(50, radius * v));
+        const op = Math.min(0.55, baseOpacity * (0.65 + v * 0.1));
 
-      // remove old layer if present
-      if (layerRef.current) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
-        layerRef.current = null;
-      }
+        // warm color ramp
+        // small v -> soft yellow; big v -> deeper orange/red
+        const color =
+          v < 2 ? '#ffe08a' : v < 4 ? '#ffc46b' : v < 6 ? '#ff9c46' : v < 8 ? '#ff7a2e' : '#ff5a1a';
 
-      if (!points?.length) return;
-
-      // leaflet.heat expects [lat, lng, intensity] tuples
-      const tuples: [number, number, number][] = points.map((p) => [
-        Number(p.lat),
-        Number(p.lng),
-        Math.max(0, Math.min(1, Number(p.value))),
-      ]);
-
-      const layer = (L as any).heatLayer(tuples, {
-        radius: options?.radius ?? 28,
-        blur: options?.blur ?? 25,
-        minOpacity: options?.minOpacity ?? 0.35,
-        max: options?.max ?? 1.0,
-      });
-
-      layer.addTo(map);
-      layerRef.current = layer;
-    })();
-
-    // cleanup on unmount or props change
-    return () => {
-      cancelled = true;
-      if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
-        layerRef.current = null;
-      }
-    };
-  }, [map, points, options?.radius, options?.blur, options?.minOpacity, options?.max]);
-
-  return null;
+        return (
+          <CircleMarker
+            key={i}
+            center={[p.lat, p.lng]}
+            radius={r}
+            pathOptions={{
+              stroke: false,
+              fillOpacity: op,
+              fillColor: color,
+            }}
+          />
+        );
+      })}
+    </LayerGroup>
+  );
 }
