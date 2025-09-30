@@ -8,7 +8,7 @@ export type HeatPoint = { lat: number; lng: number; value: number };
 type Props = {
   points: HeatPoint[];
   intensity?: number; // default 1
-  radius?: number;    // default 18 (px)
+  radius?: number;    // default 18
   blur?: number;      // 0..1, default 0.35
 };
 
@@ -16,13 +16,7 @@ export default function HeatmapWithScaling({ points, intensity = 1, radius = 18,
   const safe = useMemo(
     () =>
       (Array.isArray(points) ? points : [])
-        .filter(
-          (p) =>
-            p &&
-            Number.isFinite(p.lat) &&
-            Number.isFinite(p.lng) &&
-            Number.isFinite(p.value)
-        )
+        .filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && Number.isFinite(p.value))
         .slice(0, 5000),
     [points]
   );
