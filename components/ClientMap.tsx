@@ -26,17 +26,19 @@ type Station = {
   councilCode?: string;
 };
 
+/** The shape HeatmapWithScaling expects */
+type HeatPoint = { lat: number; lng: number; value: number };
+
 type Props = {
   stations?: Station[];
   initialCenter?: [number, number];
   initialZoom?: number;
 
-  /** From page.tsx (all optional) */
   showHeatmap?: boolean;
   showMarkers?: boolean;
-  showCouncil?: boolean; // kept for parity; we already filter by council state
+  showCouncil?: boolean;
   onStationsCount?: (n: number) => void;
-  heatOptions?: Record<string, any>; // forwarded to HeatmapWithScaling
+  heatOptions?: Record<string, any>;
 };
 
 /** Create/normalize panes with predictable stacking */
@@ -44,11 +46,11 @@ function EnsurePanes() {
   const map = useMap();
   useEffect(() => {
     const defs: Array<[string, number, ('auto' | 'none')?]> = [
-      ['base', 100, 'auto'],      // tiles
-      ['heatmap', 200, 'auto'],   // heat layer
-      ['clusters', 300, 'auto'],  // markers / clusters
-      ['popups', 400, 'auto'],    // (Leaflet default popups if ever used)
-      ['ui', 1000, 'none'],       // reserved for in-map UI
+      ['base', 100, 'auto'],
+      ['heatmap', 200, 'auto'],
+      ['clusters', 300, 'auto'],
+      ['popups', 400, 'auto'],
+      ['ui', 1000, 'none'],
     ];
     defs.forEach(([name, z, pe]) => {
       const pane = map.getPane(name) ?? map.createPane(name);
@@ -61,45 +63,65 @@ function EnsurePanes() {
 
 export default function ClientMap({
   stations = [],
-  initialCenter = [51.5072, -0.1276], // London
+  initialCenter = [51.5072, -0.1276],
   initialZoom = 9,
 
   showHeatmap = true,
   showMarkers = true,
-  showCouncil = true, // currently not used to hide any layer, but kept for compatibility
+  showCouncil = true, // reserved for future council-boundary overlay
   onStationsCount,
   heatOptions = {},
 }: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
 
-  // Right-docked/bottom-sheet panel state
   const [activeStation, setActiveStation] = useState<Station | null>(null);
-
-  // Optional council filter (TopControls can change it)
   const [council, setCouncil] = useState<CouncilOption | null>(null);
 
-  // Apply council filtering locally
+  // Filter by selected council (if any)
   const filteredStations = useMemo(() => {
     if (!council) return stations;
     return stations.filter((s) => s.councilCode === council.value);
   }, [stations, council]);
 
-  // Report station count to parent when it changes
+  // Report count upward
   useEffect(() => {
-    if (typeof onStationsCount === 'function') {
-      onStationsCount(filteredStations.length);
-    }
+    onStationsCount?.(filteredStations.length);
   }, [filteredStations.length, onStationsCount]);
 
   const handleMarkerClick = (s: Station) => setActiveStation(s);
   const handleClosePanel = () => setActiveStation(null);
+
+  // Map stations -> heat points
+  const heatPoints: HeatPoint[] = useMemo(() => {
+    return filteredStations
+      .map((s) => {
+        const lat = s.lat ?? s.latitude;
+        const lng = s.lng ?? s.longitude;
+        if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+
+        // Derive an intensity value:
+        // prefer a numeric connectors count; fallback to reports; else 1
+        let value = 1;
+        if (typeof s.connectors === 'number') value = s.connectors;
+        else if (typeof s.connectors === 'string') {
+          const n = parseFloat(s.connectors);
+          if (!Number.isNaN(n)) value = n;
+        } else if (typeof s.reports === 'number' && s.reports > 0) {
+          value = s.reports;
+        }
+        return { lat, lng, value };
+      })
+      .filter((p): p is HeatPoint => !!p);
+  }, [filteredStations]);
 
   return (
     <div className="map-root">
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
-        ref={(ref) => { if (ref) mapRef.current = ref; }}
+        ref={(ref) => {
+          if (ref) mapRef.current = ref;
+        }}
         className="leaflet-map"
         preferCanvas
       >
@@ -116,8 +138,7 @@ export default function ClientMap({
         {/* Heatmap (toggleable) */}
         {showHeatmap && (
           <Pane name="heatmap">
-            {/* Forward any heatmap tuning via heatOptions */}
-            <HeatmapWithScaling points={filteredStations} {...heatOptions} />
+            <HeatmapWithScaling points={heatPoints} {...heatOptions} />
           </Pane>
         )}
 
