@@ -17,6 +17,10 @@ import CouncilLayer from '@/components/CouncilLayer';
 import HeatLayer, { type HeatOptions, type HeatPoint } from '@/components/HeatLayer';
 import SearchControl from '@/components/SearchControl';
 
+import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
+import { point } from '@turf/helpers';
+import type { Feature, Polygon, MultiPolygon } from 'geojson';
+
 // ---------- Types ----------
 type Station = {
   id: string | number | null;
@@ -39,7 +43,7 @@ type Props = {
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  /** UI passes these; we also allow an extra "intensity" multiplier for weighting */
+  /** UI passes these; also allow an extra "intensity" multiplier */
   heatOptions?: HeatOptions & { intensity?: number };
 
   onStationsCount?: (n: number) => void;
@@ -93,7 +97,7 @@ function StationsFetcher({
           const json = await res.json();
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
           const clean = items.filter(
-            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon),
+            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
           );
           onData(clean);
         } catch (e: any) {
@@ -105,7 +109,7 @@ function StationsFetcher({
           if (abortRef.current === ac) abortRef.current = null;
         }
       }, 350),
-    [enabled, map],
+    [enabled, map]
   );
 
   useEffect(() => {
@@ -238,14 +242,28 @@ export default function ClientMap({
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<Station | null>(null);
 
+  // council filtering
+  const [activeCouncil, setActiveCouncil] = useState<{
+    key: string;
+    feature: Feature<Polygon | MultiPolygon>;
+  } | null>(null);
+
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations
+  // filter stations by active polygon (if any)
+  const filteredStations = useMemo(() => {
+    if (!activeCouncil) return stations;
+    return stations.filter((s) =>
+      booleanPointInPolygon(point([s.lon, s.lat]), activeCouncil.feature as any)
+    );
+  }, [stations, activeCouncil]);
+
+  // Build heatmap points [lat, lon, weight] from filtered stations
   const heatPoints = useMemo<HeatPoint[]>(() => {
     const mult = Number(heatOptions?.intensity ?? 1);
-    return (stations ?? [])
+    return (filteredStations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
@@ -253,7 +271,9 @@ export default function ClientMap({
         w = Math.max(0, Math.min(1, w * mult));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
-  }, [stations, heatOptions?.intensity]);
+  }, [filteredStations, heatOptions?.intensity]);
+
+  const clearCouncil = () => setActiveCouncil(null);
 
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
@@ -277,7 +297,17 @@ export default function ClientMap({
         <StationsFetcher enabled={true} onData={setStations} />
 
         {/* council polygons (under markers, above tiles) */}
-        {showCouncil && <CouncilLayer enabled />}
+        {showCouncil && (
+          <CouncilLayer
+            enabled
+            selectedKey={activeCouncil?.key ?? null}
+            onSelect={(f) => {
+              const key = String(f?.properties?.name ?? f?.properties?.id ?? '');
+              if (!key) return;
+              setActiveCouncil({ key, feature: f as any });
+            }}
+          />
+        )}
 
         {/* heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && (
@@ -304,7 +334,7 @@ export default function ClientMap({
               zoomToBoundsOnClick
               polygonOptions={{ color: '#1976d2', weight: 1, opacity: 0.6 }}
             >
-              {stations.map((s, i) => (
+              {filteredStations.map((s, i) => (
                 <Marker
                   key={`st-${s.id ?? i}`}
                   position={[s.lat, s.lon]}
@@ -330,6 +360,19 @@ export default function ClientMap({
           </>
         )}
       </MapContainer>
+
+      {/* Selected-council chip */}
+      {activeCouncil && (
+        <div className="absolute left-[14px] top-[64px] z-[1002]">
+          <button
+            onClick={clearCouncil}
+            className="rounded-full bg-white/90 px-3 py-1 text-xs shadow hover:bg-white"
+            title="Clear council filter"
+          >
+            Council: <b>{activeCouncil.key}</b> &times;
+          </button>
+        </div>
+      )}
 
       {/* side panel for station details */}
       <InfoPanel station={selected} onClose={() => setSelected(null)} />
