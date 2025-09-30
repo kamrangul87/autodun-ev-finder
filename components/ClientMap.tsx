@@ -9,7 +9,7 @@ import PopupPanel from '@/components/PopupPanel';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 
-/** Minimal station shape (kept local to avoid path aliases) */
+/** Minimal station shape (local to avoid path aliases) */
 type Station = {
   id?: string | number;
   name?: string;
@@ -30,6 +30,13 @@ type Props = {
   stations?: Station[];
   initialCenter?: [number, number];
   initialZoom?: number;
+
+  /** From page.tsx (all optional) */
+  showHeatmap?: boolean;
+  showMarkers?: boolean;
+  showCouncil?: boolean; // kept for parity; we already filter by council state
+  onStationsCount?: (n: number) => void;
+  heatOptions?: Record<string, any>; // forwarded to HeatmapWithScaling
 };
 
 /** Create/normalize panes with predictable stacking */
@@ -56,13 +63,19 @@ export default function ClientMap({
   stations = [],
   initialCenter = [51.5072, -0.1276], // London
   initialZoom = 9,
+
+  showHeatmap = true,
+  showMarkers = true,
+  showCouncil = true, // currently not used to hide any layer, but kept for compatibility
+  onStationsCount,
+  heatOptions = {},
 }: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
 
   // Right-docked/bottom-sheet panel state
   const [activeStation, setActiveStation] = useState<Station | null>(null);
 
-  // Optional council filter
+  // Optional council filter (TopControls can change it)
   const [council, setCouncil] = useState<CouncilOption | null>(null);
 
   // Apply council filtering locally
@@ -70,6 +83,13 @@ export default function ClientMap({
     if (!council) return stations;
     return stations.filter((s) => s.councilCode === council.value);
   }, [stations, council]);
+
+  // Report station count to parent when it changes
+  useEffect(() => {
+    if (typeof onStationsCount === 'function') {
+      onStationsCount(filteredStations.length);
+    }
+  }, [filteredStations.length, onStationsCount]);
 
   const handleMarkerClick = (s: Station) => setActiveStation(s);
   const handleClosePanel = () => setActiveStation(null);
@@ -93,18 +113,24 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Heatmap */}
-        <Pane name="heatmap">
-          <HeatmapWithScaling points={filteredStations} />
-        </Pane>
+        {/* Heatmap (toggleable) */}
+        {showHeatmap && (
+          <Pane name="heatmap">
+            {/* Forward any heatmap tuning via heatOptions */}
+            <HeatmapWithScaling points={filteredStations} {...heatOptions} />
+          </Pane>
+        )}
 
-        {/* Markers / clusters (no Leaflet <Popup>; click opens React panel) */}
-        <Pane name="clusters">
-          <ClusterLayer
-            stations={filteredStations}
-            onMarkerClick={handleMarkerClick}
-          />
-        </Pane>
+        {/* Markers / clusters (toggleable; click opens React panel) */}
+        {showMarkers && (
+          <Pane name="clusters">
+            <ClusterLayer
+              stations={filteredStations}
+              onMarkerClick={handleMarkerClick}
+              visible
+            />
+          </Pane>
+        )}
 
         {/* Absolute top controls */}
         <TopControls
