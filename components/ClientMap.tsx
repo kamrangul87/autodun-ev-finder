@@ -4,38 +4,42 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   TileLayer,
+  Pane,
+  Tooltip,
   useMap,
   useMapEvents,
-  CircleMarker,
-  Tooltip,
-  Pane,
   Marker,
-  Popup,
 } from 'react-leaflet';
-import type { LatLngExpression } from 'leaflet';
-import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
+import L from 'leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
-import CouncilLayer from '@/components/CouncilLayer';
-import HeatLayer, { type HeatOptions } from '@/components/HeatLayer';
-import SearchControl from '@/components/SearchControl';
 
-// ---------- Types ----------
+import CouncilLayer from '@/components/CouncilLayer';
+import HeatLayer from '@/components/HeatLayer';
+import SearchControl from '@/components/SearchControl';
+import StationPanel from '@/components/StationPanel';
+import MapButtons from '@/components/MapButtons';
+
+/* ---------- Types ---------- */
 type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // NOTE: API returns "lon"
+  lon: number; // upstream returns "lon"
   connectors: number;
   reports: number;
   downtime: number;
   source: string;
 };
 
-type HeatPoint = [number, number, number];
+export type HeatOptions = {
+  radius?: number;
+  blur?: number;
+  minOpacity?: number;
+};
 
 type Props = {
   initialCenter?: [number, number];
@@ -50,7 +54,7 @@ type Props = {
   onStationsCount?: (n: number) => void;
 };
 
-// ---------- Small utilities ----------
+/* ---------- Utilities ---------- */
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -59,16 +63,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-// --- A tiny dot icon for clustered Markers
-const dotIcon = L.divIcon({
-  className: 'ev-dot',
-  html:
-    '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#2B6CB0;border:2px solid #ffffff;box-shadow:0 0 0 1px rgba(0,0,0,.15)"></span>',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
-});
-
-// ---------- Fetcher that follows your locked API contract ----------
+/* ---------- Stations fetcher (follows the locked API) ---------- */
 function StationsFetcher({
   enabled,
   onData,
@@ -105,7 +100,6 @@ function StationsFetcher({
           });
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
-
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
@@ -136,111 +130,38 @@ function StationsFetcher({
   return null;
 }
 
-// ---------- Markers layer (clustered) ----------
-function StationsCluster({ stations }: { stations: Station[] }) {
-  // cluster key to force refresh on data length change
-  const key = useMemo(() => `stations-${stations.length}`, [stations.length]);
+/* ---------- Small, crisp dot icon for markers (no image assets) ---------- */
+const dotIcon = L.divIcon({
+  className: 'ev-dot',
+  html: '',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7],
+});
 
-  return (
-    <MarkerClusterGroup
-      key={key}
-      chunkedLoading
-      showCoverageOnHover={false}
-      spiderfyOnMaxZoom={true}
-      maxClusterRadius={45}
-    >
-      {stations.map((s, i) => {
-        const pos: LatLngExpression = [s.lat, s.lon];
-        return (
-          <Marker key={`${key}-${s.id ?? i}`} position={pos} icon={dotIcon}>
-            <Popup minWidth={280}>
-              <div style={{ fontSize: 13, lineHeight: 1.25 }}>
-                <div style={{ fontWeight: 600, marginBottom: 6 }}>
-                  {s.name || 'EV Charging'}
-                </div>
-                <table style={{ width: '100%' }}>
-                  <tbody>
-                    <tr>
-                      <td>Address</td>
-                      <td style={{ textAlign: 'right' }}>{s.addr || '—'}</td>
-                    </tr>
-                    <tr>
-                      <td>Postcode</td>
-                      <td style={{ textAlign: 'right' }}>{s.postcode || '—'}</td>
-                    </tr>
-                    <tr>
-                      <td>Source</td>
-                      <td style={{ textAlign: 'right' }}>{s.source || '—'}</td>
-                    </tr>
-                    <tr>
-                      <td>Connectors</td>
-                      <td style={{ textAlign: 'right' }}>{s.connectors ?? 0}</td>
-                    </tr>
-                    <tr>
-                      <td>Reports</td>
-                      <td style={{ textAlign: 'right' }}>{s.reports ?? 0}</td>
-                    </tr>
-                    <tr>
-                      <td>Downtime (mins)</td>
-                      <td style={{ textAlign: 'right' }}>{s.downtime ?? 0}</td>
-                    </tr>
-                    <tr>
-                      <td>Coordinates</td>
-                      <td style={{ textAlign: 'right' }}>
-                        {s.lat.toFixed(6)}, {s.lon.toFixed(6)}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-
-                <a
-                  href={`https://maps.google.com/?q=${s.lat},${s.lon}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    display: 'inline-block',
-                    marginTop: 8,
-                    padding: '6px 10px',
-                    borderRadius: 8,
-                    background: '#1976d2',
-                    color: '#fff',
-                    textDecoration: 'none',
-                  }}
-                >
-                  Open in Google Maps
-                </a>
-              </div>
-            </Popup>
-          </Marker>
-        );
-      })}
-    </MarkerClusterGroup>
-  );
-}
-
-// ---------- Main component ----------
+/* ---------- Main component ---------- */
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
-  showHeatmap = true,
+  showHeatmap = false,
   showMarkers = true,
   showCouncil = true,
   heatOptions,
   onStationsCount,
 }: Props) {
   const [stations, setStations] = useState<Station[]>([]);
+  const [selected, setSelected] = useState<Station | null>(null);
 
   // keep header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations
+  // Heatmap points: [lat, lon, weight]
+  type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
-        // weight by connectors; clamp to [0.2, 1]
         const base = Number(s.connectors ?? 1);
         const w = Math.max(0.2, Math.min(1, base / 4));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
@@ -249,6 +170,16 @@ export default function ClientMap({
 
   return (
     <div className="w-full h-[70vh] relative">
+      {/* global CSS for dot markers */}
+      <style jsx global>{`
+        .ev-dot {
+          background: radial-gradient(#2b72ff 35%, rgba(43, 114, 255, 0.35));
+          border: 2px solid #ffffff;
+          border-radius: 50%;
+          box-shadow: 0 0 0 2px rgba(43, 114, 255, 0.35);
+        }
+      `}</style>
+
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
@@ -259,16 +190,16 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* search input overlay */}
+        {/* Search box (top-left) */}
         <SearchControl />
 
-        {/* fetch stations on move/zoom using your locked server API */}
+        {/* Fetch stations when moving/zooming */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* council polygons */}
+        {/* Council polygons under markers */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* heatmap UNDER markers */}
+        {/* Heatmap under markers */}
         {showHeatmap && heatPoints.length > 0 && (
           <HeatLayer
             points={heatPoints}
@@ -280,9 +211,51 @@ export default function ClientMap({
           />
         )}
 
-        {/* markers (clustered) */}
-        {showMarkers && <StationsCluster stations={stations} />}
+        {/* Markers with clustering */}
+        {showMarkers && stations.length > 0 && (
+          <>
+            <Pane name="stations-pane" style={{ zIndex: 400 }} />
+            <MarkerClusterGroup
+              // chunked loading keeps map snappy
+              chunkedLoading
+              showCoverageOnHover={false}
+              spiderfyDistanceMultiplier={1.2}
+            >
+              {stations.map((s, i) => (
+                <Marker
+                  key={`${s.id ?? i}`}
+                  position={[s.lat, s.lon]}
+                  icon={dotIcon}
+                  eventHandlers={{
+                    click: () => setSelected(s),
+                  }}
+                >
+                  {(s.name || s.addr) && (
+                    <Tooltip direction="top" offset={[0, -6]} opacity={1}>
+                      <div style={{ fontSize: 12 }}>
+                        {s.name && (
+                          <div>
+                            <strong>{s.name}</strong>
+                          </div>
+                        )}
+                        {s.addr && <div>{s.addr}</div>}
+                      </div>
+                    </Tooltip>
+                  )}
+                </Marker>
+              ))}
+            </MarkerClusterGroup>
+          </>
+        )}
+
+        {/* Floating map actions */}
+        <MapButtons resetCenter={initialCenter} resetZoom={initialZoom} />
       </MapContainer>
+
+      {/* Side details panel */}
+      {selected && (
+        <StationPanel station={selected} onClose={() => setSelected(null)} />
+      )}
     </div>
   );
 }
