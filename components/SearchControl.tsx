@@ -52,7 +52,9 @@ export default function SearchControl() {
               lon: r.lon,
             }))
           );
-        } catch {}
+        } catch {
+          /* ignore */
+        }
       }, 300),
     []
   );
@@ -62,13 +64,12 @@ export default function SearchControl() {
   }, [q, refetch]);
 
   useEffect(() => {
-    // render as a Leaflet control so it lives “inside” map chrome
+    // Render as a Leaflet control so it lives inside map chrome
     const Control = L.Control.extend({
       onAdd: () => {
         const c = L.DomUtil.create('div');
-        // important: keep zIndex high to clear popups / clusters
         Object.assign(c.style, {
-          zIndex: '1200',
+          zIndex: '1200', // stays above clusters/popups
           position: 'relative',
           width: '320px',
         });
@@ -104,7 +105,7 @@ export default function SearchControl() {
         const input = c.querySelector<HTMLInputElement>('#ev-search-input')!;
         const list = c.querySelector<HTMLUListElement>('#ev-search-results')!;
 
-        // wiring (React state -> DOM)
+        // sync DOM from state
         const sync = () => {
           input.value = q;
           if (open && items.length > 0) {
@@ -122,7 +123,7 @@ export default function SearchControl() {
         };
         sync();
 
-        // DOM -> React state
+        // DOM -> state
         input.addEventListener('input', (e: any) => {
           setQ(e.target.value);
           setOpen(true);
@@ -140,17 +141,23 @@ export default function SearchControl() {
           map.setView([Number(hit.lat), Number(hit.lon)], 14);
         });
 
-        // prevent map drag when interacting
+        // Prevent map interactions while typing/scrolling results
         L.DomEvent.disableClickPropagation(c);
         L.DomEvent.disableScrollPropagation(c);
+
         return c;
       },
-      onRemove: () => void 0,
+      onRemove: () => undefined,
     });
 
     const ctl = new Control({ position: 'topleft' });
     map.addControl(ctl);
-    return () => map.removeControl(ctl);
+
+    // IMPORTANT: do not return `map.removeControl(ctl)` directly,
+    // wrap it so cleanup returns void.
+    return () => {
+      map.removeControl(ctl);
+    };
   }, [map, q, open, items]);
 
   return null;
