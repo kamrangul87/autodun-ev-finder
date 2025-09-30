@@ -27,21 +27,19 @@ export default function ClientMap({
   const [stations, setStations] = useState<Station[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch Open Charge Map points near current center once on mount.
+  // Fetch stations from our own API (avoids browser CORS issues)
   useEffect(() => {
-    const fetchOCM = async () => {
+    const load = async () => {
       try {
         const [lat, lng] = initialCenter;
-        const url =
-          `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=400` +
-          `&compact=true&verbose=false&latitude=${lat}&longitude=${lng}&distance=25&distanceunit=KM`;
+        const url = `/api/ocm?lat=${lat}&lng=${lng}&distance=25&maxresults=400&countrycode=GB`;
         const res = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
-        if (!res.ok) throw new Error(`OCM ${res.status}`);
+        if (!res.ok) throw new Error(`API ${res.status}`);
         const data = await res.json();
 
         const mapped: Station[] = (Array.isArray(data) ? data : [])
           .map((p: any) => ({
-            id: p?.ID ?? Math.random(),
+            id: p?.ID ?? `${p?.AddressInfo?.Latitude},${p?.AddressInfo?.Longitude}`,
             name: p?.AddressInfo?.Title ?? 'EV Charging',
             address: p?.AddressInfo?.AddressLine1 ?? '',
             postcode: p?.AddressInfo?.Postcode ?? '',
@@ -52,12 +50,13 @@ export default function ClientMap({
           .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
 
         setStations(mapped);
+        setError(null);
       } catch (e: any) {
         setError(e?.message ?? 'Failed to load stations');
-        console.error('OCM fetch failed:', e);
+        console.error('Stations fetch failed:', e);
       }
     };
-    fetchOCM();
+    load();
   }, [initialCenter]);
 
   const items = useMemo(
@@ -106,7 +105,6 @@ export default function ClientMap({
         {items}
       </MapContainer>
 
-      {/* Non-blocking, visible error (no white screen) */}
       {error && (
         <div
           style={{
