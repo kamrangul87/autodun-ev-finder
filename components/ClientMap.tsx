@@ -1,9 +1,17 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Pane, useMap } from 'react-leaflet';
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  Pane,
+  LayerGroup,
+  CircleMarker,
+  useMap,
+} from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
-import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 
 type Station = {
   id: number | string;
@@ -14,8 +22,6 @@ type Station = {
   lng: number;
   connectors?: number;
 };
-
-type HeatPoint = { lat: number; lng: number; value: number };
 
 type Props = {
   initialCenter?: [number, number];
@@ -44,7 +50,6 @@ export default function ClientMap({
   initialZoom = 10,
 }: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
-
   const [stations, setStations] = useState<Station[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,7 +61,7 @@ export default function ClientMap({
   const [query, setQuery] = useState('');
   const [searchPin, setSearchPin] = useState<[number, number] | null>(null);
 
-  // Load stations from our server proxy (avoids CORS)
+  // Fetch stations via our API proxy (no CORS issues)
   useEffect(() => {
     const load = async () => {
       try {
@@ -88,18 +93,38 @@ export default function ClientMap({
     load();
   }, [initialCenter]);
 
-  // Heatmap points
-  const heatPoints: HeatPoint[] = useMemo(
-    () =>
-      stations.map((s) => ({
-        lat: s.lat,
-        lng: s.lng,
-        value: Number.isFinite(s.connectors || 0) ? (s.connectors as number) : 1,
-      })),
-    [stations]
-  );
+  // Heat “intensity” circles (no plugin, so it can’t crash)
+  const heatCircles = useMemo(() => {
+    if (!showHeatmap) return null;
+    // scale: connectors → radius & opacity
+    const points = stations.map((s) => {
+      const v = Math.max(1, Math.min(8, Number(s.connectors ?? 1))); // clamp 1..8
+      const radius = 6 + v * 3;          // 9..30px
+      const opacity = 0.14 + v * 0.03;   // 0.17..0.38
+      return { lat: s.lat, lng: s.lng, radius, opacity };
+    });
 
-  // Submit search using Nominatim (no extra deps)
+    return (
+      <Pane name="heatmap">
+        <LayerGroup>
+          {points.map((p, i) => (
+            <CircleMarker
+              key={i}
+              center={[p.lat, p.lng]}
+              radius={p.radius}
+              pathOptions={{
+                stroke: false,
+                fillOpacity: Math.min(0.45, p.opacity),
+                fillColor: '#ff6a00', // warm orange blob
+              }}
+            />
+          ))}
+        </LayerGroup>
+      </Pane>
+    );
+  }, [showHeatmap, stations]);
+
+  // Simple OSM search via Nominatim
   const doSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -107,9 +132,7 @@ export default function ClientMap({
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
         query.trim()
       )}&limit=1`;
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
       const json = await res.json();
       if (Array.isArray(json) && json[0]) {
         const lat = parseFloat(json[0].lat);
@@ -151,11 +174,19 @@ export default function ClientMap({
           }}
         >
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={showHeatmap}
+              onChange={(e) => setShowHeatmap(e.target.checked)}
+            />
             Heatmap
           </label>
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-            <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={showMarkers}
+              onChange={(e) => setShowMarkers(e.target.checked)}
+            />
             Markers
           </label>
 
@@ -210,12 +241,8 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Heatmap */}
-        {showHeatmap && (
-          <Pane name="heatmap">
-            <HeatmapWithScaling points={heatPoints} />
-          </Pane>
-        )}
+        {/* Pseudo-heatmap (fast & safe) */}
+        {heatCircles}
 
         {/* Markers */}
         {showMarkers && (
@@ -229,7 +256,11 @@ export default function ClientMap({
                     <div>{s.postcode}</div>
                     <div>Connectors: {s.connectors ?? 0}</div>
                     <div style={{ marginTop: 8 }}>
-                      <a href={`https://maps.google.com/?q=${s.lat},${s.lng}`} target="_blank" rel="noreferrer">
+                      <a
+                        href={`https://maps.google.com/?q=${s.lat},${s.lng}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Open in Google Maps
                       </a>
                     </div>
@@ -237,18 +268,17 @@ export default function ClientMap({
                 </Popup>
               </Marker>
             ))}
+            {/* Search result pin */}
+            {searchPin && (
+              <Marker position={searchPin}>
+                <Popup>Search result</Popup>
+              </Marker>
+            )}
           </Pane>
-        )}
-
-        {/* Search drop pin */}
-        {searchPin && (
-          <Marker position={searchPin}>
-            <Popup>Search result</Popup>
-          </Marker>
         )}
       </MapContainer>
 
-      {/* Non-blocking error (no white screen) */}
+      {/* Non-blocking error (so you never get a blank page from this file) */}
       {error && (
         <div
           style={{
