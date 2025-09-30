@@ -1,20 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  MapContainer,
-  TileLayer,
-  Pane,
-  useMap,
-} from 'react-leaflet';
+import { MapContainer, TileLayer, Pane, useMap } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
 
-import TopControls type { CouncilOption } from '@/components/TopControls';
+import TopControls, { CouncilOption } from '@/components/TopControls';
 import PopupPanel from '@/components/PopupPanel';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 
-/** Minimal station shape shared across layers (kept local to avoid aliases) */
+/** Minimal station shape (kept local to avoid path aliases) */
 type Station = {
   id?: string | number;
   name?: string;
@@ -32,7 +27,6 @@ type Station = {
 };
 
 type Props = {
-  /** Optional preloaded stations (else your layers can fetch internally) */
   stations?: Station[];
   initialCenter?: [number, number];
   initialZoom?: number;
@@ -68,10 +62,10 @@ export default function ClientMap({
   // Right-docked/bottom-sheet panel state
   const [activeStation, setActiveStation] = useState<Station | null>(null);
 
-  // Optional council filter state (TopControls shows a clear chip; expand as needed)
+  // Optional council filter
   const [council, setCouncil] = useState<CouncilOption | null>(null);
 
-  // Apply council filtering locally (adjust to your station schema)
+  // Apply council filtering locally
   const filteredStations = useMemo(() => {
     if (!council) return stations;
     return stations.filter((s) => s.councilCode === council.value);
@@ -112,7 +106,7 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Absolute top controls (measures height and sets CSS vars) */}
+        {/* Absolute top controls */}
         <TopControls
           mapRef={mapRef}
           council={council}
