@@ -2,80 +2,78 @@
 
 import React, { useEffect, useState } from 'react';
 import { GeoJSON } from 'react-leaflet';
+import type { FeatureCollection, Geometry } from 'geojson';
 
 type Props = {
-  /** Path in /public, e.g. "/data/council-test.geojson" */
   url: string;
-  /** Stroke color */
   color?: string;
-  /** Fill color */
   fillColor?: string;
-  /** 0–1 fill opacity */
   fillOpacity?: number;
-  /** Line weight */
   weight?: number;
 };
 
 export default function CouncilLayer({
   url,
-  color = '#14b8a6',
-  fillColor = '#14b8a6',
-  fillOpacity = 0.10,
+  color = '#0ea5a5',
+  fillColor = '#06b6d4',
+  fillOpacity = 0.12,
   weight = 2,
 }: Props) {
-  const [data, setData] = useState<any | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [data, setData] = useState<FeatureCollection | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-
-    // One-time (per mount) cache-bust so CDN/browser don't serve stale file.
-    // Bucket to a minute so we don't remount on small state changes.
-    const bust = `v=${Math.floor(Date.now() / 60000)}`;
-    const src = url.includes('?') ? `${url}&${bust}` : `${url}?${bust}`;
-
-    (async () => {
-      try {
-        const res = await fetch(src, {
-          headers: { Accept: 'application/json' },
-          cache: 'no-store',
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = await res.json();
-        if (!cancelled) {
-          setData(json);
-          setErr(null);
-          // Debug: comment or keep as needed
-          console.info(
-            '[CouncilLayer] loaded features:',
-            Array.isArray(json?.features) ? json.features.length : 0
-          );
-        }
-      } catch (e: any) {
-        if (!cancelled) {
-          setErr(e?.message ?? 'Failed to load council data');
-          console.warn('[CouncilLayer] failed:', e);
-        }
-      }
-    })();
-
+    let alive = true;
+    fetch(url, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((fc) => {
+        if (!alive) return;
+        if (!fc || fc.type !== 'FeatureCollection') return setData(null);
+        // Filter to Polygon/MultiPolygon only
+        const filtered = {
+          ...fc,
+          features: (fc.features ?? []).filter((f: any) => {
+            const t = f?.geometry?.type as Geometry['type'] | undefined;
+            return t === 'Polygon' || t === 'MultiPolygon';
+          }),
+        } as FeatureCollection;
+        setData(filtered);
+      })
+      .catch(() => setData(null));
     return () => {
-      cancelled = true;
+      alive = false;
     };
   }, [url]);
 
-  if (!data || err) return null;
+  if (!data) return null;
 
   return (
     <GeoJSON
-      data={data}
+      data={data as any}
       style={() => ({
         color,
         weight,
-        opacity: 1,
         fillColor,
         fillOpacity,
       })}
+      onEachFeature={(feature, layer) => {
+        const props: any = feature?.properties || {};
+        const name =
+          props.name ||
+          props.NAME ||
+          props.lad23nm ||
+          props.lad22nm ||
+          props.ladnm ||
+          'Council area';
+        try {
+          layer.bindTooltip(name, {
+            sticky: true,
+            direction: 'auto',
+            opacity: 0.9,
+          });
+        } catch {
+          /* ignore */
+        }
+      }}
     />
   );
 }
