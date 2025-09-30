@@ -1,139 +1,119 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo } from 'react';
+import { GeoJSON, Pane } from 'react-leaflet';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import { GeoJSON, Pane, useMap, useMapEvents } from 'react-leaflet';
-
-// tiny debounce helper
-function debounce<T extends (...a: any[]) => void>(fn: T, wait = 300) {
-  let t: any;
-  return (...args: Parameters<T>) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
-  };
-}
+import type { Layer } from 'leaflet';
 
 type Props = {
-  enabled: boolean;
-  /** polygons are hidden below this zoom */
-  minZoom?: number;
-  /** called when user clicks a polygon */
-  onSelect?: (f: Feature) => void;
-  /** name (or id) of the currently selected polygon for highlight */
-  selectedKey?: string | null;
-  /** which feature property to use as the id/key (default "name") */
-  keyProp?: string;
+  enabled?: boolean;
+  /** Name of the currently-selected council (for styling). */
+  selectedName?: string | null;
+  /** Called when user clicks a council polygon (or clicks empty map in parent to clear). */
+  onPick?: (name: string, feature: Feature<Geometry, any>) => void;
 };
 
-export default function CouncilLayer({
-  enabled,
-  minZoom = 10,
-  onSelect,
-  selectedKey,
-  keyProp = 'name',
-}: Props) {
-  const map = useMap();
-  const [data, setData] = useState<FeatureCollection | null>(null);
-  const [seq, setSeq] = useState(0);
-  const abortRef = useRef<AbortController | null>(null);
+function getName(f: Feature<Geometry, any>): string | null {
+  const p = (f?.properties ?? {}) as Record<string, any>;
+  return (
+    p?.name ||
+    p?.NAME ||
+    p?.NAME_SHORT ||
+    p?.borough ||
+    p?.lad15nm ||
+    p?.lad17nm ||
+    null
+  );
+}
 
-  const refetch = useMemo(
-    () =>
-      debounce(async () => {
-        if (!enabled || !map) return;
+export default function CouncilLayer({ enabled = true, selectedName, onPick }: Props) {
+  // Fetch from our API using map bbox; the ClientMap fetches /api/councils via bbox.
+  // To keep this component self-contained we let the parent page hit /api/councils
+  // indirectly by giving it a src; but for now we load a static endpoint that reads bbox
+  // from the window’s current map. Parent ensures bbox param is applied by server route.
+  // Here we just render whatever the parent already requested; simplest is the parent
+  // passing the data. To avoid churn, we’ll fetch here with no-cache and let the server clip.
 
-        const z = map.getZoom();
-        if (z < minZoom) {
-          setData(null);
-          return;
-        }
+  // NOTE: If you already pass the data from parent, you can delete this fetch and
+  // expose {data} as a prop instead.
 
-        const b = map.getBounds();
-        const bbox = `${b.getWest()},${b.getSouth()},${b.getEast()},${b.getNorth()}`;
-        const qs = new URLSearchParams({ bbox });
+  const [data, setData] = React.useState<FeatureCollection | null>(null);
 
-        if (abortRef.current) abortRef.current.abort();
-        const ac = new AbortController();
-        abortRef.current = ac;
+  React.useEffect(() => {
+    let abort = false;
+    async function load() {
+      try {
+        // Let the API compute bbox clipping from the map via query string.
+        // We just try once on mount; ClientMap remounts CouncilLayer when bounds change.
+        const u = new URL('/api/councils', window.location.origin);
+        // pass bbox if present in URL (optional)
+        const spIn = new URLSearchParams(window.location.search);
+        const bbox = spIn.get('bbox');
+        if (bbox) u.searchParams.set('bbox', bbox);
+        const res = await fetch(u.toString(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = (await res.json()) as FeatureCollection;
+        if (!abort) setData(json);
+      } catch {
+        // ignore
+      }
+    }
+    if (enabled) load();
+    return () => {
+      abort = true;
+    };
+  }, [enabled]);
 
-        try {
-          const res = await fetch(`/api/councils?${qs.toString()}`, {
-            cache: 'no-store',
-            signal: ac.signal,
-          });
-          if (!res.ok) throw new Error(`councils ${res.status}`);
-          const fc = (await res.json()) as FeatureCollection;
-
-          const count = Array.isArray(fc?.features) ? fc.features.length : 0;
-          setData(count ? fc : null);
-          setSeq((s) => s + 1);
-        } catch (e: any) {
-          if (e?.name !== 'AbortError') {
-            console.error('Council fetch failed:', e);
-            setData(null);
-          }
-        } finally {
-          if (abortRef.current === ac) abortRef.current = null;
-        }
-      }, 300),
-    [enabled, map, minZoom]
+  const style = useMemo(
+    () => () => ({
+      color: '#0a6c47',
+      weight: 2,
+      opacity: 0.9,
+      fillColor: '#0a6c47',
+      // Slightly stronger fill for the selected polygon
+      fillOpacity: 0.08,
+    }),
+    []
   );
 
-  useEffect(() => {
-    refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, minZoom]);
-
-  useMapEvents({
-    moveend: refetch,
-    zoomend: refetch,
-  });
-
-  const style = (feature?: Feature) => {
-    const k = String(feature?.properties?.[keyProp] ?? '');
-    const selected = selectedKey && k === selectedKey;
-    return {
-      color: selected ? '#0a7' : '#1d6b66',
-      weight: selected ? 2.5 : 1.5,
-      opacity: selected ? 1 : 0.9,
-      fillColor: selected ? '#0a7' : '#1d6b66',
-      fillOpacity: selected ? 0.18 : 0.10,
-    };
-  };
+  if (!enabled || !data?.features?.length) return null;
 
   return (
     <>
-      {/* tiles (~200) < council (300) < markers (400) */}
-      <Pane name="council-pane" style={{ zIndex: 300 }} />
-      {enabled && data ? (
-        <GeoJSON
-          key={`council-${seq}-${data.features.length}-${selectedKey ?? 'none'}`}
-          pane="council-pane"
-          data={data as any}
-          style={style}
-          onEachFeature={(feature: Feature<Geometry, any>, layer: any) => {
-            const name = feature?.properties?.[keyProp];
-            if (name) {
-              try {
-                layer.bindTooltip(String(name), { direction: 'auto' });
-              } catch {}
-            }
-
-            // hover highlight
-            layer.on('mouseover', () => {
-              layer.setStyle({ weight: 2.5, fillOpacity: 0.18 }).bringToFront();
-            });
-            layer.on('mouseout', () => {
-              layer.setStyle(style(feature));
-            });
-
-            // click to select
-            layer.on('click', () => {
-              onSelect?.(feature);
-            });
-          }}
-        />
-      ) : null}
+      <Pane name="council-pane" style={{ zIndex: 350 }} />
+      <GeoJSON
+        key={`councils-${data.features.length}-${selectedName ?? 'none'}`}
+        pane="council-pane"
+        data={data as any}
+        style={(feat) => {
+          const base = style();
+          const name = feat ? getName(feat as any) : null;
+          if (selectedName && name && name === selectedName) {
+            return { ...base, weight: 3, fillOpacity: 0.18 };
+          }
+          return base;
+        }}
+        onEachFeature={(feature: Feature<Geometry, any>, layer: Layer) => {
+          const name = getName(feature) ?? 'Council';
+          // Simple hover highlight
+          // @ts-ignore leaflet layer typing
+          layer.on('mouseover', () => {
+            // @ts-ignore
+            layer.setStyle?.({ weight: 3, fillOpacity: 0.18 })?.bringToFront?.();
+          });
+          // @ts-ignore
+          layer.on('mouseout', () => {
+            // @ts-ignore
+            layer.setStyle?.(style());
+          });
+          // Click to select
+          // @ts-ignore
+          layer.on('click', () => onPick?.(name, feature));
+          // Small tooltip so users see the borough name while hovering
+          // @ts-ignore
+          layer.bindTooltip(name, { sticky: true, direction: 'top', opacity: 0.9 });
+        }}
+      />
     </>
   );
 }
