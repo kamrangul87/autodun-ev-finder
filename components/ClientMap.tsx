@@ -17,16 +17,18 @@ type Station = {
   connectors?: number;
 };
 
+type Props = {
+  initialCenter?: [number, number];
+  initialZoom?: number;
+};
+
 export default function ClientMap({
   initialCenter = [51.5072, -0.1276],
   initialZoom = 11,
-}: { initialCenter?: [number, number]; initialZoom?: number }) {
+}: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
-  const [stations, setStations] = useState<Station[]>([]);
-  const [loadMsg, setLoadMsg] = useState<string>('Loading stations…');
-  const [error, setError] = useState<string | null>(null);
 
-  // UI toggles/sliders
+  // UI state
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showCouncil, setShowCouncil] = useState(true);
@@ -35,15 +37,23 @@ export default function ClientMap({
   const [blur, setBlur] = useState(0.35);
   const [query, setQuery] = useState('');
 
-  // Load stations from our API
+  // Data state
+  const [stations, setStations] = useState<Station[]>([]);
+  const [stationsMsg, setStationsMsg] = useState<string>('Loading…');
+  const [error, setError] = useState<string | null>(null);
+
+  // Load stations via our API route (avoids CORS/rate-limit surprises)
   useEffect(() => {
     const load = async () => {
       try {
         const [lat, lng] = initialCenter;
-        const res = await fetch(
-          `/api/ocm?lat=${lat}&lng=${lng}&distance=25&maxresults=650&countrycode=GB&v=${Date.now()}`,
-          { headers: { 'Accept': 'application/json' }, cache: 'no-store' }
-        );
+        const url =
+          `/api/ocm?lat=${lat}&lng=${lng}` +
+          `&distance=25&maxresults=650&countrycode=GB&v=${Date.now()}`;
+        const res = await fetch(url, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
         const json = await res.json();
 
         if (!Array.isArray(json)) {
@@ -52,7 +62,9 @@ export default function ClientMap({
 
         const mapped: Station[] = json
           .map((p: any) => ({
-            id: p?.ID ?? `${p?.AddressInfo?.Latitude},${p?.AddressInfo?.Longitude}`,
+            id:
+              p?.ID ??
+              `${p?.AddressInfo?.Latitude ?? ''},${p?.AddressInfo?.Longitude ?? ''}`,
             name: p?.AddressInfo?.Title ?? 'EV Charging',
             address: p?.AddressInfo?.AddressLine1 ?? '',
             postcode: p?.AddressInfo?.Postcode ?? '',
@@ -63,28 +75,34 @@ export default function ClientMap({
           .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
 
         setStations(mapped);
-        setLoadMsg(`Stations: ${mapped.length}`);
+        setStationsMsg(`${mapped.length}`);
         setError(null);
-        console.info('[EV] loaded', mapped.length, 'stations');
+        console.info('[EV] loaded stations:', mapped.length);
       } catch (e: any) {
         console.warn('[EV] load failed', e);
+        setStations([]);
+        setStationsMsg('0');
         setError(e?.message ?? 'Failed to load stations');
-        setLoadMsg('Stations: 0');
       }
     };
+
     load();
   }, [initialCenter]);
 
+  // Prepare heatmap points
   const heatPoints: HeatPoint[] = useMemo(
     () => stations.map((s) => ({ lat: s.lat, lng: s.lng, value: s.connectors ?? 1 })),
     [stations]
   );
 
+  // Simple address search (Nominatim)
   const doSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
     try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query.trim())}&limit=1`;
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        query.trim()
+      )}&limit=1`;
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
       const json = await res.json();
       if (Array.isArray(json) && json[0]) {
@@ -101,7 +119,7 @@ export default function ClientMap({
 
   return (
     <div className="map-root">
-      {/* Controls bar */}
+      {/* Top controls bar */}
       <div
         style={{
           position: 'absolute',
@@ -127,21 +145,68 @@ export default function ClientMap({
           }}
         >
           {/* Toggles */}
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <label><input type="checkbox" checked={showHeatmap} onChange={e=>setShowHeatmap(e.target.checked)} /> Heatmap</label>
-            <label><input type="checkbox" checked={showMarkers} onChange={e=>setShowMarkers(e.target.checked)} /> Markers</label>
-            <label><input type="checkbox" checked={showCouncil} onChange={e=>setShowCouncil(e.target.checked)} /> Council</label>
-            <span style={{ marginLeft: 10, fontSize: 12, color: '#2f6b2f', fontWeight: 600 }}>{loadMsg}</span>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={showHeatmap}
+                onChange={(e) => setShowHeatmap(e.target.checked)}
+              />{' '}
+              Heatmap
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showMarkers}
+                onChange={(e) => setShowMarkers(e.target.checked)}
+              />{' '}
+              Markers
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showCouncil}
+                onChange={(e) => setShowCouncil(e.target.checked)}
+              />{' '}
+              Council
+            </label>
+
+            <span style={{ marginLeft: 8, fontSize: 12, color: '#2f6b2f', fontWeight: 700 }}>
+              Stations: {stationsMsg}
+            </span>
           </div>
 
           {/* Sliders */}
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
-            <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e)=>setIntensity(Number(e.target.value))}/>
+            <input
+              type="range"
+              min={0.5}
+              max={5}
+              step={0.5}
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+            />
+
             <span style={{ fontSize: 12, color: '#444' }}>Radius</span>
-            <input type="range" min={8} max={40} step={2} value={radius} onChange={(e)=>setRadius(Number(e.target.value))}/>
+            <input
+              type="range"
+              min={8}
+              max={40}
+              step={2}
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+            />
+
             <span style={{ fontSize: 12, color: '#444' }}>Blur</span>
-            <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e)=>setBlur(Number(e.target.value))}/>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={blur}
+              onChange={(e) => setBlur(Number(e.target.value))}
+            />
           </div>
 
           {/* Search */}
@@ -151,23 +216,42 @@ export default function ClientMap({
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search address or place..."
               aria-label="Search"
-              style={{ width: 420, height: 36, borderRadius: 12, border: '1px solid rgba(0,0,0,0.12)', padding: '0 12px' }}
+              style={{
+                width: 420,
+                height: 36,
+                borderRadius: 12,
+                border: '1px solid rgba(0,0,0,0.12)',
+                padding: '0 12px',
+              }}
             />
-            <button type="submit" style={{ height: 36, padding: '0 14px', borderRadius: 12, border: '1px solid rgba(0,0,0,0.12)', background: '#fff' }}>
+            <button
+              type="submit"
+              style={{
+                height: 36,
+                padding: '0 14px',
+                borderRadius: 12,
+                border: '1px solid rgba(0,0,0,0.12)',
+                background: '#fff',
+              }}
+            >
               Search
             </button>
           </form>
         </div>
       </div>
 
+      {/* Map */}
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
-        ref={(ref) => { if (ref) mapRef.current = ref; }}
+        ref={(ref) => {
+          if (ref) mapRef.current = ref;
+        }}
         className="leaflet-map"
         preferCanvas
         style={{ height: 'calc(100vh - 120px)' }}
       >
+        {/* Base tiles */}
         <Pane name="base" style={{ zIndex: 100 }}>
           <TileLayer
             attribution="&copy; OpenStreetMap contributors · Charging location data © Open Charge Map (CC BY 4.0)"
@@ -175,19 +259,33 @@ export default function ClientMap({
           />
         </Pane>
 
+        {/* Heatmap below overlays */}
         {showHeatmap && (
           <Pane name="heatmap" style={{ zIndex: 200, pointerEvents: 'none' }}>
-            <HeatmapWithScaling points={heatPoints} intensity={intensity} radius={radius} blur={blur} />
+            <HeatmapWithScaling
+              points={heatPoints}
+              intensity={intensity}
+              radius={radius}
+              blur={blur}
+            />
           </Pane>
         )}
 
+        {/* Council boundaries above heatmap but below markers */}
         {showCouncil && (
           <Pane name="council" style={{ zIndex: 250, pointerEvents: 'none' }}>
-            {/* Cache-busted so you always see the latest file */}
-            <CouncilLayer url={`/data/council-test.geojson?v=${Date.now()}`} />
+            {/* Stable URL so the layer doesn't remount on every slider change */}
+            <CouncilLayer
+              url="/data/council-test.geojson"
+              color="#0ea5a5"
+              fillColor="#06b6d4"
+              fillOpacity={0.12}
+              weight={2}
+            />
           </Pane>
         )}
 
+        {/* Cluster markers on top */}
         {showMarkers && (
           <Pane name="markers" style={{ zIndex: 300 }}>
             <ClusterLayer stations={stations} />
@@ -195,7 +293,7 @@ export default function ClientMap({
         )}
       </MapContainer>
 
-      {/* Error toast */}
+      {/* Error toast (if stations fetch fails) */}
       {error && (
         <div
           style={{
