@@ -158,7 +158,7 @@ export default function ClientMap({
             </label>
           </div>
 
-          {/* Simple sliders */}
+          {/* Sliders */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
             <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} />
@@ -168,7 +168,7 @@ export default function ClientMap({
             <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e) => setBlur(Number(e.target.value))} />
           </div>
 
-          {/* Search bar */}
+          {/* Search */}
           <form onSubmit={doSearch} style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
             <input
               value={query}
