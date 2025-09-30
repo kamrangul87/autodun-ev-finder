@@ -241,10 +241,12 @@ export default function ClientMap({
         {/* heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && (
           <HeatLayer
+            options={{
             points={heatPoints}
             radius={heatOptions?.radius ?? 28}
             blur={heatOptions?.blur ?? 25}
             minOpacity={heatOptions?.minOpacity ?? 0.35}
+             }}
           />
         )}
 
