@@ -9,7 +9,7 @@ import PopupPanel from '@/components/PopupPanel';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 
-/** Minimal station shape (local to avoid path aliases) */
+/** Station shape kept local */
 type Station = {
   id?: string | number;
   name?: string;
@@ -26,7 +26,6 @@ type Station = {
   councilCode?: string;
 };
 
-/** The shape HeatmapWithScaling expects */
 type HeatPoint = { lat: number; lng: number; value: number };
 
 type Props = {
@@ -41,7 +40,7 @@ type Props = {
   heatOptions?: Record<string, any>;
 };
 
-/** Create/normalize panes with predictable stacking */
+/** Make panes with stable z-indices */
 function EnsurePanes() {
   const map = useMap();
   useEffect(() => {
@@ -61,6 +60,28 @@ function EnsurePanes() {
   return null;
 }
 
+/** Defensive wrapper so a heatmap error can’t crash the whole page */
+function SafeHeatmap({ points, options }: { points: HeatPoint[]; options: Record<string, any> }) {
+  try {
+    if (!Array.isArray(points) || points.length === 0) return null;
+    // Validate items
+    const safe = points.filter(
+      (p) =>
+        typeof p?.lat === 'number' &&
+        typeof p?.lng === 'number' &&
+        Number.isFinite(p.lat) &&
+        Number.isFinite(p.lng) &&
+        typeof p?.value === 'number' &&
+        Number.isFinite(p.value)
+    );
+    if (safe.length === 0) return null;
+    return <HeatmapWithScaling points={safe} {...options} />;
+  } catch {
+    // swallow runtime errors to avoid white screen
+    return null;
+  }
+}
+
 export default function ClientMap({
   stations = [],
   initialCenter = [51.5072, -0.1276],
@@ -68,7 +89,7 @@ export default function ClientMap({
 
   showHeatmap = true,
   showMarkers = true,
-  showCouncil = true, // reserved for future council-boundary overlay
+  showCouncil = true, // reserved for future council overlay toggle
   onStationsCount,
   heatOptions = {},
 }: Props) {
@@ -77,13 +98,11 @@ export default function ClientMap({
   const [activeStation, setActiveStation] = useState<Station | null>(null);
   const [council, setCouncil] = useState<CouncilOption | null>(null);
 
-  // Filter by selected council (if any)
   const filteredStations = useMemo(() => {
     if (!council) return stations;
     return stations.filter((s) => s.councilCode === council.value);
   }, [stations, council]);
 
-  // Report count upward
   useEffect(() => {
     onStationsCount?.(filteredStations.length);
   }, [filteredStations.length, onStationsCount]);
@@ -91,7 +110,7 @@ export default function ClientMap({
   const handleMarkerClick = (s: Station) => setActiveStation(s);
   const handleClosePanel = () => setActiveStation(null);
 
-  // Map stations -> heat points
+  // Map to heat points safely
   const heatPoints: HeatPoint[] = useMemo(() => {
     return filteredStations
       .map((s) => {
@@ -99,16 +118,13 @@ export default function ClientMap({
         const lng = s.lng ?? s.longitude;
         if (typeof lat !== 'number' || typeof lng !== 'number') return null;
 
-        // Derive an intensity value:
-        // prefer a numeric connectors count; fallback to reports; else 1
         let value = 1;
-        if (typeof s.connectors === 'number') value = s.connectors;
+        if (typeof s.connectors === 'number' && Number.isFinite(s.connectors)) value = s.connectors;
         else if (typeof s.connectors === 'string') {
           const n = parseFloat(s.connectors);
-          if (!Number.isNaN(n)) value = n;
-        } else if (typeof s.reports === 'number' && s.reports > 0) {
-          value = s.reports;
-        }
+          if (Number.isFinite(n)) value = n;
+        } else if (typeof s.reports === 'number' && s.reports > 0) value = s.reports;
+
         return { lat, lng, value };
       })
       .filter((p): p is HeatPoint => !!p);
@@ -135,33 +151,25 @@ export default function ClientMap({
           />
         </Pane>
 
-        {/* Heatmap (toggleable) */}
+        {/* Heatmap (toggleable, sandboxed) */}
         {showHeatmap && (
           <Pane name="heatmap">
-            <HeatmapWithScaling points={heatPoints} {...heatOptions} />
+            <SafeHeatmap points={heatPoints} options={heatOptions} />
           </Pane>
         )}
 
-        {/* Markers / clusters (toggleable; click opens React panel) */}
+        {/* Markers / clusters (toggleable) */}
         {showMarkers && (
           <Pane name="clusters">
-            <ClusterLayer
-              stations={filteredStations}
-              onMarkerClick={handleMarkerClick}
-              visible
-            />
+            <ClusterLayer stations={filteredStations} onMarkerClick={handleMarkerClick} visible />
           </Pane>
         )}
 
-        {/* Absolute top controls */}
-        <TopControls
-          mapRef={mapRef}
-          council={council}
-          onCouncilChange={setCouncil}
-        />
+        {/* Top controls (measures height, sets CSS vars) */}
+        <TopControls mapRef={mapRef} council={council} onCouncilChange={setCouncil} />
       </MapContainer>
 
-      {/* Right-docked details panel (desktop) / bottom sheet (mobile) */}
+      {/* Right-docked details panel / bottom sheet */}
       <PopupPanel station={activeStation} onClose={handleClosePanel} />
     </div>
   );
