@@ -1,13 +1,13 @@
+// components/ClientMap.tsx
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Pane } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
-import HeatmapWithScaling, { type HeatPoint } from '@/components/HeatmapWithScaling';
+import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 import CouncilLayer from '@/components/CouncilLayer';
 
-/** OCM -> internal shape we use everywhere */
 type Station = {
   id: number | string;
   name?: string;
@@ -18,6 +18,8 @@ type Station = {
   connectors?: number;
 };
 
+type HeatPoint = { lat: number; lng: number; value: number };
+
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
@@ -26,7 +28,7 @@ type Props = {
 const DEFAULT_CENTER: [number, number] = [51.5072, -0.1276];
 const DEFAULT_ZOOM = 11;
 
-/* --- helpers -------------------------------------------------------------- */
+/* ----------------------------- helpers ---------------------------------- */
 
 function haversineKm(a: [number, number], b: [number, number]) {
   const toRad = (x: number) => (x * Math.PI) / 180;
@@ -37,13 +39,15 @@ function haversineKm(a: [number, number], b: [number, number]) {
   const dLon = toRad(lon2 - lon1);
   const s1 =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(s1), Math.sqrt(1 - s1));
   return R * c;
 }
 
-/** How far to ask OCM for, depending on zoom level */
+/** OCM query radius (km) depends on zoom */
 function distanceKmForZoom(z: number): number {
   if (z >= 15) return 3;
   if (z >= 14) return 5;
@@ -54,9 +58,8 @@ function distanceKmForZoom(z: number): number {
   return 60;
 }
 
-/** Heat radius that feels consistent across zooms */
+/** Heat radius scales with zoom so it looks consistent */
 function heatRadiusForZoom(z: number, base: number): number {
-  // smaller radius at higher zoom so blobs don't explode
   if (z >= 15) return Math.max(6, Math.round(base * 0.55));
   if (z >= 14) return Math.max(6, Math.round(base * 0.7));
   if (z >= 13) return Math.round(base * 0.85);
@@ -65,7 +68,7 @@ function heatRadiusForZoom(z: number, base: number): number {
   return Math.round(base * 1.45);
 }
 
-/* --- component ------------------------------------------------------------ */
+/* ---------------------------- component --------------------------------- */
 
 export default function ClientMap({
   initialCenter = DEFAULT_CENTER,
@@ -73,7 +76,7 @@ export default function ClientMap({
 }: Props) {
   const mapRef = useRef<LeafletMap | null>(null);
 
-  // UI
+  // UI toggles
   const [showHeatmap, setShowHeatmap] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
   const [showCouncil, setShowCouncil] = useState(true);
@@ -87,43 +90,50 @@ export default function ClientMap({
   const [stationsMsg, setStationsMsg] = useState<string>('—');
   const [error, setError] = useState<string | null>(null);
 
-  // Track current map view to scale heatmap + refetch OCM
+  // Track map view to manage re-fetch + heat scaling
   const [mapZoom, setMapZoom] = useState(initialZoom);
-  const [mapCenter, setMapCenter] = useState<[number, number]>(initialCenter);
+  const [mapCenter, setMapCenter] =
+    useState<[number, number]>(initialCenter);
+
   const lastFetchPos = useRef<[number, number]>(initialCenter);
   const inFlight = useRef<AbortController | null>(null);
   const lastFetchAt = useRef<number>(0);
 
-  // Derived heat points
   const heatPoints: HeatPoint[] = useMemo(
-    () => stations.map((s) => ({ lat: s.lat, lng: s.lng, value: (s.connectors ?? 1) })),
+    () =>
+      stations.map((s) => ({
+        lat: s.lat,
+        lng: s.lng,
+        value: s.connectors ?? 1,
+      })),
     [stations]
   );
+
   const heatRadius = useMemo(
     () => heatRadiusForZoom(mapZoom, radius),
     [mapZoom, radius]
   );
 
-  // Install map listeners once
+  // Called when MapContainer is ready (use e.target map)
   const handleCreated = (m: LeafletMap) => {
     mapRef.current = m;
 
-    const updateStateFromMap = () => {
+    const updateFromMap = () => {
       const c = m.getCenter();
       const z = m.getZoom();
       setMapCenter([c.lat, c.lng]);
       setMapZoom(z);
     };
-    updateStateFromMap();
 
-    m.on('moveend zoomend', updateStateFromMap);
-    // Trigger an initial fetch as soon as the map exists
+    updateFromMap();
+    m.on('moveend zoomend', updateFromMap);
+
+    // initial fetch
     setTimeout(() => refetchIfNeeded(true), 0);
   };
 
-  /** Fetch OCM around current map center, zoom-aware radius */
+  /** Fetch OCM data near (lat, lng) with zoom-aware distance */
   const fetchStations = async (lat: number, lng: number, z: number) => {
-    // cancel previous
     inFlight.current?.abort();
     const ac = new AbortController();
     inFlight.current = ac;
@@ -133,26 +143,34 @@ export default function ClientMap({
       const url =
         `/api/ocm?lat=${lat}&lng=${lng}` +
         `&distance=${distKm}&maxresults=1200&countrycode=GB`;
+
       const res = await fetch(url, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
       const json = await res.json();
       if (!Array.isArray(json)) throw new Error('Bad OCM response');
 
       const mapped: Station[] = json
         .map((p: any) => ({
-          id: p?.ID ?? `${p?.AddressInfo?.Latitude ?? ''},${p?.AddressInfo?.Longitude ?? ''}`,
+          id:
+            p?.ID ??
+            `${p?.AddressInfo?.Latitude ?? ''},${p?.AddressInfo?.Longitude ?? ''}`,
           name: p?.AddressInfo?.Title ?? 'EV Charging',
           address: p?.AddressInfo?.AddressLine1 ?? '',
           postcode: p?.AddressInfo?.Postcode ?? '',
           lat: Number(p?.AddressInfo?.Latitude),
           lng: Number(p?.AddressInfo?.Longitude),
-          connectors: Array.isArray(p?.Connections) ? p.Connections.length : 0,
+          connectors: Array.isArray(p?.Connections)
+            ? p.Connections.length
+            : 0,
         }))
-        .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lng));
+        .filter(
+          (s) => Number.isFinite(s.lat) && Number.isFinite(s.lng)
+        );
 
       setStations(mapped);
       setStationsMsg(String(mapped.length));
@@ -167,7 +185,7 @@ export default function ClientMap({
     }
   };
 
-  /** Only fetch if moved far enough or time elapsed */
+  /** Debounced conditional refetch */
   const refetchIfNeeded = (force = false) => {
     const now = Date.now();
     const elapsed = now - lastFetchAt.current;
@@ -175,21 +193,23 @@ export default function ClientMap({
 
     const z = mapZoom;
     const minMoveKm = z >= 14 ? 0.8 : z >= 12 ? 1.3 : 2.2;
-    const minWaitMs = 600; // debounce
+    const minWaitMs = 600;
 
     if (force || movedKm > minMoveKm || elapsed > 4000) {
       fetchStations(mapCenter[0], mapCenter[1], z);
+    } else {
+      // debounce wait
+      if (elapsed < minWaitMs) return;
     }
   };
 
-  // Re-fetch when the user pans/zooms (debounced)
   useEffect(() => {
     const t = setTimeout(() => refetchIfNeeded(false), 650);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapCenter[0], mapCenter[1], mapZoom]);
 
-  // Nominatim search
+  // Simple Nominatim search
   const doSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!query.trim()) return;
@@ -197,17 +217,22 @@ export default function ClientMap({
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
         query.trim()
       )}&limit=1`;
-      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      const res = await fetch(url, {
+        headers: { Accept: 'application/json' },
+      });
       const json = await res.json();
       if (Array.isArray(json) && json[0]) {
         const lat = parseFloat(json[0].lat);
         const lon = parseFloat(json[0].lon);
         if (Number.isFinite(lat) && Number.isFinite(lon)) {
-          mapRef.current?.setView([lat, lon], Math.max(13, mapRef.current?.getZoom() ?? 13));
+          mapRef.current?.setView(
+            [lat, lon],
+            Math.max(13, mapRef.current?.getZoom() ?? 13)
+          );
         }
       }
-    } catch (err) {
-      console.error('Search failed', err);
+    } catch {
+      /* ignore */
     }
   };
 
@@ -239,32 +264,99 @@ export default function ClientMap({
           }}
         >
           <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <label><input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} /> Heatmap</label>
-            <label><input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} /> Markers</label>
-            <label><input type="checkbox" checked={showCouncil} onChange={(e) => setShowCouncil(e.target.checked)} /> Council</label>
-            <span style={{ marginLeft: 8, fontSize: 12, color: '#2f6b2f', fontWeight: 700 }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={showHeatmap}
+                onChange={(e) => setShowHeatmap(e.target.checked)}
+              />{' '}
+              Heatmap
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showMarkers}
+                onChange={(e) => setShowMarkers(e.target.checked)}
+              />{' '}
+              Markers
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showCouncil}
+                onChange={(e) => setShowCouncil(e.target.checked)}
+              />{' '}
+              Council
+            </label>
+            <span
+              style={{
+                marginLeft: 8,
+                fontSize: 12,
+                color: '#2f6b2f',
+                fontWeight: 700,
+              }}
+            >
               Stations: {stationsMsg}
             </span>
           </div>
 
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             <span style={{ fontSize: 12, color: '#444' }}>Intensity</span>
-            <input type="range" min={0.5} max={5} step={0.5} value={intensity} onChange={(e) => setIntensity(Number(e.target.value))} />
+            <input
+              type="range"
+              min={0.5}
+              max={5}
+              step={0.5}
+              value={intensity}
+              onChange={(e) => setIntensity(Number(e.target.value))}
+            />
             <span style={{ fontSize: 12, color: '#444' }}>Radius</span>
-            <input type="range" min={8} max={40} step={2} value={radius} onChange={(e) => setRadius(Number(e.target.value))} />
+            <input
+              type="range"
+              min={8}
+              max={40}
+              step={2}
+              value={radius}
+              onChange={(e) => setRadius(Number(e.target.value))}
+            />
             <span style={{ fontSize: 12, color: '#444' }}>Blur</span>
-            <input type="range" min={0} max={1} step={0.05} value={blur} onChange={(e) => setBlur(Number(e.target.value))} />
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={blur}
+              onChange={(e) => setBlur(Number(e.target.value))}
+            />
           </div>
 
-          <form onSubmit={doSearch} style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <form
+            onSubmit={doSearch}
+            style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}
+          >
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search address or place..."
               aria-label="Search"
-              style={{ width: 420, height: 36, borderRadius: 12, border: '1px solid rgba(0,0,0,0.12)', padding: '0 12px' }}
+              style={{
+                width: 420,
+                height: 36,
+                borderRadius: 12,
+                border: '1px solid rgba(0,0,0,0.12)',
+                padding: '0 12px',
+              }}
             />
-            <button type="submit" style={{ height: 36, padding: '0 14px', borderRadius: 12, border: '1px solid rgba(0,0,0,0.12)', background: '#fff' }}>
+            <button
+              type="submit"
+              style={{
+                height: 36,
+                padding: '0 14px',
+                borderRadius: 12,
+                border: '1px solid rgba(0,0,0,0.12)',
+                background: '#fff',
+              }}
+            >
               Search
             </button>
           </form>
@@ -275,7 +367,7 @@ export default function ClientMap({
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
-        whenCreated={handleCreated}
+        whenReady={(e) => handleCreated(e.target)} // <- fixed
         className="leaflet-map"
         preferCanvas
         style={{ height: 'calc(100vh - 120px)' }}
@@ -300,7 +392,7 @@ export default function ClientMap({
           </Pane>
         )}
 
-        {/* Council boundaries above heat */}
+        {/* Council boundaries */}
         {showCouncil && (
           <Pane name="council" style={{ zIndex: 270, pointerEvents: 'none' }}>
             <CouncilLayer
