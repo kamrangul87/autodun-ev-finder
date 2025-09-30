@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { Map as LeafletMap } from 'leaflet';
-import classNames from 'classnames';
 
 export type CouncilOption = { label: string; value: string };
 
@@ -32,28 +31,29 @@ export default function TopControls({ mapRef, council, onCouncilChange }: Props)
     return () => ro.disconnect();
   }, []);
 
-  // (Your existing council filter / search controls UI can stay as-is)
   return (
     <div
       ref={barRef}
-      className={classNames(
-        'pointer-events-auto absolute left-1/2 -translate-x-1/2',
-        'top-3 z-[1200]', // higher than any Leaflet pane
-        'w-[min(1100px,calc(100vw-1.5rem))]'
-      )}
       role="region"
       aria-label="Map controls"
+      className={[
+        'pointer-events-auto',
+        'absolute left-1/2 -translate-x-1/2',
+        'top-3 z-[1200]',
+        'w-[min(1100px,calc(100vw-1.5rem))]',
+      ].join(' ')}
     >
       <div className="rounded-2xl bg-white/90 backdrop-blur shadow-lg border border-black/5">
-        {/* === Replace the contents below with your existing controls === */}
+        {/* === Place your existing controls inside this bar === */}
         <div className="flex flex-wrap items-center gap-3 px-4 py-3">
-          {/* heatmap/markers/council toggles, sliders, etc. */}
           <span className="text-sm font-medium opacity-70">EV Finder Controls</span>
-          {/* Example council clear chip (optional): */}
+
+          {/* Example council clear chip (optional) */}
           {council && (
             <button
               onClick={() => onCouncilChange(null)}
               className="ml-auto text-xs rounded-full px-3 py-1 bg-gray-100 hover:bg-gray-200"
+              type="button"
             >
               Clear council: {council.label}
             </button>
@@ -62,7 +62,7 @@ export default function TopControls({ mapRef, council, onCouncilChange }: Props)
         {/* === End controls content === */}
       </div>
 
-      {/* Spacer element below the controls so the map content underneath isn’t clickable through edges */}
+      {/* Spacer below the controls so edges aren’t click-through on the map */}
       {mounted && <div aria-hidden className="h-2" />}
     </div>
   );
