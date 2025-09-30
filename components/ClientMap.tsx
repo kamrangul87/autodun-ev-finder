@@ -25,7 +25,7 @@ export type Station = {
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // NOTE: server returns "lon"
+  lon: number; // server returns "lon"
   connectors: number | null;
   reports: number | null;
   downtime: number | null;
@@ -33,9 +33,12 @@ export type Station = {
 };
 
 export type HeatOptions = {
-  /** Multiplies each station weight; 1 = unchanged */
+  /** multiplies station weight before passing to leaflet.heat */
   intensity?: number;
-  /** (The rest are handled inside HeatLayer; we keep intensity here) */
+  /** forwarded to leaflet.heat options (if your HeatLayer supports it) */
+  radius?: number;
+  blur?: number;
+  minOpacity?: number;
 };
 
 type Props = {
@@ -48,7 +51,7 @@ type Props = {
 
   onStationsCount?: (n: number) => void;
 
-  /** Optional heatmap options coming from sliders on the page */
+  /** optional heat controls coming from page.tsx */
   heatOptions?: HeatOptions;
 };
 
@@ -130,7 +133,6 @@ function StationsFetcher({
 }
 
 /* ----------------------------- Marker styling ----------------------------- */
-/** Small blue dot used for single stations */
 const DotIcon = L.divIcon({
   className: '',
   html: `<div style="
@@ -142,7 +144,6 @@ const DotIcon = L.divIcon({
   iconAnchor: [6, 6],
 });
 
-/** Cluster bubble */
 const makeClusterIcon = (cluster: any) =>
   L.divIcon({
     html: `<div style="
@@ -180,16 +181,12 @@ function StationDetails({
   const title = name ?? 'EV Charging';
   const address = addr ?? (postcode ? `— ${postcode}` : '—');
   const conns = Math.max(1, Number(connectors ?? 0));
-
   const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(
     `${lat}, ${lon}`
   )}`;
 
   return (
-    <div
-      className="fixed right-3 top-3 z-[1100] w-[320px] max-w-[85vw]
-                 rounded-xl bg-white/95 shadow-lg border border-black/5 p-3"
-    >
+    <div className="fixed right-3 top-3 z-[1100] w-[320px] max-w-[85vw] rounded-xl bg-white/95 shadow-lg border border-black/5 p-3">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold">Station details</h3>
         <button
@@ -214,8 +211,7 @@ function StationDetails({
           href={mapsHref}
           target="_blank"
           rel="noreferrer"
-          className="inline-block mt-2 text-xs px-3 py-1 rounded
-                     bg-[#2172e5] text-white hover:opacity-90"
+          className="inline-block mt-2 text-xs px-3 py-1 rounded bg-[#2172e5] text-white hover:opacity-90"
         >
           Open in Google Maps
         </a>
@@ -223,7 +219,6 @@ function StationDetails({
     </div>
   );
 }
-
 function Row({ k, v }: { k: string; v: string }) {
   return (
     <div className="flex items-center justify-between gap-2">
@@ -233,7 +228,7 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-/* ------------------------------- Main map -------------------------------- */
+/* --------------------------------- Map ----------------------------------- */
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
@@ -246,12 +241,11 @@ export default function ClientMap({
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<Station | null>(null);
 
-  // keep the header counter updated
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight]
+  // Build heat points [lat, lon, weight]
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
     const intensity = Math.max(0.1, Math.min(3, heatOptions?.intensity ?? 1));
@@ -259,15 +253,16 @@ export default function ClientMap({
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
         const base = Number(s.connectors ?? 1);
-        // Normalize connectors to ~0.2..1
         let w = Math.max(0.2, Math.min(1, base / 4));
         w = Math.max(0.1, Math.min(1, w * intensity));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations, heatOptions?.intensity]);
 
-  // Fade markers slightly if heatmap is on (less visual clutter)
   const markerOpacity = showHeatmap ? 0.75 : 1;
+
+  // If your HeatLayer doesn't have 'options' typed, render it as any so we can forward options without TS errors
+  const HeatLayerAny = HeatLayer as any;
 
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
@@ -281,16 +276,21 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* fetch stations on move/zoom */}
         <StationsFetcher enabled={true} onData={setStations} />
 
-        {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
-        {/* heatmap UNDER markers */}
-        {showHeatmap && heatPoints.length > 0 && <HeatLayer points={heatPoints} />}
+        {showHeatmap && heatPoints.length > 0 && (
+          <HeatLayerAny
+            points={heatPoints}
+            options={{
+              radius: heatOptions?.radius,
+              blur: heatOptions?.blur,
+              minOpacity: heatOptions?.minOpacity,
+            }}
+          />
+        )}
 
-        {/* markers (clustered) */}
         {showMarkers && (
           <>
             <Pane name="stations-pane" style={{ zIndex: 400 }} />
@@ -298,7 +298,6 @@ export default function ClientMap({
               chunkedLoading
               disableClusteringAtZoom={16}
               spiderfyOnMaxZoom
-              spiderfyOnEveryZoom={false}
               zoomToBoundsOnClick
               showCoverageOnHover={false}
               maxClusterRadius={60}
@@ -316,9 +315,7 @@ export default function ClientMap({
                     position={pos}
                     icon={DotIcon}
                     pane="stations-pane"
-                    eventHandlers={{
-                      click: () => setSelected(s),
-                    }}
+                    eventHandlers={{ click: () => setSelected(s) }}
                     opacity={markerOpacity}
                   >
                     {(title || address) && (
@@ -341,7 +338,6 @@ export default function ClientMap({
         )}
       </MapContainer>
 
-      {/* side panel */}
       <StationDetails station={selected} onClose={() => setSelected(null)} />
     </div>
   );
