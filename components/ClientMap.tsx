@@ -18,8 +18,6 @@ import MarkerClusterGroup from 'react-leaflet-cluster';
 import CouncilLayer from '@/components/CouncilLayer';
 import SearchControl from '@/components/SearchControl';
 import StationPanel from '@/components/StationPanel';
-
-// Import HeatLayer + its Point type
 import HeatLayer, { type Point as HeatPoint } from '@/components/HeatmapWithScaling';
 
 // ---------- Types ----------
@@ -46,10 +44,13 @@ type HeatOpts = {
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
+
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
+
   onStationsCount?: (n: number) => void;
+
   heatOptions?: HeatOpts;
 };
 
@@ -300,6 +301,7 @@ export default function ClientMap({
                         downtime: s.downtime,
                         source: s.source,
                       }}
+                      onClose={() => {}}
                     />
                   </Popup>
                 </Marker>
