@@ -4,13 +4,16 @@ import React, { useMemo } from 'react';
 import { Marker, Tooltip, Pane } from 'react-leaflet';
 import type { LatLngExpression } from 'leaflet';
 
-// Use clustering if available; otherwise fall back to plain markers.
+// Safe dynamic access: only try to load on the client, and only if installed.
 let MarkerClusterGroup: any = null;
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  MarkerClusterGroup = require('react-leaflet-cluster').default;
-} catch {
-  MarkerClusterGroup = null;
+if (typeof window !== 'undefined') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('react-leaflet-cluster');
+    MarkerClusterGroup = mod?.default ?? null;
+  } catch {
+    MarkerClusterGroup = null;
+  }
 }
 
 /** Minimal station shape used by the layer */
@@ -30,15 +33,15 @@ export type Station = {
 type Props = {
   stations: Station[];
   onMarkerClick: (s: Station) => void;
-  visible?: boolean;             // allow hide/show from toggles
-  pane?: string;                 // Leaflet pane; default matches our z-index setup
+  visible?: boolean;
+  pane?: string;
 };
 
 function getLatLng(s: Station): LatLngExpression | null {
   const lat = s.lat ?? s.latitude;
   const lng = s.lng ?? s.longitude;
   if (typeof lat === 'number' && typeof lng === 'number' && !Number.isNaN(lat) && !Number.isNaN(lng)) {
-    return [lat, lng];
+    return [lat, lng] as LatLngExpression;
   }
   return null;
 }
