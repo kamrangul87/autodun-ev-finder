@@ -1,7 +1,21 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import type { Station } from '@/types';
+
+/** Minimal shape used by the panel (kept local to avoid path aliases). */
+type Station = {
+  name?: string;
+  address?: string;
+  postcode?: string;
+  source?: string;
+  connectors?: number | string;
+  reports?: number;
+  downtimeMins?: number;
+  lat?: number;
+  lng?: number;
+  latitude?: number;
+  longitude?: number;
+};
 
 type Props = {
   station: Station | null;
@@ -12,20 +26,13 @@ export default function PopupPanel({ station, onClose }: Props) {
   if (!station) return null;
 
   const gmapsHref = useMemo(() => {
-    const lat = (station as any).lat ?? (station as any).latitude;
-    const lng = (station as any).lng ?? (station as any).longitude;
+    const lat = station.lat ?? station.latitude;
+    const lng = station.lng ?? station.longitude;
     return `https://maps.google.com/?q=${lat},${lng}`;
   }, [station]);
 
-  // Minimal inline "X" icon to avoid extra dependencies
   const XIcon = (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-    >
+    <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path
         d="M18 6L6 18M6 6l12 12"
         stroke="currentColor"
@@ -35,6 +42,9 @@ export default function PopupPanel({ station, onClose }: Props) {
       />
     </svg>
   );
+
+  const lat = station.lat ?? station.latitude;
+  const lng = station.lng ?? station.longitude;
 
   return (
     <>
@@ -88,34 +98,32 @@ export default function PopupPanel({ station, onClose }: Props) {
           <dl className="mt-3 space-y-1.5 text-sm">
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Address</dt>
-              <dd className="flex-1">{(station as any).address ?? '—'}</dd>
+              <dd className="flex-1">{station.address ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Postcode</dt>
-              <dd className="flex-1">{(station as any).postcode ?? '—'}</dd>
+              <dd className="flex-1">{station.postcode ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Source</dt>
-              <dd className="flex-1">{(station as any).source ?? 'osm'}</dd>
+              <dd className="flex-1">{station.source ?? 'osm'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Connectors</dt>
-              <dd className="flex-1">{(station as any).connectors ?? '—'}</dd>
+              <dd className="flex-1">{station.connectors ?? '—'}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Reports</dt>
-              <dd className="flex-1">{(station as any).reports ?? 0}</dd>
+              <dd className="flex-1">{station.reports ?? 0}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Downtime (mins)</dt>
-              <dd className="flex-1">{(station as any).downtimeMins ?? 0}</dd>
+              <dd className="flex-1">{station.downtimeMins ?? 0}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Coordinates</dt>
               <dd className="flex-1">
-                {(((station as any).lat ?? (station as any).latitude) as number)?.toFixed(6)}
-                ,{' '}
-                {(((station as any).lng ?? (station as any).longitude) as number)?.toFixed(6)}
+                {typeof lat === 'number' ? lat.toFixed(6) : '—'}, {typeof lng === 'number' ? lng.toFixed(6) : '—'}
               </dd>
             </div>
           </dl>
