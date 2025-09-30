@@ -1,45 +1,82 @@
+// components/CouncilLayer.tsx
 'use client';
 
 import React, { useEffect, useState } from 'react';
 import { GeoJSON } from 'react-leaflet';
 
 type Props = {
-  /** Public path, e.g. `/data/london_boroughs.geojson` */
   url: string;
-  /** Line color (default teal) */
   color?: string;
 };
 
 export default function CouncilLayer({ url, color = '#14b8a6' }: Props) {
   const [data, setData] = useState<any | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancel = false;
+    let cancelled = false;
+
+    // cache-bust to avoid stale CDN/browser file
+    const cacheBust = `${url}${url.includes('?') ? '&' : '?'}v=${Date.now()}`;
+
     (async () => {
       try {
-        const res = await fetch(url, { headers: { Accept: 'application/json' } });
-        if (!cancel && res.ok) {
-          const json = await res.json();
+        const res = await fetch(cacheBust, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (!cancelled) {
           setData(json);
+          setErr(null);
+          console.info(
+            '[CouncilLayer] loaded:',
+            Array.isArray(json?.features) ? json.features.length : 0,
+            'features'
+          );
         }
-      } catch {
-        // Ignore (no overlay if fetch fails)
+      } catch (e: any) {
+        if (!cancelled) {
+          setErr(e?.message ?? 'Failed to load council data');
+          console.warn('[CouncilLayer] failed:', e);
+        }
       }
     })();
+
     return () => {
-      cancel = true;
+      cancelled = true;
     };
   }, [url]);
 
-  if (!data) return null;
+  if (!data) return err ? (
+    <div
+      style={{
+        position: 'absolute',
+        left: 8,
+        bottom: 8,
+        zIndex: 400,
+        padding: '6px 10px',
+        borderRadius: 8,
+        background: 'rgba(255,0,0,0.85)',
+        color: '#fff',
+        fontSize: 12,
+      }}
+    >
+      Council data not loaded
+    </div>
+  ) : null;
 
+  // Make it very visible while testing
   return (
     <GeoJSON
       data={data}
       style={() => ({
-        color,
-        weight: 1.5,
-        fillOpacity: 0,
+        color,             // stroke
+        weight: 3,         // thicker line so it stands out
+        opacity: 1,
+        fillColor: '#00bcd4',
+        fillOpacity: 0.12, // slight tint so you can’t miss it
       })}
     />
   );
