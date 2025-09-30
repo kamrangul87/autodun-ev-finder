@@ -6,39 +6,38 @@ import {
   TileLayer,
   useMap,
   useMapEvents,
-  Marker,
+  CircleMarker,
   Tooltip,
   Pane,
+  Marker,
+  Popup,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
-import L from 'leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
-
 import CouncilLayer from '@/components/CouncilLayer';
 import HeatLayer from '@/components/HeatLayer';
+import SearchControl from '@/components/SearchControl';
 
-/* --------------------------------- Types --------------------------------- */
-export type Station = {
+// ---------- Types ----------
+type Station = {
   id: string | number | null;
   name: string | null;
   addr: string | null;
   postcode: string | null;
   lat: number;
-  lon: number; // server returns "lon"
-  connectors: number | null;
-  reports: number | null;
-  downtime: number | null;
-  source: string | null;
+  lon: number; // NOTE: backend uses "lon"
+  connectors: number;
+  reports: number;
+  downtime: number;
+  source: string;
 };
 
-export type HeatOptions = {
-  /** multiplies station weight before passing to leaflet.heat */
-  intensity?: number;
-  /** forwarded to leaflet.heat options (if your HeatLayer supports it) */
+type HeatOptions = {
   radius?: number;
   blur?: number;
   minOpacity?: number;
+  intensity?: number; // multiplier applied to weights
 };
 
 type Props = {
@@ -49,13 +48,12 @@ type Props = {
   showMarkers?: boolean;
   showCouncil?: boolean;
 
-  onStationsCount?: (n: number) => void;
-
-  /** optional heat controls coming from page.tsx */
   heatOptions?: HeatOptions;
+
+  onStationsCount?: (n: number) => void;
 };
 
-/* ------------------------------- Utilities -------------------------------- */
+// ---------- Small utilities ----------
 function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   let t: any;
   return (...args: Parameters<T>) => {
@@ -64,7 +62,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
   };
 }
 
-/* ---------------------- Fetch stations on move/zoom ----------------------- */
+// ---------- Fetcher that follows your locked API contract ----------
 function StationsFetcher({
   enabled,
   onData,
@@ -82,6 +80,7 @@ function StationsFetcher({
 
         const b = map.getBounds();
         const z = map.getZoom();
+        // Your route expects separate params: west,south,east,north,zoom
         const params = new URLSearchParams({
           west: String(b.getWest()),
           south: String(b.getSouth()),
@@ -102,7 +101,9 @@ function StationsFetcher({
           if (!res.ok) throw new Error(`stations ${res.status}`);
           const json = await res.json();
 
+          // Contract: { items: Station[] }
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
+          // Keep only valid coordinates
           const clean = items.filter(
             (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
           );
@@ -132,33 +133,26 @@ function StationsFetcher({
   return null;
 }
 
-/* ----------------------------- Marker styling ----------------------------- */
-const DotIcon = L.divIcon({
-  className: '',
-  html: `<div style="
-    width:12px;height:12px;border-radius:9999px;
-    background:#2b7bff;border:2px solid white;
-    box-shadow:0 1px 3px rgba(0,0,0,.25);
-  "></div>`,
-  iconSize: L.point(12, 12, true),
-  iconAnchor: [6, 6],
-});
-
-const makeClusterIcon = (cluster: any) =>
-  L.divIcon({
-    html: `<div style="
-      width:36px;height:36px;border-radius:9999px;
-      display:flex;align-items:center;justify-content:center;
-      background:rgba(33,114,229,.12);
-      border:2px solid #2172e5;box-shadow:0 2px 6px rgba(0,0,0,.15);
-      color:#0b3b91;font-weight:700;font-size:13px;
-    "><span>${cluster.getChildCount()}</span></div>`,
-    className: 'autodun-cluster',
-    iconSize: L.point(36, 36, true),
+// ---------- URL view sync ----------
+function ViewUrlSync() {
+  const map = useMap();
+  useMapEvents({
+    moveend: () => {
+      if (typeof window === 'undefined') return;
+      const c = map.getCenter();
+      const z = map.getZoom();
+      const sp = new URLSearchParams(location.search);
+      sp.set('lat', c.lat.toFixed(6));
+      sp.set('lng', c.lng.toFixed(6));
+      sp.set('z', String(z));
+      history.replaceState(null, '', `${location.pathname}?${sp.toString()}`);
+    },
   });
+  return null;
+}
 
-/* -------------------------- Station details panel ------------------------- */
-function StationDetails({
+// ---------- Station detail side-panel (simple) ----------
+function InfoPanel({
   station,
   onClose,
 }: {
@@ -166,52 +160,61 @@ function StationDetails({
   onClose: () => void;
 }) {
   if (!station) return null;
-  const {
-    name,
-    addr,
-    postcode,
-    lat,
-    lon,
-    source,
-    connectors,
-    reports,
-    downtime,
-  } = station;
+  const { name, addr, postcode, connectors, reports, downtime, source, lat, lon } =
+    station;
 
-  const title = name ?? 'EV Charging';
-  const address = addr ?? (postcode ? `— ${postcode}` : '—');
-  const conns = Math.max(1, Number(connectors ?? 0));
-  const mapsHref = `https://maps.google.com/?q=${encodeURIComponent(
-    `${lat}, ${lon}`
-  )}`;
-
+  const gmaps = `https://maps.google.com/?q=${lat},${lon}`;
   return (
-    <div className="fixed right-3 top-3 z-[1100] w-[320px] max-w-[85vw] rounded-xl bg-white/95 shadow-lg border border-black/5 p-3">
-      <div className="flex items-center justify-between mb-2">
+    <div className="absolute right-3 top-16 z-[1001] w-[340px] rounded-lg bg-white/95 p-4 shadow-lg">
+      <div className="mb-2 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Station details</h3>
         <button
-          className="text-xs px-2 py-1 rounded bg-black/5 hover:bg-black/10"
           onClick={onClose}
+          className="rounded px-2 py-1 text-xs hover:bg-gray-100"
         >
           Close
         </button>
       </div>
-
       <div className="space-y-1 text-sm">
-        <Row k="Name" v={title} />
-        <Row k="Address" v={address} />
-        <Row k="Postcode" v={postcode ?? '—'} />
-        <Row k="Source" v={source ?? '—'} />
-        <Row k="Connectors" v={String(conns)} />
-        <Row k="Reports" v={String(reports ?? 0)} />
-        <Row k="Downtime (mins)" v={String(downtime ?? 0)} />
-        <Row k="Coordinates" v={`${lat.toFixed(6)}, ${lon.toFixed(6)}`} />
-
+        <div className="flex justify-between">
+          <span className="opacity-70">Name</span>
+          <span>{name || 'EV Charging'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Address</span>
+          <span>{addr || '—'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Postcode</span>
+          <span>{postcode || '—'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Source</span>
+          <span>{source || '—'}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Connectors</span>
+          <span>{Number(connectors || 0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Reports</span>
+          <span>{Number(reports || 0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Downtime (mins)</span>
+          <span>{Number(downtime || 0)}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="opacity-70">Coordinates</span>
+          <span>
+            {lat.toFixed(6)}, {lon.toFixed(6)}
+          </span>
+        </div>
         <a
-          href={mapsHref}
+          href={gmaps}
           target="_blank"
           rel="noreferrer"
-          className="inline-block mt-2 text-xs px-3 py-1 rounded bg-[#2172e5] text-white hover:opacity-90"
+          className="mt-2 inline-block rounded bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-500"
         >
           Open in Google Maps
         </a>
@@ -219,56 +222,59 @@ function StationDetails({
     </div>
   );
 }
-function Row({ k, v }: { k: string; v: string }) {
-  return (
-    <div className="flex items-center justify-between gap-2">
-      <span className="text-black/70">{k}</span>
-      <span className="font-medium text-right">{v}</span>
-    </div>
-  );
-}
 
-/* --------------------------------- Map ----------------------------------- */
+// ---------- Main component ----------
 export default function ClientMap({
   initialCenter = [51.509, -0.118],
   initialZoom = 12,
   showHeatmap = true,
   showMarkers = true,
   showCouncil = true,
-  onStationsCount,
   heatOptions,
+  onStationsCount,
 }: Props) {
+  // read initial center/zoom from URL if present
+  let initCenter = initialCenter;
+  let initZoom = initialZoom;
+  if (typeof window !== 'undefined') {
+    const sp = new URLSearchParams(location.search);
+    const lat = Number(sp.get('lat'));
+    const lng = Number(sp.get('lng'));
+    const z = Number(sp.get('z'));
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      initCenter = [lat, lng] as [number, number];
+    }
+    if (Number.isFinite(z)) initZoom = z;
+  }
+
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<Station | null>(null);
 
+  // keep your header counter in sync
   useEffect(() => {
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heat points [lat, lon, weight]
+  // Build heatmap points [lat, lon, weight] from stations
   type HeatPoint = [number, number, number];
   const heatPoints = useMemo<HeatPoint[]>(() => {
-    const intensity = Math.max(0.1, Math.min(3, heatOptions?.intensity ?? 1));
+    const mult = Number(heatOptions?.intensity ?? 1);
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
       .map((s) => {
+        // weight by connectors; clamp to [0.2, 1]
         const base = Number(s.connectors ?? 1);
         let w = Math.max(0.2, Math.min(1, base / 4));
-        w = Math.max(0.1, Math.min(1, w * intensity));
+        w = Math.max(0, Math.min(1, w * mult));
         return [Number(s.lat), Number(s.lon), w] as HeatPoint;
       });
   }, [stations, heatOptions?.intensity]);
 
-  const markerOpacity = showHeatmap ? 0.75 : 1;
-
-  // If your HeatLayer doesn't have 'options' typed, render it as any so we can forward options without TS errors
-  const HeatLayerAny = HeatLayer as any;
-
   return (
     <div className="w-full h-[70vh]" style={{ position: 'relative' }}>
       <MapContainer
-        center={initialCenter}
-        zoom={initialZoom}
+        center={initCenter}
+        zoom={initZoom}
         className="w-full h-full rounded-xl overflow-hidden"
       >
         <TileLayer
@@ -276,69 +282,74 @@ export default function ClientMap({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
+        {/* URL sync for center/zoom */}
+        <ViewUrlSync />
+
+        {/* search box */}
+        <SearchControl />
+
+        {/* fetch stations on move/zoom using your locked server API */}
         <StationsFetcher enabled={true} onData={setStations} />
 
+        {/* council polygons (under markers, above tiles) */}
         {showCouncil && <CouncilLayer enabled />}
 
+        {/* heatmap UNDER markers */}
         {showHeatmap && heatPoints.length > 0 && (
-          <HeatLayerAny
+          <HeatLayer
             points={heatPoints}
+            // pass options through to your HeatLayer (it should forward to leaflet.heat)
+            // @ts-ignore - in case your HeatLayer's prop typing is minimal
             options={{
-              radius: heatOptions?.radius,
-              blur: heatOptions?.blur,
-              minOpacity: heatOptions?.minOpacity,
+              radius: heatOptions?.radius ?? 45,
+              blur: heatOptions?.blur ?? 25,
+              minOpacity: heatOptions?.minOpacity ?? 0.35,
+              maxZoom: 17,
+              max: 1.0,
             }}
           />
         )}
 
+        {/* markers (clustered) */}
         {showMarkers && (
           <>
             <Pane name="stations-pane" style={{ zIndex: 400 }} />
             <MarkerClusterGroup
               chunkedLoading
-              disableClusteringAtZoom={16}
-              spiderfyOnMaxZoom
-              zoomToBoundsOnClick
+              spiderfyOnEveryZoom
               showCoverageOnHover={false}
-              maxClusterRadius={60}
-              iconCreateFunction={makeClusterIcon}
+              zoomToBoundsOnClick
+              polygonOptions={{ color: '#1976d2', weight: 1, opacity: 0.6 }}
             >
-              {stations.map((s, i) => {
-                const key = `${s.id ?? i}`;
-                const pos: [number, number] = [s.lat, s.lon];
-                const title = s.name ?? 'EV Charging';
-                const address = s.addr ?? s.postcode ?? '';
-
-                return (
-                  <Marker
-                    key={key}
-                    position={pos}
-                    icon={DotIcon}
-                    pane="stations-pane"
-                    eventHandlers={{ click: () => setSelected(s) }}
-                    opacity={markerOpacity}
-                  >
-                    {(title || address) && (
-                      <Tooltip direction="top" offset={[0, -6]} opacity={1}>
-                        <div style={{ fontSize: 12 }}>
-                          {title && (
-                            <div>
-                              <strong>{title}</strong>
-                            </div>
-                          )}
-                          {address && <div>{address}</div>}
-                        </div>
-                      </Tooltip>
-                    )}
-                  </Marker>
-                );
-              })}
+              {stations.map((s, i) => (
+                <Marker
+                  key={`st-${s.id ?? i}`}
+                  position={[s.lat, s.lon]}
+                  eventHandlers={{
+                    click: () => setSelected(s),
+                  }}
+                >
+                  {(s.name || s.addr) && (
+                    <Popup>
+                      <div style={{ fontSize: 13 }}>
+                        {s.name && (
+                          <div>
+                            <strong>{s.name}</strong>
+                          </div>
+                        )}
+                        {s.addr && <div>{s.addr}</div>}
+                      </div>
+                    </Popup>
+                  )}
+                </Marker>
+              ))}
             </MarkerClusterGroup>
           </>
         )}
       </MapContainer>
 
-      <StationDetails station={selected} onClose={() => setSelected(null)} />
+      {/* side panel for station details */}
+      <InfoPanel station={selected} onClose={() => setSelected(null)} />
     </div>
   );
 }
