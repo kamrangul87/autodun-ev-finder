@@ -7,6 +7,14 @@ import type { Map as LeafletMap } from 'leaflet';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
 import CouncilLayer from '@/components/CouncilLayer';
+// at top
+import { fixLeafletIcons } from '@/lib/leaflet-setup';
+
+// inside component body, run once
+useEffect(() => {
+  fixLeafletIcons();
+}, []);
+
 
 type Station = {
   id: number | string;
