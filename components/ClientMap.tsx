@@ -19,11 +19,8 @@ import CouncilLayer from '@/components/CouncilLayer';
 import SearchControl from '@/components/SearchControl';
 import StationPanel from '@/components/StationPanel';
 
-// ✅ Import the heat layer AND its public types
-import HeatLayer, {
-  type Point as HeatPoint,
-  type HeatOptions,
-} from '@/components/HeatmapWithScaling';
+// ✅ Import only what actually exists from HeatmapWithScaling
+import HeatLayer, { type Point as HeatPoint } from '@/components/HeatmapWithScaling';
 
 // ---------- Types ----------
 type Station = {
@@ -39,6 +36,14 @@ type Station = {
   source: string;
 };
 
+// Minimal options we pass through to HeatLayer
+type HeatOpts = {
+  radius?: number;
+  blur?: number;
+  minOpacity?: number;
+  max?: number;
+};
+
 type Props = {
   initialCenter?: [number, number];
   initialZoom?: number;
@@ -50,7 +55,7 @@ type Props = {
   onStationsCount?: (n: number) => void;
 
   /** Optional heatmap tuning coming from the page controls */
-  heatOptions?: HeatOptions;
+  heatOptions?: HeatOpts;
 };
 
 // ---------- utils ----------
@@ -64,7 +69,7 @@ function debounce<T extends (...args: any[]) => void>(fn: T, wait = 350) {
 
 // Simple blue dot as a DivIcon (no image assets needed)
 const dotIcon = L.divIcon({
-  className: '', // avoid extra leaflet default classes
+  className: '',
   html:
     '<span style="display:block;width:10px;height:10px;border:2px solid #2D6CDF;border-radius:50%;background:#2F80ED;box-shadow:0 0 0 2px rgba(255,255,255,0.9)"></span>',
   iconSize: [16, 16],
@@ -222,7 +227,7 @@ export default function ClientMap({
     onStationsCount?.(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Build heatmap points [lat, lon, weight] from stations (✅ typed from HeatmapWithScaling)
+  // Build heatmap points [lat, lon, weight] from stations
   const heatPoints = useMemo<HeatPoint[]>(() => {
     return (stations ?? [])
       .filter((s) => Number.isFinite(s.lat) && Number.isFinite(s.lon))
