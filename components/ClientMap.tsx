@@ -6,15 +6,13 @@ import {
   TileLayer,
   useMap,
   useMapEvents,
-  CircleMarker,
-  Tooltip,
   Pane,
   Marker,
   Popup,
 } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-
 import MarkerClusterGroup from 'react-leaflet-cluster';
+
 import CouncilLayer from '@/components/CouncilLayer';
 import HeatLayer from '@/components/HeatLayer';
 import SearchControl from '@/components/SearchControl';
@@ -37,7 +35,11 @@ type HeatOptions = {
   radius?: number;
   blur?: number;
   minOpacity?: number;
-  intensity?: number; // multiplier applied to weights
+  /** weight multiplier we apply when building points (not a leaflet.heat option) */
+  intensity?: number;
+  /** leaflet.heat accepts these; include them so TS doesn't complain */
+  maxZoom?: number;
+  max?: number;
 };
 
 type Props = {
@@ -105,7 +107,7 @@ function StationsFetcher({
           const items: Station[] = Array.isArray(json?.items) ? json.items : [];
           // Keep only valid coordinates
           const clean = items.filter(
-            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon)
+            (s) => Number.isFinite(s.lat) && Number.isFinite(s.lon),
           );
           onData(clean);
         } catch (e: any) {
@@ -117,7 +119,7 @@ function StationsFetcher({
           if (abortRef.current === ac) abortRef.current = null;
         }
       }, 350),
-    [enabled, map]
+    [enabled, map],
   );
 
   useEffect(() => {
@@ -151,7 +153,7 @@ function ViewUrlSync() {
   return null;
 }
 
-// ---------- Station detail side-panel (simple) ----------
+// ---------- Station detail side-panel ----------
 function InfoPanel({
   station,
   onClose,
@@ -298,8 +300,6 @@ export default function ClientMap({
         {showHeatmap && heatPoints.length > 0 && (
           <HeatLayer
             points={heatPoints}
-            // pass options through to your HeatLayer (it should forward to leaflet.heat)
-            // @ts-ignore - in case your HeatLayer's prop typing is minimal
             options={{
               radius: heatOptions?.radius ?? 45,
               blur: heatOptions?.blur ?? 25,
