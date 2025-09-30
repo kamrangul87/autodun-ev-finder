@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Pane } from 'react-leaflet';
+import { MapContainer, TileLayer, Pane, useMap } from 'react-leaflet';
 import type { Map as LeafletMap } from 'leaflet';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import ClusterLayer from '@/components/ClusterLayer';
@@ -68,6 +68,16 @@ function heatRadiusForZoom(z: number, base: number): number {
   return Math.round(base * 1.45);
 }
 
+/** v4-friendly helper to hand the Leaflet map back to parent once */
+function MapInit({ onReady }: { onReady: (map: LeafletMap) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    onReady(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
+
 /* ---------------------------- component --------------------------------- */
 
 export default function ClientMap({
@@ -114,7 +124,7 @@ export default function ClientMap({
     [mapZoom, radius]
   );
 
-  // Called when MapContainer is ready (use e.target map)
+  // Called when we get the map instance
   const handleCreated = (m: LeafletMap) => {
     mapRef.current = m;
 
@@ -198,7 +208,6 @@ export default function ClientMap({
     if (force || movedKm > minMoveKm || elapsed > 4000) {
       fetchStations(mapCenter[0], mapCenter[1], z);
     } else {
-      // debounce wait
       if (elapsed < minWaitMs) return;
     }
   };
@@ -367,11 +376,13 @@ export default function ClientMap({
       <MapContainer
         center={initialCenter}
         zoom={initialZoom}
-        whenReady={(e) => handleCreated(e.target)} // <- fixed
         className="leaflet-map"
         preferCanvas
         style={{ height: 'calc(100vh - 120px)' }}
       >
+        {/* Hand back the Leaflet map instance in v4-safe way */}
+        <MapInit onReady={handleCreated} />
+
         {/* Base */}
         <Pane name="base" style={{ zIndex: 100 }}>
           <TileLayer
