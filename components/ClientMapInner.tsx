@@ -5,7 +5,6 @@ import 'leaflet/dist/leaflet.css';
 import {
   MapContainer,
   TileLayer,
-  Pane,
   Polygon,
   CircleMarker,
   Popup,
@@ -43,9 +42,7 @@ type CouncilGeoJSON = {
     properties?: { name?: string };
     geometry: {
       type: 'Polygon' | 'MultiPolygon';
-      coordinates:
-        | number[][][]
-        | number[][][][];
+      coordinates: number[][][] | number[][][][];
     };
   }>;
 };
@@ -62,7 +59,9 @@ function normalizeStations(raw: any): Station[] {
             address: r.address ?? undefined,
             postcode: r.postcode ?? undefined,
             source: r.source ?? undefined,
-            connectors: Number.isFinite(r.connectors) ? Number(r.connectors) : undefined,
+            connectors: Number.isFinite(r.connectors)
+              ? Number(r.connectors)
+              : undefined,
             lat: Number(r.lat),
             lng: Number(r.lng),
           };
@@ -72,7 +71,9 @@ function normalizeStations(raw: any): Station[] {
           return {
             lat: Number(lat),
             lng: Number(lng),
-            connectors: Number.isFinite(connectors) ? Number(connectors) : undefined,
+            connectors: Number.isFinite(connectors)
+              ? Number(connectors)
+              : undefined,
           };
         }
         return null;
@@ -89,11 +90,21 @@ function ringToLatLngs(ring: number[][]): LatLngTuple[] {
 export default function ClientMapInner(props: Props) {
   const center = props.initialCenter ?? [51.5074, -0.1278];
   const zoom = props.initialZoom ?? 12;
-  const [showHeatmap, setShowHeatmap] = useState<boolean>(props.showHeatmap ?? true);
-  const [showMarkers, setShowMarkers] = useState<boolean>(props.showMarkers ?? true);
-  const [showCouncil, setShowCouncil] = useState<boolean>(props.showCouncil ?? true);
-  const [heatIntensity, setHeatIntensity] = useState<number>(props.heatOptions?.intensity ?? 1);
-  const [heatRadius, setHeatRadius] = useState<number>(props.heatOptions?.radius ?? 18);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(
+    props.showHeatmap ?? true
+  );
+  const [showMarkers, setShowMarkers] = useState<boolean>(
+    props.showMarkers ?? true
+  );
+  const [showCouncil, setShowCouncil] = useState<boolean>(
+    props.showCouncil ?? true
+  );
+  const [heatIntensity, setHeatIntensity] = useState<number>(
+    props.heatOptions?.intensity ?? 1
+  );
+  const [heatRadius, setHeatRadius] = useState<number>(
+    props.heatOptions?.radius ?? 18
+  );
   const heatOptions = {
     intensity: heatIntensity,
     radius: heatRadius,
@@ -106,7 +117,7 @@ export default function ClientMapInner(props: Props) {
   const [council, setCouncil] = useState<CouncilGeoJSON | null>(null);
   const [controlsOpen, setControlsOpen] = useState<boolean>(false);
   const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
-  const [feedbackText, setFeedbackText] = useState<string>("");
+  const [feedbackText, setFeedbackText] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
@@ -115,27 +126,30 @@ export default function ClientMapInner(props: Props) {
         let loaded = false;
 
         const r = await fetch('/data/ev_heat.json', { cache: 'no-store' });
-        // eslint-disable-next-line no-console
         console.log('[model1-heatmap] ev_heat.json status:', r.status);
         if (r.ok) {
           try {
             const json = await r.json();
             const norm = normalizeStations(json);
-            // eslint-disable-next-line no-console
-            console.log('[model1-heatmap] ev_heat.json parsed length:', Array.isArray(json) ? json.length : Array.isArray(norm) ? norm.length : 0);
+            console.log(
+              '[model1-heatmap] ev_heat.json parsed length:',
+              Array.isArray(json)
+                ? json.length
+                : Array.isArray(norm)
+                ? norm.length
+                : 0
+            );
             if (!cancelled) {
               setStations(norm);
               loaded = norm.length > 0;
             }
           } catch (e) {
-            // eslint-disable-next-line no-console
             console.warn('[model1-heatmap] ev_heat.json parse failed:', e);
           }
         }
 
         if (!loaded) {
           const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
-          // eslint-disable-next-line no-console
           console.log('[model1-heatmap] ev_heat.csv status:', rcsv.status);
           if (rcsv.ok) {
             const text = await rcsv.text();
@@ -146,7 +160,8 @@ export default function ClientMapInner(props: Props) {
             const [header, ...data] = rows;
             const cols = header.split(',').map((s) => s.trim().toLowerCase());
             const latIdx = cols.indexOf('lat');
-            const lngIdx = cols.indexOf('lng') >= 0 ? cols.indexOf('lng') : cols.indexOf('lon');
+            const lngIdx =
+              cols.indexOf('lng') >= 0 ? cols.indexOf('lng') : cols.indexOf('lon');
             const connIdx = cols.indexOf('connectors');
 
             const parsed: Station[] = data
@@ -164,8 +179,10 @@ export default function ClientMapInner(props: Props) {
               })
               .filter(Boolean) as Station[];
 
-            // eslint-disable-next-line no-console
-            console.log('[model1-heatmap] ev_heat.csv parsed rows:', parsed.length);
+            console.log(
+              '[model1-heatmap] ev_heat.csv parsed rows:',
+              parsed.length
+            );
             if (!cancelled) {
               setStations(parsed);
               loaded = parsed.length > 0;
@@ -173,30 +190,33 @@ export default function ClientMapInner(props: Props) {
           }
 
           if (!r.ok && !rcsv.ok && !cancelled) {
-            // eslint-disable-next-line no-console
-            console.warn('[model1-heatmap] ev_heat.json and ev_heat.csv not found; rendering base map only');
+            console.warn(
+              '[model1-heatmap] ev_heat.json and ev_heat.csv not found; rendering base map only'
+            );
           }
         }
 
         if (!loaded && !cancelled) {
-          // eslint-disable-next-line no-console
-          console.warn('[model1-heatmap] No stations loaded; using temporary fallback sample points');
+          console.warn(
+            '[model1-heatmap] No stations loaded; using temporary fallback sample points'
+          );
           const sample: Station[] = [
             { lat: 51.5079, lng: -0.1283, connectors: 2 },
-            { lat: 51.5090, lng: -0.1357, connectors: 1 },
+            { lat: 51.509, lng: -0.1357, connectors: 1 },
             { lat: 51.5033, lng: -0.1196, connectors: 3 },
-            { lat: 51.5120, lng: -0.1042, connectors: 2 },
+            { lat: 51.512, lng: -0.1042, connectors: 2 },
             { lat: 51.5007, lng: -0.1246, connectors: 2 },
-            { lat: 51.5155, lng: -0.1410, connectors: 1 },
-            { lat: 51.5200, lng: -0.1300, connectors: 2 },
-            { lat: 51.5065, lng: -0.1420, connectors: 1 },
+            { lat: 51.5155, lng: -0.141, connectors: 1 },
+            { lat: 51.52, lng: -0.13, connectors: 2 },
+            { lat: 51.5065, lng: -0.142, connectors: 1 },
           ];
           setStations(sample);
         }
       } catch {
         if (!cancelled) setStations([]);
-        // eslint-disable-next-line no-console
-        console.warn('[model1-heatmap] Failed to load station datasets; rendering base map only');
+        console.warn(
+          '[model1-heatmap] Failed to load station datasets; rendering base map only'
+        );
       }
     };
 
@@ -238,19 +258,26 @@ export default function ClientMapInner(props: Props) {
       stations.map((s) => ({
         lat: s.lat,
         lng: s.lng,
-        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heatOptions.intensity || 1)),
+        value: Math.max(
+          0.5,
+          (s.connectors ?? 1) * Math.max(0, heatOptions.intensity || 1)
+        ),
       })),
     [stations, heatOptions.intensity]
   );
 
-  // Debug instrumentation for production verification
   useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.debug('[ClientMap] stations:', stations.length, 'heatPoints:', heatPoints.length);
+    console.debug(
+      '[ClientMap] stations:',
+      stations.length,
+      'heatPoints:',
+      heatPoints.length
+    );
   }, [stations.length, heatPoints.length]);
 
   return (
     <div className="relative">
+      {/* Controls */}
       <div className="absolute right-3 top-3 z-[1000] flex gap-2">
         <button
           type="button"
@@ -268,24 +295,39 @@ export default function ClientMapInner(props: Props) {
         </button>
       </div>
 
+      {/* Layer Controls */}
       {controlsOpen && (
         <div className="absolute right-3 top-12 z-[1000] w-64 rounded-lg bg-white/95 shadow border border-gray-200 p-3 space-y-3">
           <div className="font-medium text-sm">Layers</div>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={showHeatmap}
+              onChange={(e) => setShowHeatmap(e.target.checked)}
+            />
             Heatmap
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={showMarkers}
+              onChange={(e) => setShowMarkers(e.target.checked)}
+            />
             Markers
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={showCouncil} onChange={(e) => setShowCouncil(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={showCouncil}
+              onChange={(e) => setShowCouncil(e.target.checked)}
+            />
             Polygons
           </label>
 
           <div className="mt-2 font-medium text-sm">Heatmap</div>
-          <div className="text-xs text-gray-600">Intensity: {heatIntensity.toFixed(2)}</div>
+          <div className="text-xs text-gray-600">
+            Intensity: {heatIntensity.toFixed(2)}
+          </div>
           <input
             type="range"
             min={0.2}
@@ -295,7 +337,9 @@ export default function ClientMapInner(props: Props) {
             onChange={(e) => setHeatIntensity(Number(e.target.value))}
             className="w-full"
           />
-          <div className="text-xs text-gray-600">Radius: {Math.round(heatRadius)}</div>
+          <div className="text-xs text-gray-600">
+            Radius: {Math.round(heatRadius)}
+          </div>
           <input
             type="range"
             min={8}
@@ -308,12 +352,19 @@ export default function ClientMapInner(props: Props) {
         </div>
       )}
 
+      {/* Feedback Popup */}
       {feedbackOpen && (
         <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-black/40">
           <div className="w-[90%] max-w-md rounded-lg bg-white shadow border border-gray-200 p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="font-medium">Send Feedback</div>
-              <button type="button" className="text-sm" onClick={() => setFeedbackOpen(false)}>✕</button>
+              <button
+                type="button"
+                className="text-sm"
+                onClick={() => setFeedbackOpen(false)}
+              >
+                ✕
+              </button>
             </div>
             <textarea
               className="w-full h-32 p-2 border border-gray-300 rounded"
@@ -336,7 +387,9 @@ export default function ClientMapInner(props: Props) {
                   if (typeof window !== 'undefined') {
                     const subject = 'EV Finder Feedback';
                     const body = encodeURIComponent(feedbackText || '');
-                    window.location.href = `mailto:autodun.feedback@example.com?subject=${encodeURIComponent(subject)}&body=${body}`;
+                    window.location.href = `mailto:autodun.feedback@example.com?subject=${encodeURIComponent(
+                      subject
+                    )}&body=${body}`;
                   }
                   setFeedbackOpen(false);
                   setFeedbackText('');
@@ -348,6 +401,8 @@ export default function ClientMapInner(props: Props) {
           </div>
         </div>
       )}
+
+      {/* Map */}
       {typeof window !== 'undefined' && (
         <MapContainer
           ref={mapRef as any}
@@ -364,25 +419,29 @@ export default function ClientMapInner(props: Props) {
 
           <SearchControl />
 
+          {/* ✅ Fixed Heatmap */}
           {showHeatmap && heatPoints.length > 0 && (
-            <Pane name="heatmap" style={{ zIndex: 350 }}>
-              <HeatmapWithScaling
-                points={heatPoints}
-                radius={Math.max(1, Math.round(heatOptions.radius))}
-                blur={Math.max(0, Math.round(heatOptions.blur))}
-              />
-            </Pane>
+            <HeatmapWithScaling
+              points={heatPoints}
+              radius={Math.max(1, Math.round(heatOptions.radius))}
+              blur={Math.max(0, Math.round(heatOptions.blur))}
+            />
           )}
 
+          {/* Markers */}
           {showMarkers && stations.length > 0 && (
-            <Pane name="markers" style={{ zIndex: 400 }}>
+            <>
               {stations.map((s, i) => (
                 <CircleMarker
                   key={s.id ?? i}
                   center={[s.lat, s.lng]}
                   radius={4}
                   weight={1}
-                  pathOptions={{ color: '#2563eb', fillColor: '#60a5fa', fillOpacity: 0.8 }}
+                  pathOptions={{
+                    color: '#2563eb',
+                    fillColor: '#60a5fa',
+                    fillOpacity: 0.8,
+                  }}
                 >
                   <Popup>
                     <div style={{ minWidth: 220 }}>
@@ -405,11 +464,12 @@ export default function ClientMapInner(props: Props) {
                   </Popup>
                 </CircleMarker>
               ))}
-            </Pane>
+            </>
           )}
 
+          {/* Council polygons */}
           {showCouncil && council && council.features?.length > 0 && (
-            <Pane name="council" style={{ zIndex: 300 }}>
+            <>
               {council.features.map((f, idx) => {
                 const g = f.geometry;
                 const name = f.properties?.name ?? `Area ${idx + 1}`;
@@ -450,12 +510,10 @@ export default function ClientMapInner(props: Props) {
 
                 return null;
               })}
-            </Pane>
+            </>
           )}
-
         </MapContainer>
       )}
     </div>
   );
 }
-
