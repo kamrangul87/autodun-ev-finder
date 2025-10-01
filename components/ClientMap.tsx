@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useEffect } from 'react';
 import NextDynamic from 'next/dynamic';
 
 const ClientMapInner = NextDynamic(() => import('./ClientMapInner'), { ssr: false });
@@ -26,6 +27,30 @@ export default function ClientMap(props: Partial<Props>) {
     onStationsCount,
   } = props;
   if (typeof window === 'undefined') return null;
+
+  // Ensure leaflet + plugin are available on the client for any downstream usage
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const Lmod = await import('leaflet');
+        if (!(window as any).L) (window as any).L = Lmod;
+        await import('leaflet.heat');
+        const L = (window as any).L;
+        // eslint-disable-next-line no-console
+        console.log('[Heatmap] plugin ready=', !!L?.heatLayer);
+      } catch (e) {
+        if (!cancelled) {
+          // eslint-disable-next-line no-console
+          console.warn('[Heatmap] plugin load failed', e);
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Forward only supported props to inner component; keep logic in inner intact.
   return (
