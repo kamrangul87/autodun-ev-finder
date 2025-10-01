@@ -10,10 +10,4 @@ const ClientMap = dynamicImport(() => import('@/components/ClientMap'), {
   loading: () => <div style={{ height: '60vh' }} />,
 });
 
-export default function Page() {
-  return (
-    <main className="min-h-screen">
-      <ClientMap />
-    </main>
-  );
-}
+export default function Page() { return <ClientMap />; }

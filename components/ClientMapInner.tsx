@@ -59,6 +59,8 @@ export type Props = {
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
+  heatOptions?: { intensity?: number; radius?: number; blur?: number };
+  onStationsCount?: (n: number) => void;
 };
 
 type Station = {
@@ -129,7 +131,11 @@ export default function ClientMapInner(props: Props) {
   const showMarkers = props.showMarkers ?? true;
   const showCouncil = props.showCouncil ?? true;
 
-  const heatOptions = { intensity: 1, radius: 18, blur: 15 };
+  const heatOptions = {
+    intensity: props.heatOptions?.intensity ?? 1,
+    radius: props.heatOptions?.radius ?? 18,
+    blur: props.heatOptions?.blur ?? 15,
+  };
 
   const mapRef = useRef<LeafletMap | null>(null);
 
@@ -201,7 +207,7 @@ export default function ClientMapInner(props: Props) {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/data/council-test.geojson?v=now', { cache: 'no-store' });
+        const r = await fetch('/data/council-test.geojson', { cache: 'no-store' });
         if (r.ok) {
           const gj = (await r.json()) as CouncilGeoJSON;
           if (!cancelled) setCouncil(gj);
@@ -217,6 +223,12 @@ export default function ClientMapInner(props: Props) {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof props.onStationsCount === 'function') {
+      props.onStationsCount(stations.length);
+    }
+  }, [stations.length, props]);
 
   const heatPoints = useMemo(
     () =>
