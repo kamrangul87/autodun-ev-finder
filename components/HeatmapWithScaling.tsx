@@ -28,13 +28,17 @@ export default function HeatmapWithScaling({ points, intensity = 1, radius = 18,
     let cancelled = false;
     const setup = async () => {
       try {
+        // Ensure Leaflet instance is loaded and shared on window
+        const Lmod = await import('leaflet');
+        if (!(window as any).L) (window as any).L = Lmod;
         // Lazy-load leaflet.heat plugin on client
         await import('leaflet.heat');
+        // Debug
         // eslint-disable-next-line no-console
-        console.debug('[Heatmap] points:', safe.length, 'radius:', radius, 'blur:', blur);
+        console.debug('[Heatmap] points=', safe.length, 'radius=', radius, 'blur=', blur);
         const L = (window as any).L;
         // eslint-disable-next-line no-console
-        console.debug('[Heatmap] L.heatLayer available:', !!L?.heatLayer);
+        console.debug('[Heatmap] plugin ready=', !!L?.heatLayer);
         if (!L?.heatLayer) {
           // eslint-disable-next-line no-console
           console.warn('[Heatmap] leaflet.heat not available after import; skipping layer');
@@ -50,7 +54,11 @@ export default function HeatmapWithScaling({ points, intensity = 1, radius = 18,
         }
 
         if (cancelled || !map) return;
-        const layer = L.heatLayer(pts, { radius: Math.max(1, Math.round(radius)), blur: Math.max(0, Math.round(blur)) });
+        const layer = L.heatLayer(pts, {
+          radius: Math.max(1, Math.round(radius)),
+          blur: Math.max(0, Math.round(blur)),
+          pane: 'heatmap',
+        });
         layer.addTo(map);
         layerRef.current = layer;
       } catch (e) {
