@@ -108,48 +108,86 @@ export default function ClientMapInner(props: Props) {
     let cancelled = false;
     const load = async () => {
       try {
+        let loaded = false;
+
         const r = await fetch('/data/ev_heat.json', { cache: 'no-store' });
+        // eslint-disable-next-line no-console
+        console.log('[model1-heatmap] ev_heat.json status:', r.status);
         if (r.ok) {
-          const json = await r.json();
-          const norm = normalizeStations(json);
-          if (!cancelled) setStations(norm);
-          return;
+          try {
+            const json = await r.json();
+            const norm = normalizeStations(json);
+            // eslint-disable-next-line no-console
+            console.log('[model1-heatmap] ev_heat.json parsed length:', Array.isArray(json) ? json.length : Array.isArray(norm) ? norm.length : 0);
+            if (!cancelled) {
+              setStations(norm);
+              loaded = norm.length > 0;
+            }
+          } catch (e) {
+            // eslint-disable-next-line no-console
+            console.warn('[model1-heatmap] ev_heat.json parse failed:', e);
+          }
         }
-        const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
-        if (rcsv.ok) {
-          const text = await rcsv.text();
-          const rows = text
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean);
-          const [header, ...data] = rows;
-          const cols = header.split(',').map((s) => s.trim().toLowerCase());
-          const latIdx = cols.indexOf('lat');
-          const lngIdx = cols.indexOf('lng') >= 0 ? cols.indexOf('lng') : cols.indexOf('lon');
-          const connIdx = cols.indexOf('connectors');
 
-          const parsed: Station[] = data
-            .map((line) => line.split(','))
-            .map((arr) => {
-              const lat = Number(arr[latIdx]);
-              const lng = Number(arr[lngIdx]);
-              const connectors =
-                connIdx >= 0 && Number.isFinite(Number(arr[connIdx]))
-                  ? Number(arr[connIdx])
-                  : undefined;
-              return Number.isFinite(lat) && Number.isFinite(lng)
-                ? ({ lat, lng, connectors } as Station)
-                : null;
-            })
-            .filter(Boolean) as Station[];
+        if (!loaded) {
+          const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
+          // eslint-disable-next-line no-console
+          console.log('[model1-heatmap] ev_heat.csv status:', rcsv.status);
+          if (rcsv.ok) {
+            const text = await rcsv.text();
+            const rows = text
+              .split(/\r?\n/)
+              .map((s) => s.trim())
+              .filter(Boolean);
+            const [header, ...data] = rows;
+            const cols = header.split(',').map((s) => s.trim().toLowerCase());
+            const latIdx = cols.indexOf('lat');
+            const lngIdx = cols.indexOf('lng') >= 0 ? cols.indexOf('lng') : cols.indexOf('lon');
+            const connIdx = cols.indexOf('connectors');
 
-          if (!cancelled) setStations(parsed);
-        }
-        if (!r.ok) {
-          if (!rcsv.ok && !cancelled) {
+            const parsed: Station[] = data
+              .map((line) => line.split(','))
+              .map((arr) => {
+                const lat = Number(arr[latIdx]);
+                const lng = Number(arr[lngIdx]);
+                const connectors =
+                  connIdx >= 0 && Number.isFinite(Number(arr[connIdx]))
+                    ? Number(arr[connIdx])
+                    : undefined;
+                return Number.isFinite(lat) && Number.isFinite(lng)
+                  ? ({ lat, lng, connectors } as Station)
+                  : null;
+              })
+              .filter(Boolean) as Station[];
+
+            // eslint-disable-next-line no-console
+            console.log('[model1-heatmap] ev_heat.csv parsed rows:', parsed.length);
+            if (!cancelled) {
+              setStations(parsed);
+              loaded = parsed.length > 0;
+            }
+          }
+
+          if (!r.ok && !rcsv.ok && !cancelled) {
             // eslint-disable-next-line no-console
             console.warn('[model1-heatmap] ev_heat.json and ev_heat.csv not found; rendering base map only');
           }
+        }
+
+        if (!loaded && !cancelled) {
+          // eslint-disable-next-line no-console
+          console.warn('[model1-heatmap] No stations loaded; using temporary fallback sample points');
+          const sample: Station[] = [
+            { lat: 51.5079, lng: -0.1283, connectors: 2 },
+            { lat: 51.5090, lng: -0.1357, connectors: 1 },
+            { lat: 51.5033, lng: -0.1196, connectors: 3 },
+            { lat: 51.5120, lng: -0.1042, connectors: 2 },
+            { lat: 51.5007, lng: -0.1246, connectors: 2 },
+            { lat: 51.5155, lng: -0.1410, connectors: 1 },
+            { lat: 51.5200, lng: -0.1300, connectors: 2 },
+            { lat: 51.5065, lng: -0.1420, connectors: 1 },
+          ];
+          setStations(sample);
         }
       } catch {
         if (!cancelled) setStations([]);
