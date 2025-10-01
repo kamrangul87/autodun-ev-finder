@@ -89,13 +89,14 @@ function ringToLatLngs(ring: number[][]): LatLngTuple[] {
 export default function ClientMapInner(props: Props) {
   const center = props.initialCenter ?? [51.5074, -0.1278];
   const zoom = props.initialZoom ?? 12;
-  const showHeatmap = props.showHeatmap ?? true;
-  const showMarkers = props.showMarkers ?? true;
-  const showCouncil = props.showCouncil ?? true;
-
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(props.showHeatmap ?? true);
+  const [showMarkers, setShowMarkers] = useState<boolean>(props.showMarkers ?? true);
+  const [showCouncil, setShowCouncil] = useState<boolean>(props.showCouncil ?? true);
+  const [heatIntensity, setHeatIntensity] = useState<number>(props.heatOptions?.intensity ?? 1);
+  const [heatRadius, setHeatRadius] = useState<number>(props.heatOptions?.radius ?? 18);
   const heatOptions = {
-    intensity: props.heatOptions?.intensity ?? 1,
-    radius: props.heatOptions?.radius ?? 18,
+    intensity: heatIntensity,
+    radius: heatRadius,
     blur: props.heatOptions?.blur ?? 15,
   };
 
@@ -103,6 +104,9 @@ export default function ClientMapInner(props: Props) {
 
   const [stations, setStations] = useState<Station[]>([]);
   const [council, setCouncil] = useState<CouncilGeoJSON | null>(null);
+  const [controlsOpen, setControlsOpen] = useState<boolean>(false);
+  const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
+  const [feedbackText, setFeedbackText] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -241,6 +245,103 @@ export default function ClientMapInner(props: Props) {
 
   return (
     <div className="relative">
+      <div className="absolute right-3 top-3 z-[1000] flex gap-2">
+        <button
+          type="button"
+          onClick={() => setControlsOpen((v) => !v)}
+          className="px-3 py-1 rounded bg-white/90 shadow text-sm border border-gray-200 hover:bg-white"
+        >
+          Controls
+        </button>
+        <button
+          type="button"
+          onClick={() => setFeedbackOpen(true)}
+          className="px-3 py-1 rounded bg-white/90 shadow text-sm border border-gray-200 hover:bg-white"
+        >
+          Feedback
+        </button>
+      </div>
+
+      {controlsOpen && (
+        <div className="absolute right-3 top-12 z-[1000] w-64 rounded-lg bg-white/95 shadow border border-gray-200 p-3 space-y-3">
+          <div className="font-medium text-sm">Layers</div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={showHeatmap} onChange={(e) => setShowHeatmap(e.target.checked)} />
+            Heatmap
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={showMarkers} onChange={(e) => setShowMarkers(e.target.checked)} />
+            Markers
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={showCouncil} onChange={(e) => setShowCouncil(e.target.checked)} />
+            Polygons
+          </label>
+
+          <div className="mt-2 font-medium text-sm">Heatmap</div>
+          <div className="text-xs text-gray-600">Intensity: {heatIntensity.toFixed(2)}</div>
+          <input
+            type="range"
+            min={0.2}
+            max={3}
+            step={0.1}
+            value={heatIntensity}
+            onChange={(e) => setHeatIntensity(Number(e.target.value))}
+            className="w-full"
+          />
+          <div className="text-xs text-gray-600">Radius: {Math.round(heatRadius)}</div>
+          <input
+            type="range"
+            min={8}
+            max={40}
+            step={1}
+            value={heatRadius}
+            onChange={(e) => setHeatRadius(Number(e.target.value))}
+            className="w-full"
+          />
+        </div>
+      )}
+
+      {feedbackOpen && (
+        <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-black/40">
+          <div className="w-[90%] max-w-md rounded-lg bg-white shadow border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-medium">Send Feedback</div>
+              <button type="button" className="text-sm" onClick={() => setFeedbackOpen(false)}>✕</button>
+            </div>
+            <textarea
+              className="w-full h-32 p-2 border border-gray-300 rounded"
+              placeholder="Share your feedback..."
+              value={feedbackText}
+              onChange={(e) => setFeedbackText(e.target.value)}
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="px-3 py-1 rounded border border-gray-300 text-sm"
+                onClick={() => setFeedbackOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="px-3 py-1 rounded bg-blue-600 text-white text-sm"
+                onClick={() => {
+                  if (typeof window !== 'undefined') {
+                    const subject = 'EV Finder Feedback';
+                    const body = encodeURIComponent(feedbackText || '');
+                    window.location.href = `mailto:autodun.feedback@example.com?subject=${encodeURIComponent(subject)}&body=${body}`;
+                  }
+                  setFeedbackOpen(false);
+                  setFeedbackText('');
+                }}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {typeof window !== 'undefined' && (
         <MapContainer
           ref={mapRef as any}
