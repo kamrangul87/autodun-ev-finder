@@ -14,19 +14,21 @@ import type { Map as LeafletMap, LatLngTuple } from 'leaflet';
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import SearchControl from '@/components/SearchControl';
 
+// ---------- types ----------
+
 type HeatOptions = {
-  intensity: number; // 0..1 scale to multiply each point's weight
-  radius: number;    // heatmap radius in px
-  blur: number;      // heatmap blur in px
+  intensity?: number; // 0..1 scale to multiply each point's weight
+  radius?: number;    // heatmap radius in px
+  blur?: number;      // heatmap blur in px
 };
 
-type Props = {
-  initialCenter: [number, number];
-  initialZoom: number;
-  showHeatmap: boolean;
-  showMarkers: boolean;
-  showCouncil: boolean;
-  heatOptions: HeatOptions;
+export type Props = {
+  initialCenter?: [number, number];
+  initialZoom?: number;
+  showHeatmap?: boolean;
+  showMarkers?: boolean;
+  showCouncil?: boolean;
+  heatOptions?: HeatOptions;
   onStationsCount?: (n: number) => void;
 };
 
@@ -55,13 +57,17 @@ type CouncilGeoJSON = {
   }>;
 };
 
-// -------- helpers ------------------------------------------------------------
+// ---------- defaults ----------
+
+const DEFAULT_CENTER: [number, number] = [51.5074, -0.1278]; // London
+const DEFAULT_ZOOM = 12;
+const DEFAULT_HEAT: Required<HeatOptions> = { intensity: 1, radius: 18, blur: 15 };
+
+// ---------- helpers ----------
 
 function normalizeStations(raw: any): Station[] {
-  // Accept several shapes and normalize to {lat,lng,connectors?,...}
   if (!raw) return [];
   if (Array.isArray(raw)) {
-    // Could be: [{lat,lng,connectors,...}] OR [[lat,lng,(connectors)]]
     return raw
       .map((r: any): Station | null => {
         if (r && typeof r === 'object' && 'lat' in r && 'lng' in r) {
@@ -96,7 +102,7 @@ function ringToLatLngs(ring: number[][]): LatLngTuple[] {
   return ring.map(([lng, lat]) => [lat, lng]);
 }
 
-// -------- component ----------------------------------------------------------
+// ---------- component ----------
 
 export default function ClientMap({
   initialCenter,
@@ -106,19 +112,27 @@ export default function ClientMap({
   showCouncil,
   heatOptions,
   onStationsCount,
-}: Props) {
-  const mapRef = useRef<LeafletMap | null>(null);
+}: Props = {}) {
+  // Final options with defaults
+  const center = initialCenter ?? DEFAULT_CENTER;
+  const zoom = initialZoom ?? DEFAULT_ZOOM;
+  const doHeatmap = showHeatmap ?? true;
+  const doMarkers = showMarkers ?? true;
+  const doCouncil = showCouncil ?? true;
+  const heat = { ...DEFAULT_HEAT, ...(heatOptions ?? {}) };
 
+  const mapRef = useRef<LeafletMap | null>(null);
   const [stations, setStations] = useState<Station[]>([]);
   const [council, setCouncil] = useState<CouncilGeoJSON | null>(null);
 
-  // Load stations (JSON preferred; CSV fallback if needed)
+  // Safety: never render on the server
+  if (typeof window === 'undefined') return null;
+
+  // Load stations (JSON preferred; CSV fallback)
   useEffect(() => {
     let cancelled = false;
-
     const load = async () => {
       try {
-        // Primary: JSON
         const r = await fetch('/data/ev_heat.json', { cache: 'no-store' });
         if (r.ok) {
           const json = await r.json();
@@ -126,7 +140,6 @@ export default function ClientMap({
           if (!cancelled) setStations(norm);
           return;
         }
-        // Fallback: CSV
         const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
         if (rcsv.ok) {
           const text = await rcsv.text();
@@ -134,7 +147,6 @@ export default function ClientMap({
             .split(/\r?\n/)
             .map((s) => s.trim())
             .filter(Boolean);
-          // naive CSV parser expecting headers lat,lng[,connectors]
           const [header, ...data] = rows;
           const cols = header.split(',').map((s) => s.trim().toLowerCase());
           const latIdx = cols.indexOf('lat');
@@ -162,14 +174,13 @@ export default function ClientMap({
         if (!cancelled) setStations([]);
       }
     };
-
     load();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  // Load council test polygons (optional)
+  // Load council polygons (optional)
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
@@ -191,54 +202,53 @@ export default function ClientMap({
     };
   }, []);
 
-  // Report station count up to parent (if provided)
+  // Report count up
   useEffect(() => {
     if (onStationsCount) onStationsCount(stations.length);
   }, [stations.length, onStationsCount]);
 
-  // Heatmap points = lat/lng + value (connectors * intensity; default 1)
+  // Heatmap points = lat/lng + value (connectors * intensity; ≥ 0.5)
   const heatPoints = useMemo(
     () =>
       stations.map((s) => ({
         lat: s.lat,
         lng: s.lng,
-        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heatOptions.intensity || 1)),
+        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heat.intensity)),
       })),
-    [stations, heatOptions.intensity]
+    [stations, heat.intensity]
   );
 
   return (
     <div className="relative">
       <MapContainer
-        ref={mapRef as any} // TS: react-leaflet MapContainer accepts a Map ref
-        center={initialCenter}
-        zoom={initialZoom}
+        ref={mapRef as any}
+        center={center}
+        zoom={zoom}
         className="leaflet-map"
         preferCanvas
         style={{ height: 'calc(100vh - 120px)' }}
       >
-        {/* Base OSM layer */}
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Search bar (no props; uses useMap() internally) */}
+        {/* Search bar */}
         <SearchControl />
 
-        {/* Heatmap (custom component) */}
-        {showHeatmap && heatPoints.length > 0 && (
+        {/* Heatmap */}
+        {doHeatmap && heatPoints.length > 0 && (
           <Pane name="heatmap" style={{ zIndex: 350 }}>
             <HeatmapWithScaling
               points={heatPoints}
-              radius={Math.max(1, Math.round(heatOptions.radius))}
-              blur={Math.max(0, Math.round(heatOptions.blur))}
+              radius={Math.max(1, Math.round(heat.radius))}
+              blur={Math.max(0, Math.round(heat.blur))}
             />
           </Pane>
         )}
 
-        {/* Simple markers (circles + popup) */}
-        {showMarkers && stations.length > 0 && (
+        {/* Markers */}
+        {doMarkers && stations.length > 0 && (
           <Pane name="markers" style={{ zIndex: 400 }}>
             {stations.map((s, i) => (
               <CircleMarker
@@ -272,8 +282,8 @@ export default function ClientMap({
           </Pane>
         )}
 
-        {/* Council test polygons */}
-        {showCouncil && council && council.features?.length > 0 && (
+        {/* Council polygons */}
+        {doCouncil && council && council.features?.length > 0 && (
           <Pane name="council" style={{ zIndex: 300 }}>
             {council.features.map((f, idx) => {
               const g = f.geometry;
@@ -285,11 +295,7 @@ export default function ClientMap({
                   <Polygon
                     key={`poly-${idx}`}
                     positions={rings.map(ringToLatLngs)}
-                    pathOptions={{
-                      color: '#0284c7',
-                      weight: 2,
-                      fillOpacity: 0.12,
-                    }}
+                    pathOptions={{ color: '#0284c7', weight: 2, fillOpacity: 0.12 }}
                   >
                     <Popup>{name}</Popup>
                   </Polygon>
@@ -302,11 +308,7 @@ export default function ClientMap({
                   <Polygon
                     key={`mpoly-${idx}-${i2}`}
                     positions={poly.map(ringToLatLngs)}
-                    pathOptions={{
-                      color: '#0284c7',
-                      weight: 2,
-                      fillOpacity: 0.12,
-                    }}
+                    pathOptions={{ color: '#0284c7', weight: 2, fillOpacity: 0.12 }}
                   >
                     <Popup>{name}</Popup>
                   </Polygon>
