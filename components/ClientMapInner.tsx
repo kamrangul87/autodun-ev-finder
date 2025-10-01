@@ -243,6 +243,12 @@ export default function ClientMapInner(props: Props) {
     [stations, heatOptions.intensity]
   );
 
+  // Debug instrumentation for production verification
+  useEffect(() => {
+    // eslint-disable-next-line no-console
+    console.debug('[ClientMap] stations:', stations.length, 'heatPoints:', heatPoints.length);
+  }, [stations.length, heatPoints.length]);
+
   return (
     <div className="relative">
       <div className="absolute right-3 top-3 z-[1000] flex gap-2">

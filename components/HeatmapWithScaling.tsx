@@ -1,48 +1,73 @@
 'use client';
 
-import React, { useMemo } from 'react';
-import { LayerGroup, CircleMarker } from 'react-leaflet';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { useMap } from 'react-leaflet';
 
 export type HeatPoint = { lat: number; lng: number; value: number };
 
 type Props = {
   points: HeatPoint[];
-  intensity?: number; // default 1
+  intensity?: number; // default 1 (used for debug only here; values should be pre-scaled)
   radius?: number;    // default 18
-  blur?: number;      // 0..1, default 0.35
+  blur?: number;      // default 15 (leaflet.heat uses pixel blur)
 };
 
-export default function HeatmapWithScaling({ points, intensity = 1, radius = 18, blur = 0.35 }: Props) {
+export default function HeatmapWithScaling({ points, intensity = 1, radius = 18, blur = 15 }: Props) {
+  const map = useMap();
+  const layerRef = useRef<any | null>(null);
+
   const safe = useMemo(
     () =>
       (Array.isArray(points) ? points : [])
         .filter((p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && Number.isFinite(p.value))
-        .slice(0, 5000),
+        .slice(0, 20000),
     [points]
   );
 
-  if (!safe.length) return null;
+  useEffect(() => {
+    let cancelled = false;
+    const setup = async () => {
+      try {
+        // Lazy-load leaflet.heat plugin on client
+        await import('leaflet.heat');
+        // eslint-disable-next-line no-console
+        console.debug('[Heatmap] points:', safe.length, 'radius:', radius, 'blur:', blur);
+        const L = (window as any).L;
+        // eslint-disable-next-line no-console
+        console.debug('[Heatmap] L.heatLayer available:', !!L?.heatLayer);
+        if (!L?.heatLayer) {
+          // eslint-disable-next-line no-console
+          console.warn('[Heatmap] leaflet.heat not available after import; skipping layer');
+          return;
+        }
 
-  const baseOpacity = 0.18 + Math.max(0, Math.min(1, blur)) * 0.22; // 0.18..0.40
+        const pts = safe.map((p) => [p.lat, p.lng, Math.max(0.5, p.value)] as [number, number, number]);
 
-  return (
-    <LayerGroup>
-      {safe.map((p, i) => {
-        const v = Math.max(0.5, Math.min(10, p.value * intensity));
-        const r = Math.max(6, Math.min(50, radius * v));
-        const op = Math.min(0.55, baseOpacity * (0.65 + v * 0.1));
-        const color =
-          v < 2 ? '#ffe08a' : v < 4 ? '#ffc46b' : v < 6 ? '#ff9c46' : v < 8 ? '#ff7a2e' : '#ff5a1a';
+        // Remove previous layer
+        if (layerRef.current) {
+          try { layerRef.current.remove(); } catch {}
+          layerRef.current = null;
+        }
 
-        return (
-          <CircleMarker
-            key={i}
-            center={[p.lat, p.lng]}
-            radius={r}
-            pathOptions={{ stroke: false, fillOpacity: op, fillColor: color }}
-          />
-        );
-      })}
-    </LayerGroup>
-  );
+        if (cancelled || !map) return;
+        const layer = L.heatLayer(pts, { radius: Math.max(1, Math.round(radius)), blur: Math.max(0, Math.round(blur)) });
+        layer.addTo(map);
+        layerRef.current = layer;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[Heatmap] failed to initialize heat layer', e);
+      }
+    };
+
+    setup();
+    return () => {
+      cancelled = true;
+      if (layerRef.current) {
+        try { layerRef.current.remove(); } catch {}
+        layerRef.current = null;
+      }
+    };
+  }, [map, safe, radius, blur]);
+
+  return null;
 }
