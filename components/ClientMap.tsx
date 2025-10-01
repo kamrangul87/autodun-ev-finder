@@ -1,16 +1,9 @@
-'use client';
+"use client";
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  MapContainer,
-  TileLayer,
-  Pane,
-  Polygon,
-  CircleMarker,
-  Popup,
-} from 'react-leaflet';
-import type { Map as LeafletMap, LatLngTuple } from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+import NextDynamic from 'next/dynamic';
 
+<<<<<<< HEAD
 import HeatmapWithScaling from '@/components/HeatmapWithScaling';
 import SearchControl from '@/components/SearchControl';
 
@@ -23,6 +16,12 @@ type HeatOptions = {
 };
 
 export type Props = {
+=======
+const ClientMapInner = NextDynamic(() => import('./ClientMapInner'), { ssr: false });
+
+type HeatOptions = { intensity?: number; radius?: number; blur?: number };
+type Props = {
+>>>>>>> 960c549 (fix(model1-heatmap): move datasets to public; client-only map with defaults; prod-safe fetch paths)
   initialCenter?: [number, number];
   initialZoom?: number;
   showHeatmap?: boolean;
@@ -32,6 +31,7 @@ export type Props = {
   onStationsCount?: (n: number) => void;
 };
 
+<<<<<<< HEAD
 type Station = {
   id?: string | number;
   name?: string;
@@ -104,15 +104,18 @@ function ringToLatLngs(ring: number[][]): LatLngTuple[] {
 
 // ---------- component ----------
 
+=======
+>>>>>>> 960c549 (fix(model1-heatmap): move datasets to public; client-only map with defaults; prod-safe fetch paths)
 export default function ClientMap({
-  initialCenter,
-  initialZoom,
-  showHeatmap,
-  showMarkers,
-  showCouncil,
-  heatOptions,
+  initialCenter = [51.5074, -0.1278],
+  initialZoom = 12,
+  showHeatmap = true,
+  showMarkers = true,
+  showCouncil = true,
+  heatOptions = { intensity: 1, radius: 18, blur: 15 },
   onStationsCount,
 }: Props = {}) {
+<<<<<<< HEAD
   // Final options with defaults
   const center = initialCenter ?? DEFAULT_CENTER;
   const zoom = initialZoom ?? DEFAULT_ZOOM;
@@ -217,8 +220,13 @@ export default function ClientMap({
       })),
     [stations, heat.intensity]
   );
+=======
+  if (typeof window === 'undefined') return null;
+>>>>>>> 960c549 (fix(model1-heatmap): move datasets to public; client-only map with defaults; prod-safe fetch paths)
 
+  // Forward only supported props to inner component; keep logic in inner intact.
   return (
+<<<<<<< HEAD
     <div className="relative">
       <MapContainer
         ref={mapRef as any}
@@ -321,5 +329,14 @@ export default function ClientMap({
         )}
       </MapContainer>
     </div>
+=======
+    <ClientMapInner
+      initialCenter={initialCenter}
+      initialZoom={initialZoom}
+      showHeatmap={showHeatmap}
+      showMarkers={showMarkers}
+      showCouncil={showCouncil}
+    />
+>>>>>>> 960c549 (fix(model1-heatmap): move datasets to public; client-only map with defaults; prod-safe fetch paths)
   );
 }

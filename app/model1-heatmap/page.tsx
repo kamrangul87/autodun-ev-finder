@@ -2,15 +2,15 @@
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-import NextDynamic from 'next/dynamic';
+import dynamicImport from 'next/dynamic';
 
 // Client-only map (no SSR) to avoid `window is not defined`
-const ClientMap = NextDynamic(() => import('@/components/ClientMap'), {
+const ClientMap = dynamicImport(() => import('@/components/ClientMap'), {
   ssr: false,
-  loading: () => <div className="p-4 text-sm">Loading map…</div>,
+  loading: () => <div style={{ height: '60vh' }} />,
 });
 
-export default function Model1HeatmapPage() {
+export default function Page() {
   return (
     <main className="min-h-screen">
       <ClientMap />
