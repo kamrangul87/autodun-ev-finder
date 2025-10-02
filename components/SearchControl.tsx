@@ -1,164 +1,67 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useMap } from 'react-leaflet';
-import L from 'leaflet';
-
-type Suggestion = {
-  display_name: string;
-  lat: string;
-  lon: string;
-};
-
-function debounce<T extends (...args: any[]) => void>(fn: T, wait = 300) {
-  let t: any;
-  return (...args: Parameters<T>) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), wait);
-  };
-}
 
 export default function SearchControl() {
   const map = useMap();
-  const [q, setQ] = useState('');
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<Suggestion[]>([]);
-  const abortRef = useRef<AbortController | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  const refetch = useMemo(
-    () =>
-      debounce(async (value: string) => {
-        if (!value) {
-          setItems([]);
-          return;
-        }
-        if (abortRef.current) abortRef.current.abort();
-        const ac = new AbortController();
-        abortRef.current = ac;
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
 
-        try {
-          const res = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-              value
-            )}&limit=6`,
-            { signal: ac.signal, headers: { 'Accept-Language': 'en' } }
-          );
-          if (!res.ok) throw new Error('search failed');
-          const json = (await res.json()) as any[];
-          setItems(
-            (json ?? []).map((r) => ({
-              display_name: r.display_name,
-              lat: r.lat,
-              lon: r.lon,
-            }))
-          );
-        } catch {
-          /* ignore */
-        }
-      }, 300),
-    []
+    const q = inputRef.current?.value?.trim();
+    if (!q) return;
+
+    try {
+      setLoading(true);
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          q
+        )}&limit=1`
+      );
+      const data = await res.json();
+      if (!Array.isArray(data) || !data[0]) {
+        setErr('No results');
+        return;
+      }
+      const lat = parseFloat(data[0].lat);
+      const lon = parseFloat(data[0].lon);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        map.setView([lat, lon], Math.max(map.getZoom(), 13));
+      } else {
+        setErr('Bad coordinates');
+      }
+    } catch (e: any) {
+      setErr('Search failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="leaflet-top leaflet-right z-[500]">
+      <div className="leaflet-control p-2 bg-white/95 rounded shadow flex gap-2 items-center">
+        <form onSubmit={search} className="flex gap-2 items-center">
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="Search address or place..."
+            className="border rounded px-3 py-1 w-[360px] text-sm"
+          />
+          <button
+            type="submit"
+            className="px-3 py-1 rounded bg-sky-600 text-white text-sm disabled:opacity-60"
+            disabled={loading}
+          >
+            {loading ? 'Searching…' : 'Search'}
+          </button>
+        </form>
+        {err && <span className="ml-2 text-xs text-red-600">{err}</span>}
+      </div>
+    </div>
   );
-
-  useEffect(() => {
-    refetch(q);
-  }, [q, refetch]);
-
-  useEffect(() => {
-    // Render as a Leaflet control so it lives inside map chrome
-    const Control = L.Control.extend({
-      onAdd: () => {
-        const c = L.DomUtil.create('div');
-        Object.assign(c.style, {
-          zIndex: '1200', // stays above clusters/popups
-          position: 'relative',
-          width: '320px',
-        });
-        c.innerHTML = `
-          <div style="
-            background: rgba(255,255,255,0.95);
-            backdrop-filter: blur(6px);
-            border-radius: 12px;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-            padding: 8px 10px;
-            width: 100%;
-          ">
-            <input
-              type="text"
-              placeholder="Search address or place..."
-              aria-label="Search"
-              style="
-                width:100%;
-                border:1px solid #e5e7eb;
-                border-radius:10px;
-                padding:8px 10px;
-                outline:none;
-              "
-              id="ev-search-input"
-            />
-            <ul id="ev-search-results" style="
-              list-style:none;margin:6px 0 0 0;padding:0;
-              max-height:220px;overflow:auto;display:none;
-              border:1px solid #e5e7eb;border-radius:10px;background:#fff;
-            "></ul>
-          </div>
-        `;
-        const input = c.querySelector<HTMLInputElement>('#ev-search-input')!;
-        const list = c.querySelector<HTMLUListElement>('#ev-search-results')!;
-
-        // sync DOM from state
-        const sync = () => {
-          input.value = q;
-          if (open && items.length > 0) {
-            list.style.display = 'block';
-            list.innerHTML = items
-              .map(
-                (s, i) =>
-                  `<li data-i="${i}" style="padding:8px 10px;cursor:pointer;border-bottom:1px solid #f2f2f2;">${s.display_name}</li>`
-              )
-              .join('');
-          } else {
-            list.style.display = 'none';
-            list.innerHTML = '';
-          }
-        };
-        sync();
-
-        // DOM -> state
-        input.addEventListener('input', (e: any) => {
-          setQ(e.target.value);
-          setOpen(true);
-        });
-        input.addEventListener('focus', () => setOpen(true));
-        list.addEventListener('click', (e: any) => {
-          const li = e.target.closest('li');
-          if (!li) return;
-          const idx = Number(li.dataset.i);
-          const hit = items[idx];
-          if (!hit) return;
-          setOpen(false);
-          setItems([]);
-          setQ(hit.display_name);
-          map.setView([Number(hit.lat), Number(hit.lon)], 14);
-        });
-
-        // Prevent map interactions while typing/scrolling results
-        L.DomEvent.disableClickPropagation(c);
-        L.DomEvent.disableScrollPropagation(c);
-
-        return c;
-      },
-      onRemove: () => undefined,
-    });
-
-    const ctl = new Control({ position: 'topleft' });
-    map.addControl(ctl);
-
-    // IMPORTANT: do not return `map.removeControl(ctl)` directly,
-    // wrap it so cleanup returns void.
-    return () => {
-      map.removeControl(ctl);
-    };
-  }, [map, q, open, items]);
-
-  return null;
 }

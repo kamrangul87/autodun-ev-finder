@@ -1,10 +1,37 @@
-fetch('/data/council-test.geojson')
-  .then(r => r.json())
-  .then(fc => fc.features.slice(0,5).map(f => ({
-    name: f.properties?.name || f.properties?.NAME || f.properties?.lad23nm,
-    coords: Array.isArray(f.geometry?.coordinates)
-      ? f.geometry.coordinates[0]?.length // rough count of ring points
-      : 0
-  })))
-  .then(console.log);
-// Expect coords >> 5 (dozens/hundreds), not 4 or 5.
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Camden (test)" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-0.165, 51.525],
+            [-0.165, 51.575],
+            [-0.095, 51.575],
+            [-0.095, 51.525],
+            [-0.165, 51.525]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Islington (test)" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-0.125, 51.525],
+            [-0.125, 51.575],
+            [-0.055, 51.575],
+            [-0.055, 51.525],
+            [-0.125, 51.525]
+          ]
+        ]
+      }
+    }
+  ]
+}

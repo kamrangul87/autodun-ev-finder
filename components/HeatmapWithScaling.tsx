@@ -1,84 +1,100 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 
-/** Point shape expected by this component */
-export type Point = {
-  lat: number;
-  lng: number;
-  value: number; // 0..1 weight
-};
-
-export type HeatOptions = {
-  radius?: number;     // default 28
-  blur?: number;       // default 25
-  minOpacity?: number; // default 0.35
-  max?: number;        // default 1.0
-};
+export type HeatPoint = { lat: number; lng: number; value: number };
 
 type Props = {
-  points: Point[];
-  options?: HeatOptions;
+  points: HeatPoint[];
+  intensity?: number; // multiplier, default 1
+  radius?: number;    // default 25
+  blur?: number;      // default 15
 };
 
-/**
- * Leaflet heat layer wrapper that accepts points as {lat,lng,value}
- * and optional visual options via `options`.
- */
-export default function HeatmapWithScaling({ points, options }: Props) {
+export default function HeatmapWithScaling({
+  points,
+  intensity = 1,
+  radius = 25,
+  blur = 15,
+}: Props) {
   const map = useMap();
-  const layerRef = useRef<any>(null);
+  const layerRef = useRef<any | null>(null);
+
+  const safe = useMemo(
+    () =>
+      (Array.isArray(points) ? points : [])
+        .filter(
+          (p) =>
+            p &&
+            Number.isFinite(p.lat) &&
+            Number.isFinite(p.lng) &&
+            Number.isFinite(p.value)
+        )
+        .slice(0, 20000),
+    [points]
+  );
 
   useEffect(() => {
     let cancelled = false;
+    const setup = async () => {
+      try {
+        const Lmod = await import('leaflet');
+        if (!(window as any).L) (window as any).L = Lmod;
+        const L = (window as any).L;
 
-    (async () => {
-      // load leaflet + plugin only on client
-      const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat');
+        await import('leaflet.heat');
 
-      if (cancelled || !map) return;
+        console.debug('[Heatmap] plugin ready=', !!L?.heatLayer, 'points=', safe.length);
 
-      // remove old layer if present
+        if (!L?.heatLayer || cancelled || !map) return;
+
+        // Make sure pane exists
+        if (!map.getPane('heatmap')) {
+          map.createPane('heatmap');
+          map.getPane('heatmap')!.style.zIndex = '600';
+        }
+
+        // Clean old layer
+        if (layerRef.current) {
+          try {
+            map.removeLayer(layerRef.current);
+          } catch {}
+          layerRef.current = null;
+        }
+
+        // Convert to [lat, lng, weight]
+        const pts = safe.map(
+          (p) => [p.lat, p.lng, Math.max(0.5, p.value * intensity)] as [number, number, number]
+        );
+
+        console.debug(`[ClientMap] stations=${points.length} heatPoints=${pts.length}`);
+
+        const layer = L.heatLayer(pts, {
+          radius: Math.max(1, Math.round(radius)),
+          blur: Math.max(0, Math.round(blur)),
+          pane: 'heatmap',
+        });
+
+        layer.addTo(map);
+        layerRef.current = layer;
+      } catch (e) {
+        console.warn('[Heatmap] failed to init heat layer', e);
+      }
+    };
+
+    setup();
+
+    return () => {
+      cancelled = true;
       if (layerRef.current) {
         try {
           map.removeLayer(layerRef.current);
         } catch {}
         layerRef.current = null;
       }
-
-      if (!points?.length) return;
-
-      // leaflet.heat expects [lat, lng, intensity] tuples
-      const tuples: [number, number, number][] = points.map((p) => [
-        Number(p.lat),
-        Number(p.lng),
-        Math.max(0, Math.min(1, Number(p.value))),
-      ]);
-
-      const layer = (L as any).heatLayer(tuples, {
-        radius: options?.radius ?? 28,
-        blur: options?.blur ?? 25,
-        minOpacity: options?.minOpacity ?? 0.35,
-        max: options?.max ?? 1.0,
-      });
-
-      layer.addTo(map);
-      layerRef.current = layer;
-    })();
-
-    // cleanup on unmount or props change
-    return () => {
-      cancelled = true;
-      if (layerRef.current && map) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
-        layerRef.current = null;
-      }
     };
-  }, [map, points, options?.radius, options?.blur, options?.minOpacity, options?.max]);
+  }, [map, safe, radius, blur, intensity, points.length]);
 
   return null;
 }
