@@ -155,7 +155,7 @@ export async function GET(req: NextRequest) {
         if (ocmRes.ok) {
           const json = await ocmRes.json();
           const rawArray = Array.isArray(json) ? json : [];
-          const filteredOCM = connFilter ? rawArray.filter((d: any) => Array.isArray(d.Connections) && d.Connections.some(c => connectionMatches(c, connFilter))) : rawArray;
+          const filteredOCM = connFilter ? rawArray.filter((d: any) => Array.isArray(d.Connections) && d.Connections.some((c: any) => connectionMatches(c, connFilter))) : rawArray;
           const items = normalizeOCM(filteredOCM);
           if (items.length) {
             combinedItems = combinedItems.concat(items);
