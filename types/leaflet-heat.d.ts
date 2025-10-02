@@ -1,2 +1,4 @@
-// types/leaflet-heat.d.ts
-declare module 'leaflet.heat';
+declare module 'leaflet.heat' {
+  const plugin: any;
+  export default plugin;
+}
