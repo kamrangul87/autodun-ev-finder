@@ -17,7 +17,7 @@ export default function MotPredictorPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reg }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(\`HTTP \${res.status}\`);
       setResult(await res.json());
     } catch (err: any) {
       setError(err.message || "Failed");

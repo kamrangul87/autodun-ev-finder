@@ -7,7 +7,7 @@ type AgentMsg = { role: "user" | "assistant"; text: string };
 export default function AgentPage() {
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<AgentMsg[]>([
-    { role: "assistant", text: "Hi! Ask me: 'predict MOT AB12CDE' or 'nearest stations' (demo)." }
+    { role: "assistant", text: "Hi! Try: 'predict MOT AB12CDE' or 'nearest stations' (demo)." }
   ]);
   const [loading, setLoading] = useState(false);
 
@@ -18,7 +18,11 @@ export default function AgentPage() {
     setMsgs(m => [...m, { role: "user", text: user }]);
     setLoading(true);
     try {
-      const res = await fetch("/api/agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: user }) });
+      const res = await fetch("/api/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: user })
+      });
       const data = await res.json();
       setMsgs(m => [...m, { role: "assistant", text: data.reply }]);
     } catch {
@@ -40,11 +44,13 @@ export default function AgentPage() {
           ))}
         </div>
         <div className="flex gap-2 mt-3">
-          <input className="flex-1 border rounded-xl px-3 py-2"
-                 placeholder="Try: predict MOT AB12CDE"
-                 value={input}
-                 onChange={(e) => setInput(e.target.value)}
-                 onKeyDown={(e) => e.key === "Enter" && send()} />
+          <input
+            className="flex-1 border rounded-xl px-3 py-2"
+            placeholder="Ask something…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && send()}
+          />
           <button disabled={loading} onClick={send} className="rounded-xl px-4 py-2 bg-black text-white disabled:opacity-50">
             {loading ? "Working…" : "Send"}
           </button>

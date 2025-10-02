@@ -19,7 +19,6 @@ export async function POST(req: Request) {
   }
 
   if (text.includes("nearest") || text.includes("stations")) {
-    // TODO: wire to real station search
     return NextResponse.json({ reply: "Nearest stations: Camden, Holborn, Shoreditch (demo)." });
   }
 
