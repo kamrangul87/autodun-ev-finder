@@ -92,18 +92,29 @@ export default function ClientMapInner(props: Props) {
   const center = props.initialCenter ?? [51.5074, -0.1278];
   const zoom = props.initialZoom ?? 12;
 
-  // Layer + heatmap state (EV-finder only)
+  // Layer toggles
   const [showHeatmap, setShowHeatmap] = useState<boolean>(props.showHeatmap ?? true);
   const [showMarkers, setShowMarkers] = useState<boolean>(props.showMarkers ?? true);
   const [showCouncil, setShowCouncil] = useState<boolean>(props.showCouncil ?? true);
+
+  // Heatmap controls (✅ now includes blur)
   const [heatIntensity, setHeatIntensity] = useState<number>(props.heatOptions?.intensity ?? 1);
   const [heatRadius, setHeatRadius] = useState<number>(props.heatOptions?.radius ?? 18);
-  const heatBlur = props.heatOptions?.blur ?? 15;
+  const [heatBlur, setHeatBlur] = useState<number>(props.heatOptions?.blur ?? 15);
+
+  const heatOptions = {
+    intensity: heatIntensity,
+    radius: heatRadius,
+    blur: heatBlur,
+  };
 
   const mapRef = useRef<LeafletMap | null>(null);
 
+  // Data
   const [stations, setStations] = useState<Station[]>([]);
   const [council, setCouncil] = useState<CouncilGeoJSON | null>(null);
+
+  // UI
   const [controlsOpen, setControlsOpen] = useState<boolean>(false);
   const [feedbackOpen, setFeedbackOpen] = useState<boolean>(false);
   const [feedbackText, setFeedbackText] = useState<string>('');
@@ -116,27 +127,21 @@ export default function ClientMapInner(props: Props) {
         let loaded = false;
 
         const r = await fetch('/data/ev_heat.json', { cache: 'no-store' });
-        console.log('[model1-heatmap] ev_heat.json status:', r.status);
         if (r.ok) {
           try {
             const json = await r.json();
             const norm = normalizeStations(json);
-            console.log(
-              '[model1-heatmap] ev_heat.json parsed length:',
-              Array.isArray(json) ? json.length : Array.isArray(norm) ? norm.length : 0
-            );
             if (!cancelled) {
               setStations(norm);
               loaded = norm.length > 0;
             }
           } catch (e) {
-            console.warn('[model1-heatmap] ev_heat.json parse failed:', e);
+            console.warn('[ev] ev_heat.json parse failed:', e);
           }
         }
 
         if (!loaded) {
           const rcsv = await fetch('/data/ev_heat.csv', { cache: 'no-store' });
-          console.log('[model1-heatmap] ev_heat.csv status:', rcsv.status);
           if (rcsv.ok) {
             const text = await rcsv.text();
             const rows = text
@@ -164,7 +169,6 @@ export default function ClientMapInner(props: Props) {
               })
               .filter(Boolean) as Station[];
 
-            console.log('[model1-heatmap] ev_heat.csv parsed rows:', parsed.length);
             if (!cancelled) {
               setStations(parsed);
               loaded = parsed.length > 0;
@@ -172,32 +176,33 @@ export default function ClientMapInner(props: Props) {
           }
 
           if (!r.ok && !rcsv.ok && !cancelled) {
-            console.warn('[model1-heatmap] ev_heat.json and ev_heat.csv not found; rendering base map only');
+            console.warn('[ev] No ev_heat.{json,csv}; rendering base map only');
           }
         }
 
         if (!loaded && !cancelled) {
-          console.warn('[model1-heatmap] No stations loaded; using temporary fallback sample points');
           const sample: Station[] = [
             { lat: 51.5079, lng: -0.1283, connectors: 2 },
-            { lat: 51.509,  lng: -0.1357, connectors: 1 },
+            { lat: 51.509, lng: -0.1357, connectors: 1 },
             { lat: 51.5033, lng: -0.1196, connectors: 3 },
-            { lat: 51.512,  lng: -0.1042, connectors: 2 },
+            { lat: 51.512, lng: -0.1042, connectors: 2 },
             { lat: 51.5007, lng: -0.1246, connectors: 2 },
-            { lat: 51.5155, lng: -0.141,  connectors: 1 },
-            { lat: 51.52,   lng: -0.13,   connectors: 2 },
-            { lat: 51.5065, lng: -0.142,  connectors: 1 },
+            { lat: 51.5155, lng: -0.141, connectors: 1 },
+            { lat: 51.52, lng: -0.13, connectors: 2 },
+            { lat: 51.5065, lng: -0.142, connectors: 1 },
           ];
           setStations(sample);
         }
       } catch {
         if (!cancelled) setStations([]);
-        console.warn('[model1-heatmap] Failed to load station datasets; rendering base map only');
+        console.warn('[ev] Failed loading stations; base map only');
       }
     };
 
     if (typeof window !== 'undefined') load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load council polygons
@@ -217,10 +222,12 @@ export default function ClientMapInner(props: Props) {
       }
     };
     if (typeof window !== 'undefined') load();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Emit station count up
+  // Report station count to parent (if requested)
   useEffect(() => {
     if (typeof props.onStationsCount === 'function') {
       props.onStationsCount(stations.length);
@@ -233,14 +240,10 @@ export default function ClientMapInner(props: Props) {
       stations.map((s) => ({
         lat: s.lat,
         lng: s.lng,
-        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heatIntensity || 1)),
+        value: Math.max(0.5, (s.connectors ?? 1) * Math.max(0, heatOptions.intensity || 1)),
       })),
-    [stations, heatIntensity]
+    [stations, heatOptions.intensity]
   );
-
-  useEffect(() => {
-    console.debug('[ClientMap] stations:', stations.length, 'heatPoints:', heatPoints.length);
-  }, [stations.length, heatPoints.length]);
 
   return (
     <div className="relative">
@@ -262,26 +265,39 @@ export default function ClientMapInner(props: Props) {
         </button>
       </div>
 
-      {/* Controls panel (re-usable component) */}
+      {/* Controls Drawer */}
       {controlsOpen && (
         <div className="absolute right-3 top-12 z-[1000]">
           <Controls
-            showHeatmap={showHeatmap} setShowHeatmap={setShowHeatmap}
-            showMarkers={showMarkers} setShowMarkers={setShowMarkers}
-            showPolygons={showCouncil} setShowPolygons={setShowCouncil}
-            intensity={heatIntensity} setIntensity={setHeatIntensity}
-            radius={heatRadius} setRadius={setHeatRadius}
+            showHeatmap={showHeatmap}
+            setShowHeatmap={setShowHeatmap}
+            showMarkers={showMarkers}
+            setShowMarkers={setShowMarkers}
+            showPolygons={showCouncil}
+            setShowPolygons={setShowCouncil}
+            intensity={heatIntensity}
+            setIntensity={setHeatIntensity}
+            radius={heatRadius}
+            setRadius={setHeatRadius}
+            blur={heatBlur}
+            setBlur={setHeatBlur}
           />
         </div>
       )}
 
-      {/* Feedback Popup */}
+      {/* Feedback Modal */}
       {feedbackOpen && (
         <div className="absolute inset-0 z-[1100] flex items-center justify-center bg-black/40">
           <div className="w-[90%] max-w-md rounded-lg bg-white shadow border border-gray-200 p-4">
             <div className="flex items-center justify-between mb-2">
               <div className="font-medium">Send Feedback</div>
-              <button type="button" className="text-sm" onClick={() => setFeedbackOpen(false)}>✕</button>
+              <button
+                type="button"
+                className="text-sm"
+                onClick={() => setFeedbackOpen(false)}
+              >
+                ✕
+              </button>
             </div>
             <textarea
               className="w-full h-32 p-2 border border-gray-300 rounded"
@@ -304,9 +320,9 @@ export default function ClientMapInner(props: Props) {
                   if (typeof window !== 'undefined') {
                     const subject = 'EV Finder Feedback';
                     const body = encodeURIComponent(feedbackText || '');
-                    window.location.href =
-                      'mailto:autodun.feedback@example.com?subject=' +
-                      encodeURIComponent(subject) + '&body=' + body;
+                    window.location.href = `mailto:autodun.feedback@example.com?subject=${encodeURIComponent(
+                      subject
+                    )}&body=${body}`;
                   }
                   setFeedbackOpen(false);
                   setFeedbackText('');
@@ -340,8 +356,8 @@ export default function ClientMapInner(props: Props) {
           {showHeatmap && heatPoints.length > 0 && (
             <HeatmapWithScaling
               points={heatPoints}
-              radius={Math.max(1, Math.round(heatRadius))}
-              blur={Math.max(0, Math.round(heatBlur))}
+              radius={Math.max(1, Math.round(heatOptions.radius))}
+              blur={Math.max(0, Math.round(heatOptions.blur))}
             />
           )}
 
@@ -367,7 +383,9 @@ export default function ClientMapInner(props: Props) {
                       <div>{s.postcode ?? '—'}</div>
                       <div>Source: {s.source ?? 'osm'}</div>
                       <div>Connectors: {s.connectors ?? 1}</div>
-                      <div>Coordinates: {s.lat.toFixed(6)}, {s.lng.toFixed(6)}</div>
+                      <div>
+                        Coordinates: {s.lat.toFixed(6)}, {s.lng.toFixed(6)}
+                      </div>
                       <a
                         href={`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`}
                         target="_blank"
