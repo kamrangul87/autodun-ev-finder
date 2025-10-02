@@ -15,11 +15,10 @@ export async function POST(req: Request) {
     const parts = text.trim().split(/\s+/);
     const reg = parts[parts.length - 1].toUpperCase();
     const prob = Math.round(score(reg) * 100);
-    return NextResponse.json({ reply: `MOT pass probability for ${reg}: ${prob}% (demo)` });
+    return NextResponse.json({ reply: 'MOT pass probability for ' + reg + ': ' + prob + '% (demo)' });
   }
 
   if (text.includes("nearest") || text.includes("stations")) {
-    // TODO: wire to real station search
     return NextResponse.json({ reply: "Nearest stations: Camden, Holborn, Shoreditch (demo)." });
   }
 
