@@ -1,100 +1,63 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useMap } from 'react-leaflet';
 
-export type HeatPoint = { lat: number; lng: number; value: number };
+type HeatPoint = { lat: number; lng: number; value?: number };
 
 type Props = {
   points: HeatPoint[];
-  intensity?: number; // multiplier, default 1
-  radius?: number;    // default 25
-  blur?: number;      // default 15
+  radius?: number; // px
+  blur?: number;   // px
+  maxZoom?: number;
 };
 
 export default function HeatmapWithScaling({
   points,
-  intensity = 1,
-  radius = 25,
+  radius = 18,
   blur = 15,
+  maxZoom = 18,
 }: Props) {
   const map = useMap();
-  const layerRef = useRef<any | null>(null);
+  const layerRef = useRef<any>(null);
 
-  const safe = useMemo(
-    () =>
-      (Array.isArray(points) ? points : [])
-        .filter(
-          (p) =>
-            p &&
-            Number.isFinite(p.lat) &&
-            Number.isFinite(p.lng) &&
-            Number.isFinite(p.value)
-        )
-        .slice(0, 20000),
-    [points]
-  );
-
+  // Create layer on mount
   useEffect(() => {
     let cancelled = false;
-    const setup = async () => {
-      try {
-        const Lmod = await import('leaflet');
-        if (!(window as any).L) (window as any).L = Lmod;
-        const L = (window as any).L;
+    (async () => {
+      const L = (await import('leaflet')).default as any;
+      await import('leaflet.heat'); // extends L with heatLayer
 
-        await import('leaflet.heat');
+      if (cancelled) return;
 
-        console.debug('[Heatmap] plugin ready=', !!L?.heatLayer, 'points=', safe.length);
+      const latlngs = points.map(p => [p.lat, p.lng, p.value ?? 1]);
+      layerRef.current = L.heatLayer(latlngs, {
+        radius,
+        blur,
+        maxZoom,
+      });
 
-        if (!L?.heatLayer || cancelled || !map) return;
-
-        // Make sure pane exists
-        if (!map.getPane('heatmap')) {
-          map.createPane('heatmap');
-          map.getPane('heatmap')!.style.zIndex = '600';
-        }
-
-        // Clean old layer
-        if (layerRef.current) {
-          try {
-            map.removeLayer(layerRef.current);
-          } catch {}
-          layerRef.current = null;
-        }
-
-        // Convert to [lat, lng, weight]
-        const pts = safe.map(
-          (p) => [p.lat, p.lng, Math.max(0.5, p.value * intensity)] as [number, number, number]
-        );
-
-        console.debug(`[ClientMap] stations=${points.length} heatPoints=${pts.length}`);
-
-        const layer = L.heatLayer(pts, {
-          radius: Math.max(1, Math.round(radius)),
-          blur: Math.max(0, Math.round(blur)),
-          pane: 'heatmap',
-        });
-
-        layer.addTo(map);
-        layerRef.current = layer;
-      } catch (e) {
-        console.warn('[Heatmap] failed to init heat layer', e);
-      }
-    };
-
-    setup();
+      layerRef.current.addTo(map);
+    })();
 
     return () => {
       cancelled = true;
       if (layerRef.current) {
-        try {
-          map.removeLayer(layerRef.current);
-        } catch {}
+        map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
     };
-  }, [map, safe, radius, blur, intensity, points.length]);
+    // we intentionally mount only once; updates handled below
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Update data/options on change
+  useEffect(() => {
+    if (!layerRef.current) return;
+    const latlngs = points.map(p => [p.lat, p.lng, p.value ?? 1]);
+    layerRef.current.setLatLngs(latlngs);
+    layerRef.current.setOptions({ radius, blur, maxZoom });
+  }, [points, radius, blur, maxZoom]);
 
   return null;
 }
