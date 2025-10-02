@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useMap } from 'react-leaflet';
-import * as L from 'leaflet';
+import { Control, DomUtil, DomEvent } from 'leaflet';
 
 export default function SearchControl() {
   const map = useMap();
@@ -10,9 +10,11 @@ export default function SearchControl() {
   useEffect(() => {
     let container: HTMLDivElement | null = null;
 
-    const control = L.control({ position: 'topright' });
+    // Use the class constructor instead of L.control(...)
+    const control = new Control({ position: 'topright' });
+
     control.onAdd = () => {
-      container = L.DomUtil.create('div', 'leaflet-control');
+      container = DomUtil.create('div', 'leaflet-control');
       container.style.background = 'white';
       container.style.padding = '6px';
       container.style.borderRadius = '8px';
@@ -36,8 +38,8 @@ export default function SearchControl() {
       container.appendChild(input);
       container.appendChild(list);
 
-      L.DomEvent.disableClickPropagation(container);
-      L.DomEvent.disableScrollPropagation(container);
+      DomEvent.disableClickPropagation(container);
+      DomEvent.disableScrollPropagation(container);
 
       let controller: AbortController | null = null;
 
@@ -91,6 +93,7 @@ export default function SearchControl() {
     };
 
     control.addTo(map);
+
     return () => {
       control.remove();
       container = null;
