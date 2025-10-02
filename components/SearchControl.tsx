@@ -1,67 +1,99 @@
 'use client';
 
-import React, { useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { useMap } from 'react-leaflet';
 
 export default function SearchControl() {
   const map = useMap();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
-  const search = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErr(null);
+  useEffect(() => {
+    let container: HTMLDivElement | null = null;
 
-    const q = inputRef.current?.value?.trim();
-    if (!q) return;
+    // Create a control in the top-right (similar spot as your existing UI)
+    const control = (L as any).control({ position: 'topright' });
+    control.onAdd = () => {
+      container = L.DomUtil.create('div', 'leaflet-control');
+      container.style.background = 'white';
+      container.style.padding = '6px';
+      container.style.borderRadius = '8px';
+      container.style.boxShadow = '0 1px 3px rgba(0,0,0,.2)';
 
-    try {
-      setLoading(true);
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-          q
-        )}&limit=1`
-      );
-      const data = await res.json();
-      if (!Array.isArray(data) || !data[0]) {
-        setErr('No results');
-        return;
-      }
-      const lat = parseFloat(data[0].lat);
-      const lon = parseFloat(data[0].lon);
-      if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        map.setView([lat, lon], Math.max(map.getZoom(), 13));
-      } else {
-        setErr('Bad coordinates');
-      }
-    } catch (e: any) {
-      setErr('Search failed');
-    } finally {
-      setLoading(false);
-    }
-  };
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.placeholder = 'Search address or place...';
+      input.style.width = '260px';
+      input.style.padding = '6px 8px';
+      input.style.border = '1px solid #e5e7eb';
+      input.style.borderRadius = '6px';
+      input.style.outline = 'none';
+      input.autocomplete = 'off';
 
-  return (
-    <div className="leaflet-top leaflet-right z-[500]">
-      <div className="leaflet-control p-2 bg-white/95 rounded shadow flex gap-2 items-center">
-        <form onSubmit={search} className="flex gap-2 items-center">
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="Search address or place..."
-            className="border rounded px-3 py-1 w-[360px] text-sm"
-          />
-          <button
-            type="submit"
-            className="px-3 py-1 rounded bg-sky-600 text-white text-sm disabled:opacity-60"
-            disabled={loading}
-          >
-            {loading ? 'Searching…' : 'Search'}
-          </button>
-        </form>
-        {err && <span className="ml-2 text-xs text-red-600">{err}</span>}
-      </div>
-    </div>
-  );
+      const list = document.createElement('div');
+      list.style.marginTop = '6px';
+      list.style.maxHeight = '200px';
+      list.style.overflowY = 'auto';
+
+      container.appendChild(input);
+      container.appendChild(list);
+
+      // prevent map drag/zoom on interaction
+      L.DomEvent.disableClickPropagation(container);
+      L.DomEvent.disableScrollPropagation(container);
+
+      let controller: AbortController | null = null;
+
+      input.addEventListener('input', async () => {
+        const q = input.value.trim();
+        list.innerHTML = '';
+        if (!q) return;
+        try {
+          controller?.abort();
+          controller = new AbortController();
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+              q
+            )}&limit=5`,
+            { signal: controller.signal, headers: { 'Accept-Language': 'en' } }
+          );
+          if (!res.ok) return;
+          const data = (await res.json()) as Array<{
+            lat: string;
+            lon: string;
+            display_name: string;
+          }>;
+          list.innerHTML = '';
+          data.forEach((item) => {
+            const row = document.createElement('div');
+            row.textContent = item.display_name;
+            row.style.padding = '6px 8px';
+            row.style.cursor = 'pointer';
+            row.style.fontSize = '12px';
+            row.addEventListener('mouseenter', () => (row.style.background = '#f3f4f6'));
+            row.addEventListener('mouseleave', () => (row.style.background = 'transparent'));
+            row.addEventListener('click', () => {
+              const lat = parseFloat(item.lat);
+              const lon = parseFloat(item.lon);
+              if (Number.isFinite(lat) && Number.isFinite(lon)) {
+                map.setView([lat, lon], 14);
+                list.innerHTML = '';
+              }
+            });
+            list.appendChild(row);
+          });
+        } catch {
+          /* ignore */
+        }
+      });
+
+      return container;
+    };
+
+    control.addTo(map);
+    return () => {
+      control.remove();
+      container = null;
+    };
+  }, [map]);
+
+  return null;
 }
