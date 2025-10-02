@@ -9,8 +9,6 @@ export default function SearchControl() {
 
   useEffect(() => {
     let container: HTMLDivElement | null = null;
-
-    // Use the class constructor instead of L.control(...)
     const control = new Control({ position: 'topright' });
 
     control.onAdd = () => {
@@ -52,19 +50,12 @@ export default function SearchControl() {
           controller?.abort();
           controller = new AbortController();
           const res = await fetch(
-            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-              q
-            )}&limit=5`,
+            `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=5`,
             { signal: controller.signal, headers: { 'Accept-Language': 'en' } }
           );
           if (!res.ok) return;
 
-          const data = (await res.json()) as Array<{
-            lat: string;
-            lon: string;
-            display_name: string;
-          }>;
-
+          const data = (await res.json()) as Array<{ lat: string; lon: string; display_name: string; }>;
           list.innerHTML = '';
           data.forEach((item) => {
             const row = document.createElement('div');
@@ -93,11 +84,7 @@ export default function SearchControl() {
     };
 
     control.addTo(map);
-
-    return () => {
-      control.remove();
-      container = null;
-    };
+    return () => { control.remove(); container = null; };
   }, [map]);
 
   return null;

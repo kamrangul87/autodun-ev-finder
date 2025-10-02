@@ -12,11 +12,14 @@ type Props = {
   showPolygons: boolean;
   setShowPolygons: (v: boolean) => void;
 
-  intensity: number; // 0–1 (or whatever you pass)
+  intensity: number;
   setIntensity: (v: number) => void;
 
-  radius: number; // px (e.g., 1–50)
+  radius: number;
   setRadius: (v: number) => void;
+
+  blur: number;
+  setBlur: (v: number) => void;
 };
 
 export default function Controls(p: Props) {
@@ -77,6 +80,17 @@ export default function Controls(p: Props) {
           step={1}
           value={p.radius}
           onChange={(e) => p.setRadius(parseInt(e.target.value))}
+          className="w-full"
+        />
+
+        <div className="text-xs text-gray-600 mt-2">Blur: {Math.round(p.blur)}</div>
+        <input
+          type="range"
+          min={0}
+          max={50}
+          step={1}
+          value={p.blur}
+          onChange={(e) => p.setBlur(parseInt(e.target.value))}
           className="w-full"
         />
       </div>

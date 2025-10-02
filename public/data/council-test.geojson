@@ -19,16 +19,32 @@
     },
     {
       "type": "Feature",
-      "properties": { "name": "Islington (test)" },
+      "properties": { "name": "Westminster (test)" },
       "geometry": {
         "type": "Polygon",
         "coordinates": [
           [
-            [-0.125, 51.525],
-            [-0.125, 51.575],
-            [-0.055, 51.575],
-            [-0.055, 51.525],
-            [-0.125, 51.525]
+            [-0.20, 51.49],
+            [-0.20, 51.53],
+            [-0.115, 51.53],
+            [-0.115, 51.49],
+            [-0.20, 51.49]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Ealing (test)" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-0.32, 51.50],
+            [-0.32, 51.55],
+            [-0.25, 51.55],
+            [-0.25, 51.50],
+            [-0.32, 51.50]
           ]
         ]
       }

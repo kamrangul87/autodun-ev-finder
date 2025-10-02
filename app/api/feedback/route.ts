@@ -1,17 +1,8 @@
-// app/api/feedback/route.ts
 import { NextRequest } from 'next/server';
 
 export const runtime = 'nodejs';
-// Force dynamic execution so the in-memory store persists in the server process.
 export const dynamic = 'force-dynamic';
 
-// -----------------------------------------------------------------------------
-// Simple in-memory feedback store
-
-// Retrieve (or initialise) the global feedback store. We attach it to
-// `globalThis` so that it persists across hot reloads within the same
-// serverless/function process. The store maps a station ID to an array of
-// feedback records.
 function getStore(): Record<
   number,
   { rating: number; comment?: string; timestamp: number }[]
@@ -26,8 +17,6 @@ function getStore(): Record<
   >;
 }
 
-// POST /api/feedback
-// Body: { stationId: number | string, rating: 0..5, comment?: string }
 export async function POST(req: NextRequest) {
   try {
     const data = await req.json();
@@ -60,8 +49,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET /api/feedback?stationId=123
-// Returns: { count, averageRating, reliability }
 export async function GET(req: NextRequest) {
   try {
     const sp = req.nextUrl.searchParams;

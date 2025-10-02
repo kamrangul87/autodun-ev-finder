@@ -28,7 +28,6 @@ export default function CouncilLayer({
       .then((fc) => {
         if (!alive) return;
         if (!fc || fc.type !== 'FeatureCollection') return setData(null);
-        // Filter to Polygon/MultiPolygon only
         const filtered = {
           ...fc,
           features: (fc.features ?? []).filter((f: any) => {
@@ -39,9 +38,7 @@ export default function CouncilLayer({
         setData(filtered);
       })
       .catch(() => setData(null));
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [url]);
 
   if (!data) return null;
@@ -49,30 +46,13 @@ export default function CouncilLayer({
   return (
     <GeoJSON
       data={data as any}
-      style={() => ({
-        color,
-        weight,
-        fillColor,
-        fillOpacity,
-      })}
+      style={() => ({ color, weight, fillColor, fillOpacity })}
       onEachFeature={(feature, layer) => {
         const props: any = feature?.properties || {};
-        const name =
-          props.name ||
-          props.NAME ||
-          props.lad23nm ||
-          props.lad22nm ||
-          props.ladnm ||
-          'Council area';
+        const name = props.name || props.NAME || props.lad23nm || props.lad22nm || props.ladnm || 'Council area';
         try {
-          layer.bindTooltip(name, {
-            sticky: true,
-            direction: 'auto',
-            opacity: 0.9,
-          });
-        } catch {
-          /* ignore */
-        }
+          layer.bindTooltip(name, { sticky: true, direction: 'auto', opacity: 0.9 });
+        } catch {}
       }}
     />
   );
