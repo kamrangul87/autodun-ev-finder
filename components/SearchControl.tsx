@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useMap } from 'react-leaflet';
-import L from 'leaflet';
+import * as L from 'leaflet';
 
 export default function SearchControl() {
   const map = useMap();
@@ -10,7 +10,6 @@ export default function SearchControl() {
   useEffect(() => {
     let container: HTMLDivElement | null = null;
 
-    // Create a Leaflet control in the top-right
     const control = L.control({ position: 'topright' });
     control.onAdd = () => {
       container = L.DomUtil.create('div', 'leaflet-control');
@@ -37,7 +36,6 @@ export default function SearchControl() {
       container.appendChild(input);
       container.appendChild(list);
 
-      // Prevent map gestures while interacting with the control
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.disableScrollPropagation(container);
 
