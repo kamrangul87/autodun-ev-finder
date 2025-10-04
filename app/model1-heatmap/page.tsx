@@ -1,30 +1,28 @@
 'use client';
+export const dynamic = 'force-dynamic';
+
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import '../../lib/leaflet-setup'; // 👈 relative path (no @ alias)
 
+// Leaflet UI pieces (client-only)
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
 const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
 const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
 const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
 const ZoomControl  = dynamic(() => import('react-leaflet').then(m => m.ZoomControl), { ssr: false });
-
 import { useMap } from 'react-leaflet';
 
-const HeatLayer    = dynamic(() => import('../../components/HeatLayer'), { ssr: false });     // 👈 relative
-const CouncilLayer = dynamic(() => import('../../components/CouncilLayer'), { ssr: false });  // 👈 relative
-const SearchBox    = dynamic(() => import('../../components/SearchBox'), { ssr: false });     // 👈 relative
+// Local client components (also client-only)
+const HeatLayer    = dynamic(() => import('../../components/HeatLayer'), { ssr: false });
+const CouncilLayer = dynamic(() => import('../../components/CouncilLayer'), { ssr: false });
+const SearchBox    = dynamic(() => import('../../components/SearchBox'), { ssr: false });
 
 type Station = {
   id: string | number;
-  lat: number;
-  lng: number;
-  name?: string;
-  address?: string;
-  postcode?: string;
-  connectors?: number;
-  source?: string;
+  lat: number; lng: number;
+  name?: string; address?: string; postcode?: string;
+  connectors?: number; source?: string;
 };
 
 function Controls({
@@ -53,17 +51,17 @@ function Controls({
   );
 }
 
-function CaptureMap({ onReady }: { onReady: (m: any) => void }) {
+function CaptureMap({ onReady }: { onReady: (m:any)=>void }) {
   const map = useMap();
   useEffect(() => { if (map) onReady(map); }, [map, onReady]);
   return null;
 }
 
-// Merge POIs that share nearly the same coordinate (~11m at this lat)
+// Merge POIs that share nearly the same coordinate
 function dedupeStations(items: Station[]) {
-  const byKey = new Map<string, Station & { _count: number }>();
+  const byKey = new Map<string, Station & { _count:number }>();
   for (const s of items) {
-    const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`;
+    const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`; // ~11m
     const prev = byKey.get(key);
     if (!prev) byKey.set(key, { ...s, connectors: s.connectors ?? 1, _count: 1 });
     else { prev.connectors = (prev.connectors ?? 0) + (s.connectors ?? 1); prev._count += 1; }
@@ -72,16 +70,18 @@ function dedupeStations(items: Station[]) {
 }
 
 export default function Page() {
+  // Load Leaflet icon assets only on client (prevents SSR "window" access)
+  useEffect(() => { (async () => { await import('../../lib/leaflet-setup'); })(); }, []);
+
   const [items, setItems] = useState<Station[]>([]);
   const [heatOn, setHeatOn] = useState(true);
   const [markersOn, setMarkersOn] = useState(true);
   const [polysOn, setPolysOn] = useState(false);
   const [map, setMap] = useState<any>(null);
 
-  // Load ALL of London once (not per-viewport)
+  // Load ALL London stations once (no per-viewport filtering)
   const fetchAllLondon = useCallback(async () => {
     try {
-      // London bbox → backend returns all stations in one response
       const qs = '?north=51.6919&south=51.2867&east=0.3340&west=-0.5104';
       const r = await fetch('/api/stations' + qs, { cache: 'no-store' });
       const d = await r.json();
@@ -90,12 +90,11 @@ export default function Page() {
       setItems([]);
     }
   }, []);
-
   useEffect(() => { fetchAllLondon(); }, [fetchAllLondon]);
 
   const grouped = useMemo(() => dedupeStations(items), [items]);
   const heatPoints = useMemo(
-    () => grouped.map(s => [s.lat, s.lng, Math.min(1, (s.connectors || 1) / 10)] as [number, number, number]),
+    () => grouped.map(s => [s.lat, s.lng, Math.min(1, (s.connectors || 1) / 10)] as [number,number,number]),
     [grouped]
   );
 
@@ -121,7 +120,7 @@ export default function Page() {
         zoom={11}
         style={{ height:'100vh', width:'100%' }}
         preferCanvas
-        zoomControl={false}   // we add our own control at bottom-right
+        zoomControl={false}
       >
         <CaptureMap onReady={setMap} />
         <ZoomControl position="bottomright" />
