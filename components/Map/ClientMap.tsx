@@ -4,11 +4,12 @@ import { MapContainer, TileLayer, Pane, Marker, ZoomControl, GeoJSON } from 'rea
 import { Station } from '../../lib/stations/types';
 import HeatLayer from './HeatLayer';
 
-export default function ClientMap({ stations, bounds, councilGeoJson, showCouncil, onZoomToData }: {
+export default function ClientMap({ stations, bounds, councilGeoJson, showCouncil, showHeat, onZoomToData }: {
   stations: Station[];
   bounds: [[number, number], [number, number]];
   councilGeoJson?: any;
   showCouncil: boolean;
+  showHeat?: boolean;
   onZoomToData: () => void;
 }) {
   const [map, setMap] = useState<any>(null);
@@ -38,14 +39,16 @@ export default function ClientMap({ stations, bounds, councilGeoJson, showCounci
     >
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
       <ZoomControl position="topright" />
-      <Pane name="markers" style={{ zIndex: 650 }}>
+      <Pane name="stations" style={{ zIndex: 650 }}>
         {stations.map(s => (
           <Marker key={s.id} position={[s.lat, s.lng]} />
         ))}
       </Pane>
-      <Pane name="heat" style={{ zIndex: 600 }}>
-        <HeatLayer points={stations.map(s => [s.lat, s.lng, 0.7])} />
-      </Pane>
+      {showHeat && (
+        <Pane name="heat" style={{ zIndex: 600 }}>
+          <HeatLayer points={stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, (typeof s.connectors === 'number' ? s.connectors : 1)/3))])} radius={30} blur={20} />
+        </Pane>
+      )}
       {showCouncil && councilGeoJson && (
         <Pane name="council" style={{ zIndex: 500 }}>
           <GeoJSON data={councilGeoJson} style={() => ({ weight: 1, color: '#3b82f6', fillOpacity: 0.08 })} />

@@ -17,6 +17,7 @@ export default function Model1HeatmapClient() {
   const [showCouncil, setShowCouncil] = useState(false);
   const [toast, setToast] = useState('');
   const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
+  const [showHeat, setShowHeat] = useState(true);
 
   useEffect(() => {
     ensureLeafletIconFix();
@@ -66,12 +67,13 @@ export default function Model1HeatmapClient() {
         <span className="ml-4 text-xs bg-gray-200 px-2 py-1 rounded">Stations: {stations.length}</span>
         <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer" title="Debug" onClick={() => setToast(`Source: ${source}, Count: ${stations.length}, Coords: ${stations[0]?.lat},${stations[0]?.lng}`)}>?</span>
       </div>
-      <div id="map-root" className="flex-1 min-h-[75vh] relative">
+      <div className="flex-1 min-h-[75vh] relative">
         <ClientMap
           stations={stations}
           bounds={bounds}
           councilGeoJson={councilGeoJson}
           showCouncil={showCouncil}
+          showHeat={showHeat}
           onZoomToData={handleZoomToData}
         />
       </div>
