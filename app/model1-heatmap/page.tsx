@@ -1,18 +1,17 @@
 'use client';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
-import '@/lib/leaflet-setup'; // ensure marker icons work
+import '@/lib/leaflet-setup';
 
 const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
-const Marker = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
-const Popup = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
+const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
+const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
+const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
 
-
-const HeatLayer = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
+const HeatLayer    = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
 const CouncilLayer = dynamic(() => import('@/components/CouncilLayer'), { ssr: false });
-const SearchBox = dynamic(() => import('@/components/SearchBox'), { ssr: false });
+const SearchBox    = dynamic(() => import('@/components/SearchBox'), { ssr: false });
 
 type Station = { id: string|number; lat: number; lng: number; name?: string; address?: string; postcode?: string; connectors?: number; source?: string; };
 
@@ -33,6 +32,9 @@ export default function Page(){
   const [polysOn, setPolysOn] = useState(false);
   const [feedbackTick, setFeedbackTick] = useState(0);
 
+  // NEW: hold the map instance to pass into SearchBox (no useMap outside container)
+  const [map, setMap] = useState<any>(null);
+
   useEffect(() => {
     fetch('/api/stations', { cache: 'no-store' })
       .then(r => r.json())
@@ -51,12 +53,15 @@ export default function Page(){
 
   return (
     <div style={{ height:'100%', width:'100%', position:'relative' }}>
-      <SearchBox />
+      {/* SearchBox overlay outside, but we pass the map instance */}
+      <SearchBox map={map} />
       <Controls heat={heatOn} setHeat={setHeatOn} markers={markersOn} setMarkers={setMarkersOn} polys={polysOn} setPolys={setPolysOn} />
       <div style={{ position:'absolute', top:12, right:12, zIndex:1000, background:'white', padding:'6px 10px', borderRadius:8, boxShadow:'0 2px 10px rgba(0,0,0,0.15)' }}>
         stations: {items.length}
       </div>
-      <MapContainer center={[51.5074, -0.1278]} zoom={11} style={{ height:'100vh', width:'100%' }} preferCanvas>
+
+      {/* NEW: capture map instance via whenCreated */}
+      <MapContainer center={[51.5074, -0.1278]} zoom={11} style={{ height:'100vh', width:'100%' }} preferCanvas whenCreated={setMap}>
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
         {heatOn && <HeatLayer points={heatPoints} />}
         {polysOn && <CouncilLayer />}
