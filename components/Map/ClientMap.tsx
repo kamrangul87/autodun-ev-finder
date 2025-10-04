@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import { Station } from '../../lib/stations/types';
 import HeatLayer from './HeatLayer';
-import { createStationDivIcon } from '@/lib/icons/stationDivIcon';
+import { createStationDivIcon } from '../../lib/icons/stationDivIcon';
 
 export default function ClientMap({ stations, bounds, councilGeoJson, showCouncil, heatOn, markersOn, onZoomToData }: {
   stations: Station[];

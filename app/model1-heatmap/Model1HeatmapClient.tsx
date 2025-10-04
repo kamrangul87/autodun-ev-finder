@@ -5,7 +5,7 @@ import TopBar from '../../components/ui/TopBar';
 import Toast from '../../components/ui/Toast';
 import SearchControl from '../../components/Map/SearchControl';
 import { Station } from '../../lib/stations/types';
-import { ensureLeafletIconFix } from '@/lib/leafletIconFix';
+import { ensureLeafletIconFix } from '../../lib/leafletIconFix';
 
 const COUNCIL_URL = '/data/councils-london.geo.json';
 const STATIONS_URL = '/api/stations';
