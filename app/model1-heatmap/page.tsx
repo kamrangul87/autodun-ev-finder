@@ -10,7 +10,6 @@ const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), 
 const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
 const ZoomControl  = dynamic(() => import('react-leaflet').then(m => m.ZoomControl), { ssr: false });
 
-// This file is a client component, so it's safe to use the hook here.
 import { useMap } from 'react-leaflet';
 
 const HeatLayer    = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
@@ -62,6 +61,23 @@ function CaptureMap({ onReady }: { onReady: (m: any) => void }) {
   return null;
 }
 
+/** Merge POIs that share (roughly) the same location; sum connectors and keep a count. */
+function dedupeStations(items: Station[]) {
+  const byKey = new Map<string, Station & { _count: number }>();
+  for (const s of items) {
+    const key = `${s.lat.toFixed(4)},${s.lng.toFixed(4)}`; // ~11m at this latitude
+    const prev = byKey.get(key);
+    if (!prev) {
+      byKey.set(key, { ...s, connectors: s.connectors ?? 1, _count: 1 });
+    } else {
+      prev.connectors = (prev.connectors ?? 0) + (s.connectors ?? 1);
+      prev._count += 1;
+      // keep the first name/address; we could also suffix “(+N)”
+    }
+  }
+  return [...byKey.values()];
+}
+
 export default function Page() {
   const [items, setItems] = useState<Station[]>([]);
   const [heatOn, setHeatOn] = useState(true);
@@ -69,8 +85,8 @@ export default function Page() {
   const [polysOn, setPolysOn] = useState(false);
   const [feedbackTick, setFeedbackTick] = useState(0);
 
-  // Hold Leaflet map instance to pass into SearchBox & for bbox fetches
   const [map, setMap] = useState<any>(null);
+  const [zoom, setZoom] = useState(11);
 
   // Fetch stations (optionally with bbox)
   const fetchStations = useCallback(async (bbox?: {n:number;s:number;e:number;w:number}) => {
@@ -86,25 +102,22 @@ export default function Page() {
     }
   }, []);
 
-  // First load (no bbox yet)
+  // Initial load
   useEffect(() => { fetchStations(); }, [fetchStations, feedbackTick]);
 
-  // Refetch on pan/zoom with current bbox (works for OCM live source)
+  // Refetch on pan/zoom with current bbox (works with OCM)
   useEffect(() => {
     if (!map) return;
     let t: any;
-
     const update = () => {
       const b = map.getBounds();
+      const z = map.getZoom();
+      setZoom(z);
       const bbox = { n: b.getNorth(), s: b.getSouth(), e: b.getEast(), w: b.getWest() };
-      // debounce lightly to avoid spam
       clearTimeout(t);
       t = setTimeout(() => fetchStations(bbox), 150);
     };
-
-    // initial bbox fetch once map is ready (gives you data for viewport)
     update();
-
     map.on('moveend', update);
     map.on('zoomend', update);
     return () => {
@@ -114,9 +127,12 @@ export default function Page() {
     };
   }, [map, fetchStations]);
 
+  // Deduped points for both markers and heat (makes intensity more realistic)
+  const grouped = useMemo(() => dedupeStations(items), [items]);
+
   const heatPoints = useMemo(
-    () => items.map(s => [s.lat, s.lng, Math.min(1, (s.connectors || 1) / 8)] as [number, number, number]),
-    [items]
+    () => grouped.map(s => [s.lat, s.lng, Math.min(1, (s.connectors || 1) / 10)] as [number, number, number]),
+    [grouped]
   );
 
   const onQuickFeedback = async (stationId: string|number) => {
@@ -129,6 +145,9 @@ export default function Page() {
       setFeedbackTick(x => x + 1);
     } catch { /* ignore */ }
   };
+
+  // Only render markers when zoomed in to reduce clutter
+  const canShowMarkers = markersOn && (zoom >= 12 || grouped.length <= 120);
 
   return (
     <div style={{ height:'100%', width:'100%', position:'relative' }}>
@@ -156,12 +175,9 @@ export default function Page() {
         zoom={11}
         style={{ height:'100vh', width:'100%' }}
         preferCanvas
-        zoomControl={false}   // move zoom away from our toggles
+        zoomControl={false}  // keep default zoom off; add our own bottom-right
       >
-        {/* capture map instance */}
         <CaptureMap onReady={setMap} />
-
-        {/* put zoom in bottom-right so it doesn't overlap Heatmap/Markers */}
         <ZoomControl position="bottomright" />
 
         <TileLayer
@@ -172,13 +188,16 @@ export default function Page() {
         {heatOn  && <HeatLayer points={heatPoints} />}
         {polysOn && <CouncilLayer />}
 
-        {markersOn && items.map(s => (
-          <Marker key={String(s.id)} position={[s.lat, s.lng]}>
+        {canShowMarkers && grouped.map((s:any) => (
+          <Marker key={`${s.lat},${s.lng}`} position={[s.lat, s.lng]}>
             <Popup>
-              <div style={{ minWidth: 200 }}>
-                <div style={{ fontWeight: 600 }}>{s.name || 'EV Station'}</div>
+              <div style={{ minWidth: 220 }}>
+                <div style={{ fontWeight: 600 }}>
+                  {s.name || 'EV Station'}
+                </div>
                 {s.address && <div>{s.address}</div>}
                 {s.postcode && <div>{s.postcode}</div>}
+                {s._count > 1 && <div>Sites merged: {s._count}</div>}
                 {s.connectors != null && <div>Connectors: {s.connectors}</div>}
                 <button
                   onClick={() => onQuickFeedback(s.id)}
