@@ -7,12 +7,12 @@
     "start": "next start"
   },
   "dependencies": {
-    "leaflet": "^1.9.4",
-    "leaflet.heat": "^0.2.0",
+    "leaflet": "1.9.4",
+    "leaflet.heat": "0.2.0",
     "next": "14.2.5",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "react-leaflet": "^4.2.1",
+    "react-leaflet": "4.2.1",
     "react-leaflet-cluster": "^3.1.1",
     "supercluster": "^8.0.1"
   },
@@ -23,9 +23,12 @@
     "@types/node": "^24.6.2",
     "@types/react": "^18.3.25",
     "autoprefixer": "^10.4.21",
-    "eslint": "^8.57.0",
+    "eslint": "8.57.0",
     "eslint-config-next": "14.2.5",
     "tailwindcss": "^4.1.14",
     "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": "20.x"
   }
 }
