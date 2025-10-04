@@ -1,72 +1,142 @@
-import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs'; import path from 'path';
-export const dynamic = 'force-dynamic';
-type Station = { id:string|number; lat:number; lng:number; name?:string; address?:string; postcode?:string; connectors?:number; source?:string; };
-const SRC = (process.env.STATIONS_SOURCE || 'ocm').toLowerCase();
-const STATIONS_URL = process.env.STATIONS_URL || '';
-const OCM_API_KEY = process.env.OCM_API_KEY || '';
-const OCM_MAX_RESULTS = Number(process.env.OCM_MAX_RESULTS || 1000);
+import { NextResponse } from 'next/server';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
-function mapAnyToStation(x:any): Station | null {
-  const lat = x?.lat ?? x?.latitude ?? x?.AddressInfo?.Latitude;
-  const lng = x?.lng ?? x?.lon ?? x?.longitude ?? x?.AddressInfo?.Longitude;
+export const runtime = 'nodejs';
+
+type Station = {
+  id: string | number;
+  lat: number;
+  lng: number;
+  name?: string;
+  address?: string;
+  postcode?: string;
+  connectors?: number;
+  source?: string;
+};
+
+// ---- helpers ---------------------------------------------------------------
+
+function coerceStation(raw: any): Station | null {
+  const lat =
+    raw?.lat ??
+    raw?.latitude ??
+    raw?.Latitude ??
+    raw?.AddressInfo?.Latitude;
+  const lng =
+    raw?.lng ??
+    raw?.longitude ??
+    raw?.Longitude ??
+    raw?.AddressInfo?.Longitude;
+
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
-  const id = x?.id ?? x?.ID ?? x?._id ?? `${Number(lat).toFixed(6)},${Number(lng).toFixed(6)}`;
-  const name = x?.name ?? x?.Title ?? x?.AddressInfo?.Title ?? x?.AddressInfo?.AddressLine1;
-  const address = x?.address ?? x?.AddressInfo?.AddressLine1;
-  const postcode = x?.postcode ?? x?.AddressInfo?.Postcode;
-  const connectors = x?.connectors ?? x?.NumberOfPoints ?? (Array.isArray(x?.Connections) ? x?.Connections.length : undefined);
-  const source = x?.source ?? (x?.AddressInfo ? 'ocm' : 'file');
-  return { id, lat, lng, name, address, postcode, connectors, source };
-}
-const tinyFallback = ():Station[] => [
-  { id:'fallback-1', lat:51.5033, lng:-0.1195, name:'London Eye', connectors:2, source:'fallback' },
-  { id:'fallback-2', lat:51.5079, lng:-0.0877, name:'London Bridge', connectors:4, source:'fallback' }
-];
-const safeMap = (arr:any[]):Station[] => (arr||[]).map(mapAnyToStation).filter(Boolean) as Station[];
 
-async function fromFile(req: NextRequest): Promise<Station[]> {
+  return {
+    id: raw?.id ?? raw?.ID ?? `${lat},${lng}`,
+    lat,
+    lng,
+    name: raw?.name ?? raw?.Title ?? raw?.AddressInfo?.Title,
+    address:
+      raw?.address ??
+      raw?.AddressLine1 ??
+      raw?.AddressInfo?.AddressLine1 ??
+      undefined,
+    postcode: raw?.postcode ?? raw?.Postcode ?? raw?.AddressInfo?.Postcode,
+    connectors: Array.isArray(raw?.Connections)
+      ? raw.Connections.length
+      : raw?.connectors ?? undefined,
+    source: raw?.source ?? raw?.Source ?? undefined,
+  };
+}
+
+function toOk(items: any[]): { items: Station[] } {
+  const mapped = (items ?? [])
+    .map(coerceStation)
+    .filter(Boolean) as Station[];
+  return { items: mapped };
+}
+
+async function readStationsFile(): Promise<{ items: Station[] }> {
   const root = process.cwd();
-  const files = [path.join(root,'public','data','stations.json'), path.join(root,'public','data','stations.sample.json')];
-  for (const p of files){
-    try{ const raw = fs.readFileSync(p,'utf8'); const j = JSON.parse(raw); const arr = Array.isArray(j)? j : j.items || []; const m = safeMap(arr); if (m.length) return m; }catch{}
-  }
-  try{
-    const origin = new URL(req.url).origin;
-    for (const u of [`${origin}/data/stations.json`, `${origin}/data/stations.sample.json`]){
-      const r = await fetch(u,{cache:'no-store'}); if (r.ok){ const j = await r.json(); const arr = Array.isArray(j)? j : j.items || []; const m = safeMap(arr); if (m.length) return m; }
+  const filePathPrimary = path.join(root, 'public', 'data', 'stations.json');
+  const filePathSample = path.join(root, 'public', 'data', 'stations.sample.json');
+
+  for (const p of [filePathPrimary, filePathSample]) {
+    try {
+      const txt = await fs.readFile(p, 'utf-8');
+      const json = JSON.parse(txt);
+      return toOk(Array.isArray(json?.items) ? json.items : json?.items ?? json);
+    } catch {
+      // keep trying next
     }
-  }catch{}
-  return tinyFallback();
+  }
+  return { items: [] };
 }
 
-async function fromURL(): Promise<Station[]> {
-  if (!STATIONS_URL) return tinyFallback();
-  try{
-    const r = await fetch(STATIONS_URL,{cache:'no-store'}); const j = await r.json();
-    const arr = Array.isArray(j)? j : j.items || []; const m = safeMap(arr);
-    return m.length ? m : tinyFallback();
-  }catch{ return tinyFallback(); }
+// ---- OCM fetch -------------------------------------------------------------
+
+async function fetchFromOCM(reqUrl: URL): Promise<{ items: Station[] }> {
+  const apiKey = process.env.OCM_API_KEY || '';
+  const maxResults = parseInt(process.env.OCM_MAX_RESULTS || '3000', 10);
+
+  // Default to full London bounding box if none provided
+  const north = parseFloat(reqUrl.searchParams.get('north') ?? '51.6919');
+  const south = parseFloat(reqUrl.searchParams.get('south') ?? '51.2867');
+  const east  = parseFloat(reqUrl.searchParams.get('east')  ?? '0.3340');
+  const west  = parseFloat(reqUrl.searchParams.get('west')  ?? '-0.5104');
+
+  const url = new URL('https://api.openchargemap.io/v3/poi/');
+  url.searchParams.set('output', 'json');
+  url.searchParams.set('countrycode', 'GB');
+  url.searchParams.set('compact', 'true');
+  url.searchParams.set('verbose', 'false');
+  url.searchParams.set('includeComments', 'false');
+  url.searchParams.set('maxresults', String(maxResults));
+  // OCM expects: south,west,north,east
+  url.searchParams.set('boundingbox', `${south},${west},${north},${east}`);
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['X-API-Key'] = apiKey;
+
+  const resp = await fetch(url.toString(), { headers, cache: 'no-store' });
+  if (!resp.ok) throw new Error(`OCM ${resp.status}`);
+  const data = await resp.json();
+
+  return toOk(Array.isArray(data) ? data : []);
 }
 
-async function fromOCM(): Promise<Station[]> {
-  const south = 51.2867, west = -0.5104, north = 51.6919, east = 0.3340;
-  const url = `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=${OCM_MAX_RESULTS}&boundingbox=${south},${west},${north},${east}`;
-  try{
-    const headers:Record<string,string> = { 'Accept':'application/json' };
-    if (OCM_API_KEY) headers['X-API-Key'] = OCM_API_KEY;
-    const r = await fetch(url, { headers, cache:'no-store' });
-    const j = await r.json();
-    const arr = Array.isArray(j)? j : [];
-    const m = safeMap(arr);
-    return m.length ? m : tinyFallback();
-  }catch{ return tinyFallback(); }
+// ---- URL source fetch ------------------------------------------------------
+
+async function fetchFromURL(): Promise<{ items: Station[] }> {
+  const src = process.env.STATIONS_URL;
+  if (!src) throw new Error('STATIONS_URL not set');
+  const resp = await fetch(src, { cache: 'no-store' });
+  if (!resp.ok) throw new Error(`URL ${resp.status}`);
+  const data = await resp.json();
+  const items = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+  return toOk(items);
 }
 
-export async function GET(req: NextRequest){
-  let items: Station[] = [];
-  if (SRC === 'url') items = await fromURL();
-  else if (SRC === 'file') items = await fromFile(req);
-  else items = await fromOCM();
-  return NextResponse.json({ items });
+// ---- handler ---------------------------------------------------------------
+
+export async function GET(req: Request) {
+  const source = (process.env.STATIONS_SOURCE || 'file').toLowerCase();
+
+  try {
+    if (source === 'ocm') {
+      const out = await fetchFromOCM(new URL(req.url));
+      if (out.items.length > 0) return NextResponse.json(out, { headers: { 'cache-control': 'no-store' } });
+      // fall through to file if OCM returned nothing
+    } else if (source === 'url') {
+      const out = await fetchFromURL();
+      if (out.items.length > 0) return NextResponse.json(out, { headers: { 'cache-control': 'no-store' } });
+      // fall through to file if empty
+    }
+  } catch (e) {
+    // swallow and fall back
+  }
+
+  // Final fallback: local files
+  const fallback = await readStationsFile();
+  return NextResponse.json(fallback, { headers: { 'cache-control': 'no-store' } });
 }
