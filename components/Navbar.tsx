@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export function Navbar() {
@@ -5,7 +6,7 @@ export function Navbar() {
     <header className="border-b bg-white/80 backdrop-blur">
       <div className="container flex items-center justify-between py-4">
         <Link href="/" className="flex items-center gap-3">
-          <img src="/logo.svg" alt="Autodun" className="h-8 w-8" />
+          <Image src="/logo.svg" alt="Autodun" width={32} height={32} priority className="h-8 w-8" />
           <span className="text-xl font-extrabold">Autodun</span>
         </Link>
         <nav className="flex items-center gap-6 text-sm font-semibold">
