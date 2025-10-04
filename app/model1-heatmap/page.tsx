@@ -1,23 +1,24 @@
 'use client';
-export const dynamic = 'force-dynamic';
+export const dynamicMode = 'force-dynamic'; // ✅ renamed to avoid conflict
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
+import nextDynamic from 'next/dynamic'; // ✅ renamed import alias
 
-// ✅ Load Leaflet CSS only in browser — fixes "Can't resolve leaflet/dist/leaflet.css"
+// ✅ Load Leaflet CSS only in browser
 if (typeof window !== 'undefined') {
   import('leaflet/dist/leaflet.css');
 }
 
-// Lazy-load map components to avoid SSR errors
-const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
-const Marker = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
-const Popup = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
-const GeoJSON = dynamic(() => import('react-leaflet').then(m => m.GeoJSON), { ssr: false });
-const useMap = dynamic(() => import('react-leaflet').then(m => m.useMap), { ssr: false }) as any;
+// Lazy imports
+const MapContainer = nextDynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
+const TileLayer = nextDynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
+const Marker = nextDynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
+const Popup = nextDynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
+const GeoJSON = nextDynamic(() => import('react-leaflet').then(m => m.GeoJSON), { ssr: false });
+const useMap = nextDynamic(() => import('react-leaflet').then(m => m.useMap), { ssr: false }) as any;
 
-// ✅ Type for stations
+// -------------------------------
+
 type Station = {
   id: string | number;
   lat: number;
@@ -31,7 +32,6 @@ type Station = {
 const LONDON_CENTER: [number, number] = [51.5074, -0.1278];
 const LONDON_BBOX = { north: 51.6919, south: 51.2867, east: 0.334, west: -0.5104 };
 
-/** capture L.Map instance */
 function CaptureMapRef({ onMap }: { onMap: (m: any) => void }) {
   const map = useMap();
   useEffect(() => {
@@ -51,7 +51,6 @@ function HeatLayer({ points }: { points: [number, number, number?][] }) {
       await import('leaflet.heat');
 
       if (!mounted) return;
-
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
@@ -87,7 +86,6 @@ export default function EVHeatmapPage() {
   const [polys, setPolys] = useState<any | null>(null);
   const mapRef = useRef<any>(null);
 
-  // ✅ Fix Leaflet marker icon URLs (browser only)
   useEffect(() => {
     (async () => {
       const L = (await import('leaflet')).default as any;
@@ -104,7 +102,6 @@ export default function EVHeatmapPage() {
     })();
   }, []);
 
-  // ✅ Fetch all stations in London
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -122,7 +119,6 @@ export default function EVHeatmapPage() {
     };
   }, []);
 
-  // ✅ Fetch polygons
   useEffect(() => {
     (async () => {
       try {
@@ -134,12 +130,10 @@ export default function EVHeatmapPage() {
 
   const heatPoints = useMemo<[number, number, number?][]>(() => stations.map(s => [s.lat, s.lng, 0.7]), [stations]);
 
-  // ✅ Search handler
   async function geoSearch(term: string) {
     const t = term.trim();
     if (!t || !mapRef.current) return;
 
-    // Postcode first
     try {
       const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(t)}`);
       const j = await r.json();
@@ -149,7 +143,6 @@ export default function EVHeatmapPage() {
       }
     } catch {}
 
-    // Nominatim fallback
     try {
       const r2 = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(t)}&limit=1`,
@@ -185,7 +178,7 @@ export default function EVHeatmapPage() {
 
   return (
     <div style={{ width: '100%', height: '100vh' }}>
-      {/* Control toggles */}
+      {/* Controls */}
       <div
         style={{
           position: 'absolute',
@@ -211,10 +204,8 @@ export default function EVHeatmapPage() {
         </label>
       </div>
 
-      {/* Search box */}
       <SearchBox onSearch={geoSearch} />
 
-      {/* Station count */}
       <div
         style={{
           position: 'absolute',
@@ -232,11 +223,8 @@ export default function EVHeatmapPage() {
 
       <MapContainer center={LONDON_CENTER} zoom={11} style={{ width: '100%', height: '100%' }}>
         <CaptureMapRef onMap={m => (mapRef.current = m)} />
-
         <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-
         {showHeat && <HeatLayer points={heatPoints} />}
-
         {showMarkers &&
           stations.map(s => (
             <Marker key={String(s.id)} position={[s.lat, s.lng] as any}>
@@ -280,7 +268,6 @@ export default function EVHeatmapPage() {
               </Popup>
             </Marker>
           ))}
-
         {showPolys && polys && <GeoJSON data={polys as any} style={() => ({ color: '#2b6cb0', weight: 1.4, fillOpacity: 0.08 })} />}
       </MapContainer>
     </div>
