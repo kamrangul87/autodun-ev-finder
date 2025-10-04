@@ -8,8 +8,9 @@ const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContai
 const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
 const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
 const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
+const ZoomControl  = dynamic(() => import('react-leaflet').then(m => m.ZoomControl), { ssr: false });
 
-// NOTE: This file is client-only, so using useMap here is safe.
+// This file is a client component, so it's safe to use the hook here.
 import { useMap } from 'react-leaflet';
 
 const HeatLayer    = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
@@ -56,9 +57,7 @@ function Controls({
 /** Captures the Leaflet map instance once this component mounts inside <MapContainer>. */
 function CaptureMap({ onReady }: { onReady: (m: any) => void }) {
   const map = useMap();
-  // useCallback not strictly required, but avoids re-creating the function
   const report = useCallback(() => { if (map) onReady(map); }, [map, onReady]);
-  // run once when map is available
   React.useEffect(() => { report(); }, [report]);
   return null;
 }
@@ -70,15 +69,50 @@ export default function Page() {
   const [polysOn, setPolysOn] = useState(false);
   const [feedbackTick, setFeedbackTick] = useState(0);
 
-  // Hold Leaflet map instance to pass into SearchBox
+  // Hold Leaflet map instance to pass into SearchBox & for bbox fetches
   const [map, setMap] = useState<any>(null);
 
+  // Fetch stations (optionally with bbox)
+  const fetchStations = useCallback(async (bbox?: {n:number;s:number;e:number;w:number}) => {
+    try {
+      const qs = bbox
+        ? `?north=${bbox.n}&south=${bbox.s}&east=${bbox.e}&west=${bbox.w}`
+        : '';
+      const res = await fetch(`/api/stations${qs}`, { cache: 'no-store' });
+      const data = await res.json();
+      setItems(Array.isArray(data.items) ? data.items : []);
+    } catch {
+      setItems([]);
+    }
+  }, []);
+
+  // First load (no bbox yet)
+  useEffect(() => { fetchStations(); }, [fetchStations, feedbackTick]);
+
+  // Refetch on pan/zoom with current bbox (works for OCM live source)
   useEffect(() => {
-    fetch('/api/stations', { cache: 'no-store' })
-      .then(r => r.json())
-      .then(d => setItems(Array.isArray(d.items) ? d.items : []))
-      .catch(() => setItems([]));
-  }, [feedbackTick]);
+    if (!map) return;
+    let t: any;
+
+    const update = () => {
+      const b = map.getBounds();
+      const bbox = { n: b.getNorth(), s: b.getSouth(), e: b.getEast(), w: b.getWest() };
+      // debounce lightly to avoid spam
+      clearTimeout(t);
+      t = setTimeout(() => fetchStations(bbox), 150);
+    };
+
+    // initial bbox fetch once map is ready (gives you data for viewport)
+    update();
+
+    map.on('moveend', update);
+    map.on('zoomend', update);
+    return () => {
+      map.off('moveend', update);
+      map.off('zoomend', update);
+      clearTimeout(t);
+    };
+  }, [map, fetchStations]);
 
   const heatPoints = useMemo(
     () => items.map(s => [s.lat, s.lng, Math.min(1, (s.connectors || 1) / 8)] as [number, number, number]),
@@ -93,22 +127,22 @@ export default function Page() {
         body: JSON.stringify({ stationId, rating: 0 })
       });
       setFeedbackTick(x => x + 1);
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   };
 
   return (
     <div style={{ height:'100%', width:'100%', position:'relative' }}>
-      {/* Search overlay outside of container; receives map via prop */}
+      {/* Search overlay (center top) */}
       <SearchBox map={map} />
 
+      {/* Our toggles (top-left) */}
       <Controls
         heat={heatOn} setHeat={setHeatOn}
         markers={markersOn} setMarkers={setMarkersOn}
         polys={polysOn} setPolys={setPolysOn}
       />
 
+      {/* Station count pill (top-right) */}
       <div style={{
         position:'absolute', top:12, right:12, zIndex:1000,
         background:'white', padding:'6px 10px', borderRadius:8,
@@ -122,9 +156,13 @@ export default function Page() {
         zoom={11}
         style={{ height:'100vh', width:'100%' }}
         preferCanvas
+        zoomControl={false}   // move zoom away from our toggles
       >
-        {/* Capture the map instance type-safely */}
+        {/* capture map instance */}
         <CaptureMap onReady={setMap} />
+
+        {/* put zoom in bottom-right so it doesn't overlap Heatmap/Markers */}
+        <ZoomControl position="bottomright" />
 
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
