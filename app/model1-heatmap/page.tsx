@@ -2,8 +2,22 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
+import dynamic from 'next/dynamic';
 
+// ✅ Load Leaflet CSS only in browser — fixes "Can't resolve leaflet/dist/leaflet.css"
+if (typeof window !== 'undefined') {
+  import('leaflet/dist/leaflet.css');
+}
+
+// Lazy-load map components to avoid SSR errors
+const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
+const TileLayer = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
+const Marker = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
+const Popup = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
+const GeoJSON = dynamic(() => import('react-leaflet').then(m => m.GeoJSON), { ssr: false });
+const useMap = dynamic(() => import('react-leaflet').then(m => m.useMap), { ssr: false }) as any;
+
+// ✅ Type for stations
 type Station = {
   id: string | number;
   lat: number;
@@ -15,12 +29,14 @@ type Station = {
 };
 
 const LONDON_CENTER: [number, number] = [51.5074, -0.1278];
-const LONDON_BBOX = { north: 51.6919, south: 51.2867, east: 0.3340, west: -0.5104 };
+const LONDON_BBOX = { north: 51.6919, south: 51.2867, east: 0.334, west: -0.5104 };
 
-/** capture L.Map instance without relying on whenReady/whenCreated props */
+/** capture L.Map instance */
 function CaptureMapRef({ onMap }: { onMap: (m: any) => void }) {
   const map = useMap();
-  useEffect(() => { onMap(map); }, [map, onMap]);
+  useEffect(() => {
+    onMap(map);
+  }, [map, onMap]);
   return null;
 }
 
@@ -31,7 +47,6 @@ function HeatLayer({ points }: { points: [number, number, number?][] }) {
   useEffect(() => {
     let mounted = true;
     (async () => {
-      // Load Leaflet and plugin ONLY in browser
       const L = (await import('leaflet')).default as any;
       await import('leaflet.heat');
 
@@ -43,7 +58,12 @@ function HeatLayer({ points }: { points: [number, number, number?][] }) {
       }
       if (!points.length) return;
 
-      layerRef.current = L.heatLayer(points, { radius: 20, blur: 12, maxZoom: 17 });
+      layerRef.current = L.heatLayer(points, {
+        radius: 20,
+        blur: 12,
+        maxZoom: 17,
+        minOpacity: 0.35,
+      });
       layerRef.current.addTo(map);
     })();
 
@@ -65,10 +85,9 @@ export default function EVHeatmapPage() {
   const [showMarkers, setShowMarkers] = useState(true);
   const [showPolys, setShowPolys] = useState(true);
   const [polys, setPolys] = useState<any | null>(null);
-
   const mapRef = useRef<any>(null);
 
-  // One-time Leaflet default marker icon fix (done in browser only)
+  // ✅ Fix Leaflet marker icon URLs (browser only)
   useEffect(() => {
     (async () => {
       const L = (await import('leaflet')).default as any;
@@ -85,7 +104,7 @@ export default function EVHeatmapPage() {
     })();
   }, []);
 
-  // Fetch once: full London from your API (server route handles source + fallback)
+  // ✅ Fetch all stations in London
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -98,10 +117,12 @@ export default function EVHeatmapPage() {
         if (!cancelled) setStations([]);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Load council polygons
+  // ✅ Fetch polygons
   useEffect(() => {
     (async () => {
       try {
@@ -111,14 +132,14 @@ export default function EVHeatmapPage() {
     })();
   }, []);
 
-  const heatPoints = useMemo<[number, number, number?][]>(() =>
-    stations.map((s) => [s.lat, s.lng, 0.7]), [stations]);
+  const heatPoints = useMemo<[number, number, number?][]>(() => stations.map(s => [s.lat, s.lng, 0.7]), [stations]);
 
+  // ✅ Search handler
   async function geoSearch(term: string) {
     const t = term.trim();
     if (!t || !mapRef.current) return;
 
-    // Try UK postcodes first
+    // Postcode first
     try {
       const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(t)}`);
       const j = await r.json();
@@ -128,11 +149,12 @@ export default function EVHeatmapPage() {
       }
     } catch {}
 
-    // Fallback to Nominatim
+    // Nominatim fallback
     try {
-      const r2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(t)}&limit=1`, {
-        headers: { 'Accept-Language': 'en-GB' },
-      });
+      const r2 = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(t)}&limit=1`,
+        { headers: { 'Accept-Language': 'en-GB' } }
+      );
       const j2 = await r2.json();
       if (Array.isArray(j2) && j2.length) {
         const p = j2[0];
@@ -163,67 +185,103 @@ export default function EVHeatmapPage() {
 
   return (
     <div style={{ width: '100%', height: '100vh' }}>
-      {/* Controls */}
-      <div style={{
-        position: 'absolute', zIndex: 1000, left: 12, top: 12,
-        display: 'flex', gap: 12, background: 'white', padding: '6px 10px',
-        borderRadius: 8, boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
-      }}>
-        <label><input type="checkbox" checked={showHeat} onChange={e => setShowHeat(e.target.checked)} /> Heatmap</label>
-        <label><input type="checkbox" checked={showMarkers} onChange={e => setShowMarkers(e.target.checked)} /> Markers</label>
-        <label><input type="checkbox" checked={showPolys} onChange={e => setShowPolys(e.target.checked)} /> Polygons</label>
+      {/* Control toggles */}
+      <div
+        style={{
+          position: 'absolute',
+          zIndex: 1000,
+          left: 12,
+          top: 12,
+          display: 'flex',
+          gap: 12,
+          background: 'white',
+          padding: '6px 10px',
+          borderRadius: 8,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        }}
+      >
+        <label>
+          <input type="checkbox" checked={showHeat} onChange={e => setShowHeat(e.target.checked)} /> Heatmap
+        </label>
+        <label>
+          <input type="checkbox" checked={showMarkers} onChange={e => setShowMarkers(e.target.checked)} /> Markers
+        </label>
+        <label>
+          <input type="checkbox" checked={showPolys} onChange={e => setShowPolys(e.target.checked)} /> Polygons
+        </label>
       </div>
 
+      {/* Search box */}
       <SearchBox onSearch={geoSearch} />
 
-      <div style={{
-        position: 'absolute', zIndex: 1000, right: 12, top: 12,
-        background: 'white', padding: '6px 10px', borderRadius: 8,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
-      }}>
+      {/* Station count */}
+      <div
+        style={{
+          position: 'absolute',
+          zIndex: 1000,
+          right: 12,
+          top: 12,
+          background: 'white',
+          padding: '6px 10px',
+          borderRadius: 8,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        }}
+      >
         stations: {stations.length}
       </div>
 
-      <MapContainer
-        center={LONDON_CENTER}
-        zoom={11}
-        style={{ width: '100%', height: '100%' }}
-      >
-        {/* capture L.Map instance here */}
-        <CaptureMapRef onMap={(m) => { mapRef.current = m; }} />
+      <MapContainer center={LONDON_CENTER} zoom={11} style={{ width: '100%', height: '100%' }}>
+        <CaptureMapRef onMap={m => (mapRef.current = m)} />
 
-        <TileLayer
-          attribution="&copy; OpenStreetMap contributors"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+        <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
         {showHeat && <HeatLayer points={heatPoints} />}
 
-        {showMarkers && stations.map((s) => (
-          <Marker key={String(s.id)} position={[s.lat, s.lng] as any}>
-            <Popup>
-              <div style={{ minWidth: 220 }}>
-                <strong>{s.name ?? 'EV Charger'}</strong><br />
-                {s.address && <>{s.address}<br /></>}
-                {s.postcode && <>{s.postcode}<br /></>}
-                {typeof s.connectors === 'number' && <>Connectors: {s.connectors}<br /></>}
-                <button
-                  onClick={() => quickFeedback(s)}
-                  style={{
-                    marginTop: 8, background: '#ff7a00', color: '#fff',
-                    border: 0, borderRadius: 6, padding: '6px 10px', cursor: 'pointer'
-                  }}
-                >
-                  Quick Feedback
-                </button>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
+        {showMarkers &&
+          stations.map(s => (
+            <Marker key={String(s.id)} position={[s.lat, s.lng] as any}>
+              <Popup>
+                <div style={{ minWidth: 220 }}>
+                  <strong>{s.name ?? 'EV Charger'}</strong>
+                  <br />
+                  {s.address && (
+                    <>
+                      {s.address}
+                      <br />
+                    </>
+                  )}
+                  {s.postcode && (
+                    <>
+                      {s.postcode}
+                      <br />
+                    </>
+                  )}
+                  {typeof s.connectors === 'number' && (
+                    <>
+                      Connectors: {s.connectors}
+                      <br />
+                    </>
+                  )}
+                  <button
+                    onClick={() => quickFeedback(s)}
+                    style={{
+                      marginTop: 8,
+                      background: '#ff7a00',
+                      color: '#fff',
+                      border: 0,
+                      borderRadius: 6,
+                      padding: '6px 10px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Quick Feedback
+                  </button>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
 
-        {showPolys && polys && (
-          <GeoJSON data={polys as any} style={() => ({ color: '#2b6cb0', weight: 1.4, fillOpacity: 0.08 })} />
-        )}
+        {showPolys && polys && <GeoJSON data={polys as any} style={() => ({ color: '#2b6cb0', weight: 1.4, fillOpacity: 0.08 })} />}
       </MapContainer>
     </div>
   );
@@ -233,19 +291,28 @@ function SearchBox({ onSearch }: { onSearch: (q: string) => void }) {
   const [q, setQ] = useState('');
   return (
     <form
-      onSubmit={(e) => { e.preventDefault(); onSearch(q); }}
+      onSubmit={e => {
+        e.preventDefault();
+        onSearch(q);
+      }}
       style={{
-        position: 'absolute', zIndex: 1000, left: '50%', transform: 'translateX(-50%)',
-        top: 12, background: 'white', borderRadius: 8, padding: 6,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+        position: 'absolute',
+        zIndex: 1000,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        top: 12,
+        background: 'white',
+        borderRadius: 8,
+        padding: 6,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
       }}
     >
       <input
-        value={q} onChange={(e) => setQ(e.target.value)}
+        value={q}
+        onChange={e => setQ(e.target.value)}
         placeholder="Search postcode or place..."
         style={{ width: 360, padding: '6px 10px', border: '1px solid #ccc', borderRadius: 6 }}
       />
     </form>
   );
 }
-import 'leaflet/dist/leaflet.css';
