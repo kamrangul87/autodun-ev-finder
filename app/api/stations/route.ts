@@ -4,8 +4,7 @@ import path from 'node:path';
 
 export const runtime = 'nodejs';
 
-/** Public shape returned by this API */
-export type Station = {
+type Station = {
   id: string | number;
   lat: number;
   lng: number;
@@ -16,18 +15,12 @@ export type Station = {
   source?: string;
 };
 
-// ---------------- helpers ----------------
+const LONDON = { north: 51.6919, south: 51.2867, east: 0.3340, west: -0.5104 };
 
-/** London bbox defaults (EPSG:4326) */
-const LONDON_BBOX = {
-  north: 51.6919,
-  south: 51.2867,
-  east: 0.3340,
-  west: -0.5104,
-};
+// ---------- helpers ----------
 
-function parseBBox(u: URL) {
-  // Accept either ?north=&south=&east=&west= or ?bbox=south,west,north,east
+function pickBBox(u: URL) {
+  // Accept ?north=&south=&east=&west= or ?bbox=south,west,north,east
   const bboxStr = u.searchParams.get('bbox');
   if (bboxStr) {
     const [south, west, north, east] = bboxStr.split(',').map(Number);
@@ -35,82 +28,64 @@ function parseBBox(u: URL) {
       return { north, south, east, west };
     }
   }
-  const north = parseFloat(u.searchParams.get('north') ?? `${LONDON_BBOX.north}`);
-  const south = parseFloat(u.searchParams.get('south') ?? `${LONDON_BBOX.south}`);
-  const east  = parseFloat(u.searchParams.get('east')  ?? `${LONDON_BBOX.east}`);
-  const west  = parseFloat(u.searchParams.get('west')  ?? `${LONDON_BBOX.west}`);
-
+  const north = Number(u.searchParams.get('north') ?? LONDON.north);
+  const south = Number(u.searchParams.get('south') ?? LONDON.south);
+  const east  = Number(u.searchParams.get('east')  ?? LONDON.east);
+  const west  = Number(u.searchParams.get('west')  ?? LONDON.west);
   return {
-    north: Number.isFinite(north) ? north : LONDON_BBOX.north,
-    south: Number.isFinite(south) ? south : LONDON_BBOX.south,
-    east:  Number.isFinite(east)  ? east  : LONDON_BBOX.east,
-    west:  Number.isFinite(west)  ? west  : LONDON_BBOX.west,
+    north: Number.isFinite(north) ? north : LONDON.north,
+    south: Number.isFinite(south) ? south : LONDON.south,
+    east : Number.isFinite(east)  ? east  : LONDON.east,
+    west : Number.isFinite(west)  ? west  : LONDON.west,
   };
 }
 
-/** Map any input shape (file/url/OCM) into Station */
 function coerceStation(raw: any): Station | null {
-  const lat =
-    raw?.lat ??
-    raw?.latitude ??
-    raw?.Latitude ??
-    raw?.AddressInfo?.Latitude;
-
-  const lng =
-    raw?.lng ??
-    raw?.longitude ??
-    raw?.Longitude ??
-    raw?.AddressInfo?.Longitude;
-
+  const lat = raw?.lat ?? raw?.latitude ?? raw?.Latitude ?? raw?.AddressInfo?.Latitude;
+  const lng = raw?.lng ?? raw?.longitude ?? raw?.Longitude ?? raw?.AddressInfo?.Longitude;
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
 
   const connectors =
-    Array.isArray(raw?.Connections) ? raw.Connections.length :
-    typeof raw?.connectors === 'number' ? raw.connectors : undefined;
+    Array.isArray(raw?.Connections) ? raw.Connections.length
+    : typeof raw?.connectors === 'number' ? raw.connectors
+    : undefined;
 
   return {
     id: raw?.id ?? raw?.ID ?? `${lat},${lng}`,
     lat,
     lng,
     name: raw?.name ?? raw?.Title ?? raw?.AddressInfo?.Title,
-    address:
-      raw?.address ??
-      raw?.AddressLine1 ??
-      raw?.AddressInfo?.AddressLine1 ??
-      undefined,
-    postcode: raw?.postcode ?? raw?.Postcode ?? raw?.AddressInfo?.Postcode,
+    address: raw?.address ?? raw?.AddressLine1 ?? raw?.AddressInfo?.AddressLine1 ?? undefined,
+    postcode: raw?.postcode ?? raw?.Postcode ?? raw?.AddressInfo?.Postcode ?? undefined,
     connectors,
     source: raw?.source ?? raw?.Source ?? undefined,
   };
 }
 
-function mapOK(items: any[]): { items: Station[] } {
-  const list = (items ?? []).map(coerceStation).filter(Boolean) as Station[];
-  return { items: list };
+function mapOK(x: any): { items: Station[] } {
+  const arr = Array.isArray(x?.items) ? x.items : (Array.isArray(x) ? x : []);
+  const items = arr.map(coerceStation).filter(Boolean) as Station[];
+  return { items };
 }
 
-async function readStationsFile(): Promise<{ items: Station[] }> {
+async function readLocal(): Promise<{ items: Station[] }> {
   const root = process.cwd();
   const primary = path.join(root, 'public', 'data', 'stations.json');
   const sample  = path.join(root, 'public', 'data', 'stations.sample.json');
-
   for (const p of [primary, sample]) {
     try {
-      const txt = await fs.readFile(p, 'utf-8');
-      const json = JSON.parse(txt);
-      const items = Array.isArray(json?.items) ? json.items : (Array.isArray(json) ? json : []);
-      return mapOK(items);
-    } catch {
-      // try next file
-    }
+      const text = await fs.readFile(p, 'utf-8');
+      return mapOK(JSON.parse(text));
+    } catch {}
   }
   return { items: [] };
 }
 
-// ---------------- sources ----------------
+// ---------- sources ----------
 
-async function fetchFromOCM(u: URL): Promise<{ items: Station[] }> {
-  const { north, south, east, west } = parseBBox(u);
+async function fromOCM(u: URL): Promise<{ items: Station[] }> {
+  const { north, south, east, west } = pickBBox(u);
+  const max = Number(u.searchParams.get('max') ?? u.searchParams.get('limit') ?? process.env.OCM_MAX_RESULTS ?? 3000);
 
   const url = new URL('https://api.openchargemap.io/v3/poi/');
   url.searchParams.set('output', 'json');
@@ -118,7 +93,7 @@ async function fetchFromOCM(u: URL): Promise<{ items: Station[] }> {
   url.searchParams.set('compact', 'true');
   url.searchParams.set('verbose', 'false');
   url.searchParams.set('includeComments', 'false');
-  url.searchParams.set('maxresults', String(parseInt(process.env.OCM_MAX_RESULTS || '3000', 10)));
+  url.searchParams.set('maxresults', String(max));
   // OCM expects: south,west,north,east
   url.searchParams.set('boundingbox', `${south},${west},${north},${east}`);
 
@@ -127,41 +102,61 @@ async function fetchFromOCM(u: URL): Promise<{ items: Station[] }> {
 
   const r = await fetch(url.toString(), { headers, cache: 'no-store' });
   if (!r.ok) throw new Error(`OCM ${r.status}`);
-  const data = await r.json();
-  return mapOK(Array.isArray(data) ? data : []);
+  return mapOK(await r.json());
 }
 
-async function fetchFromURL(): Promise<{ items: Station[] }> {
+async function fromURL(): Promise<{ items: Station[] }> {
   const src = process.env.STATIONS_URL;
   if (!src) throw new Error('STATIONS_URL not set');
   const r = await fetch(src, { cache: 'no-store' });
   if (!r.ok) throw new Error(`URL ${r.status}`);
-  const data = await r.json();
-  const items = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-  return mapOK(items);
+  return mapOK(await r.json());
 }
 
-// ---------------- handler ----------------
+// ---------- handler ----------
 
 export async function GET(req: Request) {
-  // Auto-use OCM when a key exists, otherwise use STATIONS_SOURCE (default file)
-  const source = (
-    process.env.STATIONS_SOURCE || (process.env.OCM_API_KEY ? 'ocm' : 'file')
-  ).toLowerCase();
+  const u = new URL(req.url);
 
-  // Try preferred source; if empty/fails, fall back to file -> sample.
-  try {
-    if (source === 'ocm') {
-      const out = await fetchFromOCM(new URL(req.url));
-      if (out.items.length) return NextResponse.json(out, { headers: { 'cache-control': 'no-store' } });
-    } else if (source === 'url') {
-      const out = await fetchFromURL();
-      if (out.items.length) return NextResponse.json(out, { headers: { 'cache-control': 'no-store' } });
+  // Allow manual override: ?source=ocm|url|file
+  const qSource = u.searchParams.get('source')?.toLowerCase();
+
+  // Auto-OCM if key exists; else env; else file
+  const envSource = (process.env.STATIONS_SOURCE || (process.env.OCM_API_KEY ? 'ocm' : 'file')).toLowerCase();
+
+  const tryOrder = [qSource, envSource, 'file'].filter(Boolean) as string[];
+  let chosen = 'file';
+  let out: { items: Station[] } = { items: [] };
+  let errorMsg = '';
+
+  for (const src of tryOrder) {
+    try {
+      if (src === 'ocm') out = await fromOCM(u);
+      else if (src === 'url') out = await fromURL();
+      else out = await readLocal();
+
+      chosen = src;
+      if (out.items.length > 0) break;
+    } catch (e: any) {
+      errorMsg = String(e?.message || e);
+      // continue to next source
     }
-  } catch {
-    // swallow and fall back
   }
 
-  const fallback = await readStationsFile();
-  return NextResponse.json(fallback, { headers: { 'cache-control': 'no-store' } });
+  const headers: Record<string, string> = {
+    'cache-control': 'no-store',
+    'x-ev-source': chosen,
+    'x-ev-count': String(out.items.length),
+  };
+  if (errorMsg) headers['x-ev-error'] = errorMsg;
+
+  // ?debug=1 returns meta alongside items (handy when testing)
+  if (u.searchParams.get('debug') === '1') {
+    return NextResponse.json(
+      { items: out.items, meta: { source: chosen, count: out.items.length, error: errorMsg || undefined } },
+      { headers }
+    );
+  }
+
+  return NextResponse.json(out, { headers });
 }
