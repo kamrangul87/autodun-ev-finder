@@ -3,7 +3,6 @@ export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css'; // safe in client component
 
 type Station = {
   id: string | number;
@@ -249,3 +248,4 @@ function SearchBox({ onSearch }: { onSearch: (q: string) => void }) {
     </form>
   );
 }
+import 'leaflet/dist/leaflet.css';
