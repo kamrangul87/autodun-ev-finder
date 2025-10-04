@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React from 'react';
 
 /** Minimal shape used by the panel (kept local to avoid path aliases). */
 type Station = {
@@ -25,12 +25,6 @@ type Props = {
 export default function PopupPanel({ station, onClose }: Props) {
   if (!station) return null;
 
-  const gmapsHref = useMemo(() => {
-    const lat = station.lat ?? station.latitude;
-    const lng = station.lng ?? station.longitude;
-    return `https://maps.google.com/?q=${lat},${lng}`;
-  }, [station]);
-
   const XIcon = (
     <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path
@@ -45,6 +39,8 @@ export default function PopupPanel({ station, onClose }: Props) {
 
   const lat = station.lat ?? station.latitude;
   const lng = station.lng ?? station.longitude;
+  const hasCoords = typeof lat === 'number' && typeof lng === 'number';
+  const gmapsHref = hasCoords ? `https://maps.google.com/?q=${lat},${lng}` : null;
 
   return (
     <>
@@ -122,22 +118,22 @@ export default function PopupPanel({ station, onClose }: Props) {
             </div>
             <div className="flex gap-2">
               <dt className="w-28 shrink-0 text-gray-500">Coordinates</dt>
-              <dd className="flex-1">
-                {typeof lat === 'number' ? lat.toFixed(6) : '—'}, {typeof lng === 'number' ? lng.toFixed(6) : '—'}
-              </dd>
+              <dd className="flex-1">{hasCoords ? `${lat!.toFixed(6)}, ${lng!.toFixed(6)}` : '—'}</dd>
             </div>
           </dl>
 
-          <div className="mt-4">
-            <a
-              href={gmapsHref}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center justify-center rounded-lg border border-black/10 px-3 py-2 text-sm hover:bg-gray-50"
-            >
-              Open in Google Maps
-            </a>
-          </div>
+          {gmapsHref ? (
+            <div className="mt-4">
+              <a
+                href={gmapsHref}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center rounded-lg border border-black/10 px-3 py-2 text-sm hover:bg-gray-50"
+              >
+                Open in Google Maps
+              </a>
+            </div>
+          ) : null}
         </div>
 
         {/* Scroll containment on desktop */}
