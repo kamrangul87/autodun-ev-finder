@@ -1,4 +1,3 @@
-import 'leaflet/dist/leaflet.css';
 import './globals.css';
 import React from 'react';
 export const metadata = { title: 'Autodun EV Finder — London', description: 'Live EV stations across Greater London.' };
