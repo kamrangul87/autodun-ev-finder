@@ -1,15 +1,17 @@
 "use client";
-import { useRef, useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Pane, Marker, ZoomControl, GeoJSON } from 'react-leaflet';
+import { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import { Station } from '../../lib/stations/types';
 import HeatLayer from './HeatLayer';
+import { createStationDivIcon } from '@/lib/icons/stationDivIcon';
 
-export default function ClientMap({ stations, bounds, councilGeoJson, showCouncil, showHeat, onZoomToData }: {
+export default function ClientMap({ stations, bounds, councilGeoJson, showCouncil, heatOn, markersOn, onZoomToData }: {
   stations: Station[];
   bounds: [[number, number], [number, number]];
   councilGeoJson?: any;
   showCouncil: boolean;
-  showHeat?: boolean;
+  heatOn: boolean;
+  markersOn: boolean;
   onZoomToData: () => void;
 }) {
   const [map, setMap] = useState<any>(null);
@@ -27,6 +29,7 @@ export default function ClientMap({ stations, bounds, councilGeoJson, showCounci
     }
   }, [map, bounds]);
 
+  const heatPoints: [number, number, number][] = stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, (typeof s.connectors === 'number' ? s.connectors : 1)/3))]);
   return (
     <MapContainer
       className="h-full w-full"
@@ -39,14 +42,22 @@ export default function ClientMap({ stations, bounds, councilGeoJson, showCounci
     >
       <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution="&copy; OpenStreetMap contributors" />
       <ZoomControl position="topright" />
-      <Pane name="stations" style={{ zIndex: 650 }}>
-        {stations.map(s => (
-          <Marker key={s.id} position={[s.lat, s.lng]} />
-        ))}
-      </Pane>
-      {showHeat && (
+      {markersOn && (
+        <Pane name="stations" style={{ zIndex: 650 }}>
+          {stations.map(s => (
+            <Marker key={String(s.id)} position={[s.lat, s.lng]} icon={createStationDivIcon(28)}>
+              <Popup>
+                <b>{s.name ?? 'Charging station'}</b><br/>
+                {s.address ?? ''}<br/>{s.postcode ?? ''}<br/>
+                {s.connectors ? `${s.connectors} connectors` : null}
+              </Popup>
+            </Marker>
+          ))}
+        </Pane>
+      )}
+      {heatOn && (
         <Pane name="heat" style={{ zIndex: 600 }}>
-          <HeatLayer points={stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, (typeof s.connectors === 'number' ? s.connectors : 1)/3))])} radius={30} blur={20} />
+          <HeatLayer points={heatPoints} radius={32} blur={20} max={1.0} />
         </Pane>
       )}
       {showCouncil && councilGeoJson && (

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from 'react';
 import ClientMap from '../../components/Map/ClientMap';
-import ToggleBar from '../../components/ui/ToggleBar';
+import TopBar from '../../components/ui/TopBar';
 import Toast from '../../components/ui/Toast';
 import SearchControl from '../../components/Map/SearchControl';
 import { Station } from '../../lib/stations/types';
@@ -17,7 +17,11 @@ export default function Model1HeatmapClient() {
   const [showCouncil, setShowCouncil] = useState(false);
   const [toast, setToast] = useState('');
   const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
-  const [showHeat, setShowHeat] = useState(true);
+  const [heatOn, setHeatOn] = useState(true);
+  const [markersOn, setMarkersOn] = useState(true);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState('');
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
 
   useEffect(() => {
     ensureLeafletIconFix();
@@ -60,9 +64,15 @@ export default function Model1HeatmapClient() {
 
   return (
     <div className="h-screen w-full flex flex-col">
+      <TopBar
+        heatOn={heatOn}
+        setHeatOn={setHeatOn}
+        markersOn={markersOn}
+        setMarkersOn={setMarkersOn}
+        onFeedbackClick={() => setFeedbackOpen(true)}
+      />
       <div className="p-2 flex gap-2 items-center">
         <SearchControl onSearch={handleSearch} />
-        <ToggleBar toggles={[{ label: 'Council', value: 'council' }]} onToggle={handleToggleCouncil} active={showCouncil ? 'council' : ''} />
         <button className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
         <span className="ml-4 text-xs bg-gray-200 px-2 py-1 rounded">Stations: {stations.length}</span>
         <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer" title="Debug" onClick={() => setToast(`Source: ${source}, Count: ${stations.length}, Coords: ${stations[0]?.lat},${stations[0]?.lng}`)}>?</span>
@@ -73,10 +83,55 @@ export default function Model1HeatmapClient() {
           bounds={bounds}
           councilGeoJson={councilGeoJson}
           showCouncil={showCouncil}
-          showHeat={showHeat}
+          heatOn={heatOn}
+          markersOn={markersOn}
           onZoomToData={handleZoomToData}
         />
       </div>
+      {feedbackOpen && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
+            <h2 className="text-lg font-bold mb-2">Feedback</h2>
+            <textarea
+              className="w-full border rounded p-2 mb-3"
+              rows={3}
+              value={feedbackMsg}
+              onChange={e => setFeedbackMsg(e.target.value)}
+              placeholder="Your feedback..."
+              disabled={feedbackLoading}
+            />
+            <div className="flex gap-2 justify-end">
+              <button className="px-3 py-1 rounded bg-gray-200" onClick={() => setFeedbackOpen(false)} disabled={feedbackLoading}>Cancel</button>
+              <button
+                className="px-4 py-1 rounded bg-amber-500 text-white font-semibold"
+                disabled={feedbackLoading || !feedbackMsg.trim()}
+                onClick={async () => {
+                  setFeedbackLoading(true);
+                  try {
+                    const res = await fetch('/api/feedback', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ stationId: 'ui', vote: 'good', message: feedbackMsg }),
+                    });
+                    const data = await res.json();
+                    if (data.ok) {
+                      setToast('Feedback sent!');
+                      setFeedbackOpen(false);
+                      setFeedbackMsg('');
+                    } else {
+                      setToast('Error sending feedback');
+                    }
+                  } catch {
+                    setToast('Error sending feedback');
+                  } finally {
+                    setFeedbackLoading(false);
+                  }
+                }}
+              >Send</button>
+            </div>
+          </div>
+        </div>
+      )}
       <Toast message={toast} show={!!toast} onClose={() => setToast('')} />
     </div>
   );
