@@ -18,7 +18,6 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), {
   ssr: false,
 });
 import { useMap } from "react-leaflet";
-import "leaflet/dist/leaflet.css";
 
 import SearchControl from "../../components/SearchControl";
 import Controls from "../../components/ev/Controls";
