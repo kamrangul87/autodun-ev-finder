@@ -18,9 +18,7 @@ type Station = {
 const LONDON = { north: 51.6919, south: 51.2867, east: 0.3340, west: -0.5104 };
 
 // ---------- helpers ----------
-
 function pickBBox(u: URL) {
-  // Accept ?north=&south=&east=&west= or ?bbox=south,west,north,east
   const bboxStr = u.searchParams.get('bbox');
   if (bboxStr) {
     const [south, west, north, east] = bboxStr.split(',').map(Number);
@@ -52,8 +50,7 @@ function coerceStation(raw: any): Station | null {
 
   return {
     id: raw?.id ?? raw?.ID ?? `${lat},${lng}`,
-    lat,
-    lng,
+    lat, lng,
     name: raw?.name ?? raw?.Title ?? raw?.AddressInfo?.Title,
     address: raw?.address ?? raw?.AddressLine1 ?? raw?.AddressInfo?.AddressLine1 ?? undefined,
     postcode: raw?.postcode ?? raw?.Postcode ?? raw?.AddressInfo?.Postcode ?? undefined,
@@ -82,10 +79,14 @@ async function readLocal(): Promise<{ items: Station[] }> {
 }
 
 // ---------- sources ----------
-
 async function fromOCM(u: URL): Promise<{ items: Station[] }> {
   const { north, south, east, west } = pickBBox(u);
-  const max = Number(u.searchParams.get('max') ?? u.searchParams.get('limit') ?? process.env.OCM_MAX_RESULTS ?? 3000);
+  const max = Number(
+    u.searchParams.get('max') ??
+    u.searchParams.get('limit') ??
+    process.env.OCM_MAX_RESULTS ??
+    3000
+  );
 
   const url = new URL('https://api.openchargemap.io/v3/poi/');
   url.searchParams.set('output', 'json');
@@ -94,7 +95,7 @@ async function fromOCM(u: URL): Promise<{ items: Station[] }> {
   url.searchParams.set('verbose', 'false');
   url.searchParams.set('includeComments', 'false');
   url.searchParams.set('maxresults', String(max));
-  // OCM expects: south,west,north,east
+  // south,west,north,east
   url.searchParams.set('boundingbox', `${south},${west},${north},${east}`);
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -114,14 +115,12 @@ async function fromURL(): Promise<{ items: Station[] }> {
 }
 
 // ---------- handler ----------
-
 export async function GET(req: Request) {
   const u = new URL(req.url);
 
-  // Allow manual override: ?source=ocm|url|file
+  // Manual override: ?source=ocm|url|file
   const qSource = u.searchParams.get('source')?.toLowerCase();
-
-  // Auto-OCM if key exists; else env; else file
+  // Default: use OCM if key exists; else env; else file
   const envSource = (process.env.STATIONS_SOURCE || (process.env.OCM_API_KEY ? 'ocm' : 'file')).toLowerCase();
 
   const tryOrder = [qSource, envSource, 'file'].filter(Boolean) as string[];
@@ -150,13 +149,11 @@ export async function GET(req: Request) {
   };
   if (errorMsg) headers['x-ev-error'] = errorMsg;
 
-  // ?debug=1 returns meta alongside items (handy when testing)
   if (u.searchParams.get('debug') === '1') {
     return NextResponse.json(
       { items: out.items, meta: { source: chosen, count: out.items.length, error: errorMsg || undefined } },
       { headers }
     );
   }
-
   return NextResponse.json(out, { headers });
 }
