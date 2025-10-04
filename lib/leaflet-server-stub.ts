@@ -1,7 +1,10 @@
-// lib/leaflet-server-stub.ts
-// Server build should never execute Leaflet; provide a harmless stub.
-const L: any = {};
+// lib/leaflet-server-stub.js
+// No-op Leaflet stub for server build to avoid touching `window`.
+const L = {};
 export default L;
 
-// Some libs import 'leaflet.heat' for side-effects; export a noop.
-export const heatLayer = () => ({ addTo: () => {}, setLatLngs: () => {} });
+// Provide a minimal shape some plugins expect.
+export const heatLayer = () => ({
+  addTo: () => {},
+  setLatLngs: () => {},
+});
