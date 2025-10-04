@@ -2,21 +2,21 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import dynamic from 'next/dynamic';
+import NextDynamic from 'next/dynamic';        // ⬅️ renamed to avoid clash
 import 'leaflet/dist/leaflet.css';
 
 // Leaflet UI pieces (client-only)
-const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
-const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
-const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
-const ZoomControl  = dynamic(() => import('react-leaflet').then(m => m.ZoomControl), { ssr: false });
+const MapContainer = NextDynamic(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
+const TileLayer    = NextDynamic(() => import('react-leaflet').then(m => m.TileLayer),    { ssr: false });
+const Marker       = NextDynamic(() => import('react-leaflet').then(m => m.Marker),       { ssr: false });
+const Popup        = NextDynamic(() => import('react-leaflet').then(m => m.Popup),        { ssr: false });
+const ZoomControl  = NextDynamic(() => import('react-leaflet').then(m => m.ZoomControl),  { ssr: false });
 import { useMap } from 'react-leaflet';
 
 // Local client components (also client-only)
-const HeatLayer    = dynamic(() => import('../../components/HeatLayer'), { ssr: false });
-const CouncilLayer = dynamic(() => import('../../components/CouncilLayer'), { ssr: false });
-const SearchBox    = dynamic(() => import('../../components/SearchBox'), { ssr: false });
+const HeatLayer    = NextDynamic(() => import('../../components/HeatLayer'),    { ssr: false });
+const CouncilLayer = NextDynamic(() => import('../../components/CouncilLayer'), { ssr: false });
+const SearchBox    = NextDynamic(() => import('../../components/SearchBox'),    { ssr: false });
 
 type Station = {
   id: string | number;
