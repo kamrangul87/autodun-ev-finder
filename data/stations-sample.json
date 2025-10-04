@@ -1,0 +1,24 @@
+{
+  "items": [
+    { "id": 1, "lat": 51.5079, "lng": -0.0877, "name": "London Bridge", "postcode": "SE1 9SP", "connectors": ["CCS", "Type 2"] },
+    { "id": 2, "lat": 51.5101, "lng": -0.1342, "name": "Piccadilly", "postcode": "W1J 9HS", "connectors": ["CHAdeMO", "Type 2"] },
+    { "id": 3, "lat": 51.5014, "lng": -0.1419, "name": "Buckingham Palace", "postcode": "SW1A 1AA", "connectors": ["CCS"] },
+    { "id": 4, "lat": 51.5155, "lng": -0.0722, "name": "Liverpool St", "postcode": "EC2M 7PY", "connectors": ["Type 2"] },
+    { "id": 5, "lat": 51.5033, "lng": -0.1195, "name": "Waterloo", "postcode": "SE1 8SW", "connectors": ["CCS", "CHAdeMO"] },
+    { "id": 6, "lat": 51.5286, "lng": -0.1018, "name": "King's Cross", "postcode": "N1C 4TB", "connectors": ["Type 2"] },
+    { "id": 7, "lat": 51.5096, "lng": -0.1180, "name": "Embankment", "postcode": "WC2N 6NS", "connectors": ["CCS"] },
+    { "id": 8, "lat": 51.5074, "lng": -0.1278, "name": "Trafalgar Sq", "postcode": "WC2N 5DN", "connectors": ["Type 2"] },
+    { "id": 9, "lat": 51.4957, "lng": -0.1726, "name": "Victoria", "postcode": "SW1V 1JT", "connectors": ["CHAdeMO"] },
+    { "id": 10, "lat": 51.5202, "lng": -0.0976, "name": "Barbican", "postcode": "EC2Y 8DS", "connectors": ["CCS", "Type 2"] },
+    { "id": 11, "lat": 51.5136, "lng": -0.0983, "name": "St Paul's", "postcode": "EC4M 8AD", "connectors": ["Type 2"] },
+    { "id": 12, "lat": 51.5116, "lng": -0.1160, "name": "Covent Garden", "postcode": "WC2E 9DD", "connectors": ["CCS"] },
+    { "id": 13, "lat": 51.5072, "lng": -0.1657, "name": "Hyde Park", "postcode": "W2 2UH", "connectors": ["Type 2"] },
+    { "id": 14, "lat": 51.5154, "lng": -0.1420, "name": "Oxford Circus", "postcode": "W1B 3AG", "connectors": ["CCS", "CHAdeMO"] },
+    { "id": 15, "lat": 51.5035, "lng": -0.1197, "name": "London Eye", "postcode": "SE1 7PB", "connectors": ["Type 2"] },
+    { "id": 16, "lat": 51.5142, "lng": -0.0759, "name": "Aldgate", "postcode": "EC3N 1AH", "connectors": ["CCS"] },
+    { "id": 17, "lat": 51.5094, "lng": -0.0760, "name": "Tower Hill", "postcode": "EC3N 4DR", "connectors": ["Type 2"] },
+    { "id": 18, "lat": 51.5152, "lng": -0.0721, "name": "Shoreditch", "postcode": "E1 6GY", "connectors": ["CHAdeMO"] },
+    { "id": 19, "lat": 51.5078, "lng": -0.0877, "name": "Borough", "postcode": "SE1 1JX", "connectors": ["CCS", "Type 2"] },
+    { "id": 20, "lat": 51.5128, "lng": -0.0918, "name": "Bank", "postcode": "EC3V 3LA", "connectors": ["Type 2"] }
+  ]
+}
