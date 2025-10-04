@@ -8,7 +8,7 @@ const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContai
 const TileLayer = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
 const Marker = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
 const Popup = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
-const useMap = dynamic(() => import('react-leaflet').then(m => m.useMap), { ssr: false }) as any;
+
 
 const HeatLayer = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
 const CouncilLayer = dynamic(() => import('@/components/CouncilLayer'), { ssr: false });
