@@ -1,21 +1,22 @@
 // next.config.mjs
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   webpack: (config, { isServer }) => {
     if (isServer) {
-      // Prevent any server import from evaluating real browser-only libs
       config.resolve.alias = {
-        ...(config.resolve.alias || {}),
-        leaflet: require('path').resolve(__dirname, 'lib/leaflet-server-stub.ts'),
-        'leaflet.heat': require('path').resolve(__dirname, 'lib/leaflet-server-stub.ts'),
+        ...(config.resolve.alias ?? {}),
+        // Swap browser-only libs for a harmless stub in the server bundle
+        leaflet: path.resolve(__dirname, 'lib/leaflet-server-stub.js'),
+        'leaflet.heat': path.resolve(__dirname, 'lib/leaflet-server-stub.js'),
       };
     }
     return config;
-  },
-  // Ensure we do not attempt to pre-render the heatmap page
-  // (keeps ISR/SSG elsewhere intact)
-  experimental: {
-    // no special flags needed here, but keep block in case you add others later
   },
 };
 
