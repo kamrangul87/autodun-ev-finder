@@ -1,19 +1,12 @@
-// lib/leaflet-setup.ts
-'use client';
-
+// Ensure default Leaflet marker icons load in Next.js
 import L from 'leaflet';
 import marker2x from 'leaflet/dist/images/marker-icon-2x.png';
 import marker from 'leaflet/dist/images/marker-icon.png';
 import shadow from 'leaflet/dist/images/marker-shadow.png';
-
-export function fixLeafletIcons() {
-  if (typeof window === 'undefined') return;
-  // @ts-ignore – clear internal cache so mergeOptions takes effect
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
-
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: marker2x.src,
-    iconUrl: marker.src,
-    shadowUrl: shadow.src,
-  });
-}
+// @ts-ignore
+delete (L.Icon.Default as any).prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: marker2x.src || marker2x,
+  iconUrl: marker.src || marker,
+  shadowUrl: shadow.src || shadow,
+});

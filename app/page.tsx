@@ -1,10 +1,9 @@
-export const dynamic = 'force-dynamic';   // disable prerender/SSG on root
-export const viewport = { themeColor: '#0b1220' };
-
-import dynamicImport from "next/dynamic";
-
-const Model1HeatmapPage = dynamicImport(() => import("./model1-heatmap/page"), { ssr: false });
-
-export default function HomePage() {
-  return <Model1HeatmapPage />;
+import Link from 'next/link';
+export default function Home() {
+  return (
+    <main style={{ padding: 24, fontFamily:'ui-sans-serif, system-ui' }}>
+      <h1>Autodun EV Map</h1>
+      <p>Go to the <Link href="/model1-heatmap">EV Heatmap</Link> or <Link href="/debug/data">Debug Data</Link>.</p>
+    </main>
+  );
 }

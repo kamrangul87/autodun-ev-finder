@@ -1,0 +1,104 @@
+{
+  "items": [
+    {
+      "id": "LDN-001",
+      "name": "Westminster Station",
+      "address": "20 Deans Yd",
+      "postcode": "SW1P 3PA",
+      "lat": 51.4995,
+      "lng": -0.127,
+      "connectors": 4,
+      "source": "file"
+    },
+    {
+      "id": "LDN-002",
+      "name": "Waterloo",
+      "address": "York Rd",
+      "postcode": "SE1 7NA",
+      "lat": 51.5033,
+      "lng": -0.1147,
+      "connectors": 6,
+      "source": "file"
+    },
+    {
+      "id": "LDN-003",
+      "name": "South Bank",
+      "address": "Belvedere Rd",
+      "postcode": "SE1 7PB",
+      "lat": 51.5053,
+      "lng": -0.1167,
+      "connectors": 3,
+      "source": "file"
+    },
+    {
+      "id": "LDN-004",
+      "name": "Soho",
+      "address": "Wardour St",
+      "postcode": "W1D 6QJ",
+      "lat": 51.5137,
+      "lng": -0.1353,
+      "connectors": 2,
+      "source": "file"
+    },
+    {
+      "id": "LDN-005",
+      "name": "Brixton",
+      "address": "Brixton Rd",
+      "postcode": "SW9 6LH",
+      "lat": 51.4613,
+      "lng": -0.1156,
+      "connectors": 2,
+      "source": "file"
+    },
+    {
+      "id": "LDN-006",
+      "name": "Canary Wharf",
+      "address": "Churchill Pl",
+      "postcode": "E14 5RE",
+      "lat": 51.5049,
+      "lng": -0.0195,
+      "connectors": 8,
+      "source": "file"
+    },
+    {
+      "id": "LDN-007",
+      "name": "Greenwich",
+      "address": "King William Walk",
+      "postcode": "SE10 9JH",
+      "lat": 51.4811,
+      "lng": 0.0052,
+      "connectors": 2,
+      "source": "file"
+    },
+    {
+      "id": "LDN-008",
+      "name": "Hammersmith",
+      "address": "King St",
+      "postcode": "W6 9HW",
+      "lat": 51.4928,
+      "lng": -0.2233,
+      "connectors": 3,
+      "source": "file"
+    },
+    {
+      "id": "LDN-009",
+      "name": "Croydon",
+      "address": "George St",
+      "postcode": "CR0 1LA",
+      "lat": 51.3726,
+      "lng": -0.1016,
+      "connectors": 2,
+      "source": "file"
+    },
+    {
+      "id": "LDN-010",
+      "name": "Ilford",
+      "address": "High Rd",
+      "postcode": "IG1 1DE",
+      "lat": 51.558,
+      "lng": 0.0703,
+      "connectors": 2,
+      "source": "file"
+    }
+  ]
+}

@@ -1,80 +1,61 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
+const FILE_PATH = '/tmp/feedback.json';
 
-function getStore(): Record<
-  number,
-  { rating: number; comment?: string; timestamp: number }[]
-> {
-  const globalAny = globalThis as any;
-  if (!globalAny.__feedbackStore) {
-    globalAny.__feedbackStore = {};
+type Feedback = {
+  stationId: string | number;
+  rating: number; // 0..5
+  comment?: string | null;
+  ts: number;
+};
+
+function readAll(): Feedback[] {
+  try {
+    const raw = fs.readFileSync(FILE_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return [];
   }
-  return globalAny.__feedbackStore as Record<
-    number,
-    { rating: number; comment?: string; timestamp: number }[]
-  >;
 }
 
-export async function POST(req: NextRequest) {
+function writeAll(items: Feedback[]) {
   try {
-    const data = await req.json();
-    const stationId = Number(data?.stationId);
-    const rating = Number(data?.rating);
-    const comment =
-      typeof data?.comment === 'string' ? String(data.comment).trim() : undefined;
-
-    if (!Number.isFinite(stationId) || !(rating >= 0 && rating <= 5)) {
-      return new Response(JSON.stringify({ error: 'Invalid stationId or rating' }), {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-
-    const store = getStore();
-    if (!store[stationId]) store[stationId] = [];
-    store[stationId].push({ rating, comment, timestamp: Date.now() });
-
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
+    fs.writeFileSync(FILE_PATH, JSON.stringify(items, null, 2), 'utf8');
   } catch (e) {
-    console.error(e);
-    return new Response(JSON.stringify({ error: 'Failed to store feedback' }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    });
+    // ignore
   }
 }
 
 export async function GET(req: NextRequest) {
-  try {
-    const sp = req.nextUrl.searchParams;
-    const stationId = Number(sp.get('stationId'));
-    if (!Number.isFinite(stationId)) {
-      return new Response(JSON.stringify({ error: 'Missing or invalid stationId' }), {
-        status: 400,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
+  const items = readAll();
+  const { searchParams } = new URL(req.url);
+  const stationId = searchParams.get('stationId');
 
-    const store = getStore();
-    const fb = store[stationId] ?? [];
-    const count = fb.length;
-    const avg = count ? fb.reduce((sum, f) => sum + f.rating, 0) / count : null;
-    const reliability = typeof avg === 'number' ? avg / 5 : null;
-
-    return new Response(JSON.stringify({ count, averageRating: avg, reliability }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  } catch (e) {
-    console.error(e);
-    return new Response(JSON.stringify({ error: 'Failed to fetch feedback' }), {
-      status: 500,
-      headers: { 'content-type': 'application/json' },
-    });
+  if (stationId) {
+    const v = items.filter(i => String(i.stationId) === String(stationId));
+    const count = v.length;
+    const avg = count ? v.reduce((a,b) => a + (b.rating||0), 0) / count : 0;
+    const reliability = Math.max(0, Math.min(100, Math.round((avg/5)*100)));
+    return NextResponse.json({ count, averageRating: avg, reliability });
   }
+  return NextResponse.json({ items: items.slice(-50) });
+}
+
+export async function POST(req: NextRequest) {
+  const body = await req.json().catch(() => ({} as any));
+  if (!body || (body.stationId===undefined || body.rating===undefined)) {
+    return NextResponse.json({ error: 'stationId and rating required' }, { status: 400 });
+  }
+  const record: Feedback = {
+    stationId: body.stationId,
+    rating: Number(body.rating) || 0,
+    comment: body.comment ?? null,
+    ts: Date.now()
+  };
+  const items = readAll();
+  items.push(record);
+  writeAll(items);
+  return NextResponse.json({ success: true });
 }

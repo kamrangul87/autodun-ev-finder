@@ -1,0 +1,38 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "Central London Sample"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -0.25,
+              51.55
+            ],
+            [
+              0.1,
+              51.55
+            ],
+            [
+              0.1,
+              51.43
+            ],
+            [
+              -0.25,
+              51.43
+            ],
+            [
+              -0.25,
+              51.55
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

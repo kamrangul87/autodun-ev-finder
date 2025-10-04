@@ -1,240 +1,96 @@
 import { NextRequest, NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 
-export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
+const SRC = process.env.STATIONS_SOURCE || 'file';
+const STATIONS_URL = process.env.STATIONS_URL;
+const OCM_API_KEY = process.env.OCM_API_KEY || '';
+const OCM_MAX_RESULTS = Number(process.env.OCM_MAX_RESULTS || 200);
 
 type Station = {
-  id: string | number | null;
-  name: string | null;
-  addr: string | null;
-  postcode: string | null;
+  id: string | number;
   lat: number;
-  lon: number;
-  connectors: number;
-  reports: number;
-  downtime: number;
-  source: string;
+  lng: number;
+  name?: string;
+  address?: string;
+  postcode?: string;
+  connectors?: number;
+  source?: string;
 };
 
-function normalizeOCM(arr: any[]): Station[] {
-  return (arr ?? []).map((d: any) => ({
-    id: d.ID ?? null,
-    name: d.AddressInfo?.Title ?? null,
-    addr: d.AddressInfo?.AddressLine1 ?? null,
-    postcode: d.AddressInfo?.Postcode ?? null,
-    lat: Number(d.AddressInfo?.Latitude),
-    lon: Number(d.AddressInfo?.Longitude),
-    connectors: d.Connections?.length ?? 0,
-    reports: d.UserComments?.length ?? 0,
-    downtime: 0,
-    source: 'ocm',
-  })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
+function mapAnyToStation(x: any): Station | null {
+  if (!x) return null;
+  let lat = x.lat ?? x.latitude ?? x?.AddressInfo?.Latitude;
+  let lng = x.lng ?? x.lon ?? x.longitude ?? x?.AddressInfo?.Longitude;
+  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+  const id = x.id ?? x.ID ?? x._id ?? `${lat.toFixed(6)},${lng.toFixed(6)}`;
+  const name = x.name ?? x.Title ?? x?.AddressInfo?.Title ?? x?.AddressInfo?.AddressLine1 ?? undefined;
+  const address = x.address ?? x?.AddressInfo?.AddressLine1 ?? undefined;
+  const postcode = x.postcode ?? x?.AddressInfo?.Postcode ?? undefined;
+  const connectors = x.connectors ?? x.NumberOfPoints ?? (Array.isArray(x.Connections) ? x.Connections.length : undefined);
+  const source = x.source ?? (x.AddressInfo ? 'ocm' : 'file');
+  return { id, lat, lng, name, address, postcode, connectors, source };
 }
 
-function normalizeOverpass(arr: any[]): Station[] {
-  return (arr ?? []).map((el: any) => ({
-    id: el.id ?? null,
-    name: el.tags?.name ?? 'EV Charging',
-    addr: el.tags?.['addr:street'] ?? null,
-    postcode: el.tags?.['addr:postcode'] ?? null,
-    lat: Number(el.lat),
-    lon: Number(el.lon),
-    connectors: Number(el.tags?.sockets ?? el.tags?.capacity ?? el.tags?.connectors ?? 0) || 0,
-    reports: 0,
-    downtime: 0,
-    source: 'osm',
-  })).filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lon));
-}
-
-function mockPayload(reason: string) {
-  return {
-    items: [
-      { id: 'mock1', name: 'Test Station A', addr: null, postcode: null, lat: 51.509, lon: -0.118, connectors: 4, reports: 2, downtime: 0, source: 'mock' },
-      { id: 'mock2', name: 'Test Station B', addr: null, postcode: null, lat: 51.515, lon: -0.100, connectors: 2, reports: 0, downtime: 0, source: 'mock' },
-    ] as Station[],
-    fallback: true as const,
-    reason,
-  };
-}
-
-function parseBbox(searchParams: URLSearchParams) {
-  const west  = searchParams.get('west');
-  const south = searchParams.get('south');
-  const east  = searchParams.get('east');
-  const north = searchParams.get('north');
-
-  let w = west, s = south, e = east, n = north;
-  if (!(w && s && e && n)) {
-    const bbox = searchParams.get('bbox');
-    if (bbox) {
-      const parts = bbox.split(',').map(v => v.trim());
-      if (parts.length === 4) {
-        [w, s, e, n] = parts;
-      }
-    }
+async function fromFile(): Promise<Station[]> {
+  const tryFiles = ['public/data/stations.json', 'public/data/stations.sample.json'];
+  for (const p of tryFiles) {
+    try {
+      const raw = fs.readFileSync(p, 'utf8');
+      const data = JSON.parse(raw);
+      const arr = Array.isArray(data) ? data : data.items || [];
+      return arr.map(mapAnyToStation).filter(Boolean) as Station[];
+    } catch {}
   }
-  if (!(w && s && e && n)) return null;
+  // final fallback
+  return [
+    { id:'fallback-1', lat:51.5033, lng:-0.1195, name:'London Eye', connectors:2, source:'fallback' },
+    { id:'fallback-2', lat:51.5079, lng:-0.0877, name:'London Bridge', connectors:4, source:'fallback' }
+  ];
+}
 
-  const W = Number(w), S = Number(s), E = Number(e), N = Number(n);
-  if ([W, S, E, N].some(v => Number.isNaN(v))) return null;
+async function fromURL(): Promise<Station[]> {
+  if (!STATIONS_URL) return fromFile();
+  try {
+    const res = await fetch(STATIONS_URL, { cache: 'no-store' });
+    const data = await res.json();
+    const arr = Array.isArray(data) ? data : data.items || [];
+    const mapped = arr.map(mapAnyToStation).filter(Boolean) as Station[];
+    return mapped.length ? mapped : fromFile();
+  } catch {
+    return fromFile();
+  }
+}
 
-  const westN  = Math.min(W, E);
-  const eastN  = Math.max(W, E);
-  const southN = Math.min(S, N);
-  const northN = Math.max(S, N);
-  return { west: westN, south: southN, east: eastN, north: northN };
+async function fromOCM(searchParams: URLSearchParams): Promise<Station[]> {
+  try {
+    const bbox = ['north','south','east','west'].every(k => searchParams.get(k));
+    let url: string;
+    if (bbox) {
+      const north = searchParams.get('north'); const south = searchParams.get('south');
+      const east = searchParams.get('east'); const west = searchParams.get('west');
+      url = `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=${OCM_MAX_RESULTS}&boundingbox=${south},${west},${north},${east}`;
+    } else {
+      // default: central London
+      url = `https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=${OCM_MAX_RESULTS}&latitude=51.5074&longitude=-0.1278&distance=15&distanceunit=KM`;
+    }
+    const headers: any = { 'Accept': 'application/json' };
+    if (OCM_API_KEY) headers['X-API-Key'] = OCM_API_KEY;
+    const res = await fetch(url, { headers, cache: 'no-store' });
+    const data = await res.json();
+    const arr = Array.isArray(data) ? data : [];
+    const mapped = arr.map(mapAnyToStation).filter(Boolean) as Station[];
+    return mapped.length ? mapped : fromFile();
+  } catch {
+    return fromFile();
+  }
 }
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const bbox = parseBbox(searchParams);
-  const zoom = Number(searchParams.get('zoom') ?? 11);
-
-  if (!bbox) {
-    return NextResponse.json({ error: 'Missing or invalid bbox' }, { status: 400 });
-  }
-
-  const sourceParam = searchParams.get('source')?.toLowerCase() || 'ocm';
-  const connParam = searchParams.get('conn')?.toLowerCase() || '';
-  const connFilter = connParam.trim();
-  let combinedItems: Station[] = [];
-
-  const connectionMatches = (c: any, filter: string): boolean => {
-    if (!filter) return true;
-    const id = c?.ConnectionTypeID;
-    const CTID: Record<number, string> = { 32: 'CCS', 33: 'CCS', 2: 'CHAdeMO', 28: 'Type 2', 30: 'Type 2', 25: 'Tesla', 27: 'Tesla', 1036: 'Tesla', 1030: 'CCS', 1031: 'CCS' };
-    if (id && CTID[id]) {
-      if (CTID[id].toLowerCase().includes(filter)) return true;
-    }
-    let text = '';
-    if (c?.ConnectionType?.Title) text += c.ConnectionType.Title;
-    if (c?.ConnectionType?.FormalName) text += ' ' + c.ConnectionType.FormalName;
-    if (c?.Level?.Title) text += ' ' + c.Level.Title;
-    if (c?.CurrentType?.Title) text += ' ' + c.CurrentType.Title;
-    text = text.toLowerCase();
-    return text.includes(filter);
-  };
-
-  async function getCouncilStations(): Promise<any[]> {
-    const globalAny = globalThis as any;
-    if (!globalAny.__councilStationsCache) {
-      try {
-        const { readFile } = await import('fs/promises');
-        const dataPath = process.cwd() + '/data/councilStations.json';
-        const text = await readFile(dataPath, 'utf-8');
-        globalAny.__councilStationsCache = JSON.parse(text);
-      } catch {
-        globalAny.__councilStationsCache = [];
-      }
-    }
-    return globalAny.__councilStationsCache as any[];
-  }
-
-  const apiKey = process.env.OCM_API_KEY ?? '';
-  let lastError = '';
-
-  if (sourceParam !== 'council') {
-    if (apiKey) {
-      try {
-        let maxResults = 50;
-        if (zoom < 8)       maxResults = 20;
-        else if (zoom < 12) maxResults = 100;
-        else                maxResults = 200;
-        const ocmUrl =
-          `https://api.openchargemap.io/v3/poi/` +
-          `?output=json&countrycode=GB&boundingbox=${bbox.south},${bbox.west},${bbox.north},${bbox.east}` +
-          `&maxresults=${maxResults}&compact=true&verbose=false`;
-        const ocmRes = await fetch(ocmUrl, {
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
-            'X-API-Key': apiKey,
-          },
-          cache: 'no-store',
-        });
-        if (ocmRes.ok) {
-          const json = await ocmRes.json();
-          const rawArray = Array.isArray(json) ? json : [];
-          const filteredOCM = connFilter ? rawArray.filter((d: any) => Array.isArray(d.Connections) && d.Connections.some((c: any) => connectionMatches(c, connFilter))) : rawArray;
-          const items = normalizeOCM(filteredOCM);
-          if (items.length) {
-            combinedItems = combinedItems.concat(items);
-          } else {
-            lastError = 'OCM returned 0 items';
-          }
-        } else {
-          lastError = `OCM ${ocmRes.status}: ${await ocmRes.text().catch(() => '')}`;
-        }
-      } catch (e: any) {
-        lastError = `OCM error: ${e?.message ?? 'unknown'}`;
-      }
-    } else {
-      lastError = 'OPENCHARGEMAP_KEY missing';
-    }
-
-    if ((sourceParam === 'ocm' || sourceParam === 'all') && combinedItems.length === 0 && !connFilter) {
-      try {
-        const query = `
-          [out:json][timeout:20];
-          (
-            node["amenity"="charging_station"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
-          );
-          out body;
-        `.trim();
-        const res = await fetch('https://overpass-api.de/api/interpreter', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-          body: new URLSearchParams({ data: query }).toString(),
-          cache: 'no-store',
-        });
-        if (res.ok) {
-          const json = await res.json();
-          const items = normalizeOverpass(json?.elements ?? []);
-          if (items.length) {
-            combinedItems = combinedItems.concat(items);
-            if (sourceParam === 'ocm') {
-              return NextResponse.json(
-                { items: combinedItems, fallback: true, reason: `Used Overpass. Prior: ${lastError}` },
-                { status: 200 }
-              );
-            }
-          }
-          if (!items.length) {
-            lastError = `Overpass 0 items (prior: ${lastError})`;
-          }
-        } else {
-          lastError = `Overpass ${res.status}: ${await res.text().catch(() => '')}; prior: ${lastError}`;
-        }
-      } catch (e: any) {
-        lastError = `Overpass error: ${e?.message ?? 'unknown'}; prior: ${lastError}`;
-      }
-    }
-  }
-
-  if (sourceParam === 'council' || sourceParam === 'all') {
-    const councilData = await getCouncilStations();
-    const filteredCouncil = connFilter ? councilData.filter((d: any) => Array.isArray(d.Connections) && d.Connections.some((c: any) => connectionMatches(c, connFilter))) : councilData;
-    const councilItems = normalizeOCM(filteredCouncil).map(s => ({ ...s, source: 'council' }));
-    if (councilItems.length) {
-      combinedItems = combinedItems.concat(councilItems);
-    }
-  }
-
-  if (combinedItems.length > 0) {
-    return NextResponse.json(
-      { items: combinedItems, ...(lastError ? { fallback: true, reason: `Partial data. Prior: ${lastError}` } : {}) },
-      { status: 200 }
-    );
-  }
-
-  try {
-    const origin = req.nextUrl.origin;
-    const fbRes = await fetch(`${origin}/data/ev_heat.json`, { cache: 'no-store' });
-    if (fbRes.ok) {
-      const fbJson = await fbRes.json();
-      return NextResponse.json({ items: Array.isArray(fbJson) ? fbJson : [], fallback: true, reason: lastError || 'Unknown error' }, { status: 200 });
-    }
-  } catch {}
-
-  return NextResponse.json(mockPayload(lastError || 'Unknown error'), { status: 200 });
+  let items: Station[] = [];
+  if (SRC === 'url') items = await fromURL();
+  else if (SRC === 'ocm') items = await fromOCM(searchParams);
+  else items = await fromFile();
+  return NextResponse.json({ items });
 }
