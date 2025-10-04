@@ -1,9 +1,6 @@
 'use client';
 
-// Client-only map. All Leaflet/Plugin imports happen INSIDE effects.
-// No top-level "window"/Leaflet references.
-
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 type LatLng = [number, number];
 
@@ -52,7 +49,7 @@ export default function ClientMap({
   const [councils, setCouncils] = useState<CouncilGeoJSON | null>(null);
   const [ready, setReady] = useState(false);
 
-  // Fetch data with safe fallbacks so UI always renders.
+  // Fetch data with safe fallbacks
   useEffect(() => {
     let aborted = false;
 
@@ -69,7 +66,6 @@ export default function ClientMap({
         }
       } catch {
         if (!aborted) {
-          // Minimal fallback so the map shows something
           const fallback: Station[] = [
             { id: 'fallback-1', lat: 51.509865, lng: -0.118092, name: 'Fallback London' },
           ];
@@ -88,7 +84,7 @@ export default function ClientMap({
             if (!aborted) setCouncils(gj);
           }
         } catch {
-          // ignore; council is optional
+          // optional
         }
       })();
     }
@@ -100,41 +96,37 @@ export default function ClientMap({
 
   // Initialize Leaflet map purely on the client.
   useEffect(() => {
-    if (!mapDivRef.current || mapRef.current) return;
+    if (mapRef.current) return;
+
+    // ✅ capture element BEFORE async boundary so TS knows it's not null
+    const container = mapDivRef.current;
+    if (!container) return;
 
     (async () => {
-      // Import Leaflet ONLY in the browser.
       const L = (await import('leaflet')).default;
-
-      // (Optional) CSS is already global; if not, ensure it’s imported in a client layout.
-      // Import leaflet.heat plugin (side-effect module) after Leaflet is present.
       await import('leaflet.heat');
 
-      // Create map
-      const map = L.map(mapDivRef.current, {
+      const map = L.map(container as HTMLElement, {
         center: initialCenter,
         zoom: initialZoom,
         zoomControl: true,
       });
       mapRef.current = map;
 
-      // Base layer
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution:
           '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
       }).addTo(map);
 
-      // Prepare layers but don't add until data & flags say so
       markersLayerRef.current = L.layerGroup();
-      heatLayerRef.current = null; // will create after stations ready
+      heatLayerRef.current = null;
       councilLayerRef.current = L.layerGroup();
 
       setReady(true);
     })();
 
     return () => {
-      // Clean up on unmount
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -208,14 +200,17 @@ export default function ClientMap({
       const L = (await import('leaflet')).default;
       await import('leaflet.heat');
 
-      // Remove previous heat if any
       if (heatLayerRef.current && mapRef.current.hasLayer(heatLayerRef.current)) {
         mapRef.current.removeLayer(heatLayerRef.current);
         heatLayerRef.current = null;
       }
 
       if (showHeatmap && stations.length) {
-        const points = stations.map((s) => [s.lat, s.lng, Math.max(0.2, (heatOptions?.intensity ?? 0.6))]) as any[];
+        const points = stations.map((s) => [
+          s.lat,
+          s.lng,
+          Math.max(0.2, (heatOptions?.intensity ?? 0.6)),
+        ]) as any[];
         const layer = (L as any).heatLayer(points, {
           radius: heatOptions?.radius ?? 18,
           blur: heatOptions?.blur ?? 15,
@@ -227,7 +222,7 @@ export default function ClientMap({
     })();
   }, [ready, showHeatmap, stations, heatOptions?.intensity, heatOptions?.radius, heatOptions?.blur]);
 
-  // Render / update council polygons (optional)
+  // Render / update council polygons
   useEffect(() => {
     if (!ready || !mapRef.current || !councilLayerRef.current) return;
 
