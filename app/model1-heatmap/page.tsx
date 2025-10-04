@@ -2,60 +2,10 @@
 export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import dynamicImport from 'next/dynamic';
 
-// Load Leaflet CSS only in the browser
+// Load Leaflet CSS only in the browser (no SSR touch)
 if (typeof window !== 'undefined') {
   import('leaflet/dist/leaflet.css');
-}
-
-// Lazy-load every react-leaflet piece (prevents server import)
-const MapContainer = dynamicImport(() => import('react-leaflet').then(m => m.MapContainer), { ssr: false });
-const TileLayer     = dynamicImport(() => import('react-leaflet').then(m => m.TileLayer),     { ssr: false });
-const Marker        = dynamicImport(() => import('react-leaflet').then(m => m.Marker),        { ssr: false });
-const Popup         = dynamicImport(() => import('react-leaflet').then(m => m.Popup),         { ssr: false });
-const useMapHook: any = dynamicImport(() => import('react-leaflet').then(m => m.useMap),      { ssr: false });
-
-// Capture map instance without server import
-function CaptureMapRef({ onMap }: { onMap: (m: any) => void }) {
-  const map = useMapHook();
-  useEffect(() => { onMap(map); }, [map, onMap]);
-  return null;
-}
-
-// Heat layer using leaflet + leaflet.heat loaded at runtime
-function HeatLayer({ points }: { points: [number, number, number?][] }) {
-  const map = useMapHook();
-  const layerRef = useRef<any>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      const L = (await import('leaflet')).default as any;
-      await import('leaflet.heat');
-      if (!mounted) return;
-
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-      if (!points.length) return;
-
-      const layer = L.heatLayer(points, { radius: 20, blur: 12, maxZoom: 17, minOpacity: 0.35 });
-      layer.addTo(map);
-      layerRef.current = layer;
-    })();
-
-    return () => {
-      mounted = false;
-      if (layerRef.current) {
-        try { map.removeLayer(layerRef.current); } catch {}
-        layerRef.current = null;
-      }
-    };
-  }, [map, points]);
-
-  return null;
 }
 
 type Station = {
@@ -70,16 +20,42 @@ type Station = {
 
 const LONDON_CENTER: [number, number] = [51.5074, -0.1278];
 
-export default function Page() {
+export default function Model1HeatmapNoRL() {
+  const mapEl = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<any>(null);
+  const heatLayerRef = useRef<any>(null);
+
   const [stations, setStations] = useState<Station[]>([]);
   const [showHeat, setShowHeat] = useState(true);
   const [showMarkers, setShowMarkers] = useState(true);
-  const mapRef = useRef<any>(null);
 
-  // fix default marker icons
+  // Fetch stations once
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/stations?lat=51.5074&lon=-0.1278&dist=15', { cache: 'no-store' });
+        const j = await res.json();
+        const items: Station[] = Array.isArray(j?.items) ? j.items : Array.isArray(j) ? j : [];
+        if (!cancelled) setStations(items);
+      } catch {
+        if (!cancelled) setStations([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const heatPoints = useMemo<[number, number, number?][]>(() =>
+    stations.map(s => [s.lat, s.lng, 0.7]), [stations]);
+
+  // Initialize Leaflet map on mount (browser only)
+  useEffect(() => {
+    let destroyed = false;
+
     (async () => {
       const L = (await import('leaflet')).default as any;
+
+      // Fix default marker icons
       const [retina, icon, shadow] = await Promise.all([
         import('leaflet/dist/images/marker-icon-2x.png'),
         import('leaflet/dist/images/marker-icon.png'),
@@ -90,27 +66,100 @@ export default function Page() {
         iconUrl: (icon as any).default ?? icon,
         shadowUrl: (shadow as any).default ?? shadow,
       });
-    })();
-  }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+      if (destroyed || !mapEl.current) return;
+
+      // Create map only once
+      const map = L.map(mapEl.current, {
+        center: LONDON_CENTER,
+        zoom: 12,
+        preferCanvas: true,
+      });
+      mapRef.current = map;
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+      }).addTo(map);
+    })();
+
+    return () => {
+      destroyed = true;
+      // Destroy map on unmount
       try {
-        const res = await fetch('/api/stations?lat=51.5074&lon=-0.1278&dist=15', { cache: 'no-store' });
-        const j = await res.json();
-        const items: Station[] = Array.isArray(j?.items) ? j.items : Array.isArray(j) ? j : [];
-        if (!cancelled) setStations(items);
-      } catch { if (!cancelled) setStations([]); }
-    })();
-    return () => { cancelled = true; };
+        if (mapRef.current) {
+          mapRef.current.remove();
+        }
+      } catch {}
+      mapRef.current = null;
+      heatLayerRef.current = null;
+    };
   }, []);
 
-  const heatPoints = useMemo<[number, number, number?][]>(() =>
-    stations.map(s => [s.lat, s.lng, 0.7]), [stations]);
+  // (Re)build heat layer when stations or toggle change
+  useEffect(() => {
+    (async () => {
+      if (!mapRef.current) return;
+
+      const L = (await import('leaflet')).default as any;
+      await import('leaflet.heat');
+
+      // Remove existing heat layer
+      if (heatLayerRef.current) {
+        try { mapRef.current.removeLayer(heatLayerRef.current); } catch {}
+        heatLayerRef.current = null;
+      }
+
+      if (!showHeat || !heatPoints.length) return;
+
+      const layer = (L as any).heatLayer(heatPoints, {
+        radius: 20,
+        blur: 12,
+        maxZoom: 17,
+        minOpacity: 0.35,
+      });
+      layer.addTo(mapRef.current);
+      heatLayerRef.current = layer;
+    })();
+  }, [showHeat, heatPoints]);
+
+  // Markers (create/remove when toggle or stations change)
+  useEffect(() => {
+    let layerGroup: any = null;
+
+    (async () => {
+      if (!mapRef.current) return;
+      const L = (await import('leaflet')).default as any;
+
+      layerGroup = L.layerGroup();
+      if (showMarkers) {
+        stations.forEach((s) => {
+          const m = L.marker([s.lat, s.lng]);
+          const html = `
+            <div style="min-width:220px">
+              <strong>${s.name ?? 'EV Charger'}</strong><br/>
+              ${s.address ? `${s.address}<br/>` : ''}
+              ${s.postcode ? `${s.postcode}<br/>` : ''}
+              ${typeof s.connectors === 'number' ? `Connectors: ${s.connectors}<br/>` : ''}
+            </div>`;
+          m.bindPopup(html);
+          m.addTo(layerGroup);
+        });
+      }
+      layerGroup.addTo(mapRef.current);
+    })();
+
+    return () => {
+      try {
+        if (layerGroup && mapRef.current) {
+          mapRef.current.removeLayer(layerGroup);
+        }
+      } catch {}
+    };
+  }, [showMarkers, stations]);
 
   return (
-    <div style={{ width: '100%', height: '100vh' }}>
+    <div style={{ width: '100%', height: '100vh', position: 'relative' }}>
+      {/* Controls */}
       <div style={{
         position: 'absolute', zIndex: 1000, left: 12, top: 12, display: 'flex',
         gap: 12, background: 'white', padding: '6px 10px', borderRadius: 8,
@@ -120,24 +169,16 @@ export default function Page() {
         <label><input type="checkbox" checked={showMarkers} onChange={e => setShowMarkers(e.target.checked)} /> Markers</label>
       </div>
 
-      <MapContainer center={LONDON_CENTER} zoom={12} style={{ width: '100%', height: '100%' }}>
-        <CaptureMapRef onMap={(m) => { mapRef.current = m; }} />
-        <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        {showHeat && <HeatLayer points={heatPoints} />}
+      <div style={{
+        position: 'absolute', zIndex: 1000, right: 12, top: 12,
+        background: 'white', padding: '6px 10px', borderRadius: 8,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+      }}>
+        stations: {stations.length}
+      </div>
 
-        {showMarkers && stations.map(s => (
-          <Marker key={String(s.id)} position={[s.lat, s.lng] as any}>
-            <Popup>
-              <div style={{ minWidth: 220 }}>
-                <strong>{s.name ?? 'EV Charger'}</strong><br />
-                {s.address && <>{s.address}<br /></>}
-                {s.postcode && <>{s.postcode}<br /></>}
-                {typeof s.connectors === 'number' && <>Connectors: {s.connectors}<br /></>}
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
+      {/* Map container */}
+      <div ref={mapEl} style={{ width: '100%', height: '100%' }} />
     </div>
   );
 }
