@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import 'leaflet/dist/leaflet.css';
 import '@/lib/leaflet-setup';
@@ -8,6 +8,9 @@ const MapContainer = dynamic(() => import('react-leaflet').then(m => m.MapContai
 const TileLayer    = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ssr: false });
 const Marker       = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false });
 const Popup        = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false });
+
+// NOTE: This file is client-only, so using useMap here is safe.
+import { useMap } from 'react-leaflet';
 
 const HeatLayer    = dynamic(() => import('@/components/HeatLayer'), { ssr: false });
 const CouncilLayer = dynamic(() => import('@/components/CouncilLayer'), { ssr: false });
@@ -48,6 +51,16 @@ function Controls({
       </label>
     </div>
   );
+}
+
+/** Captures the Leaflet map instance once this component mounts inside <MapContainer>. */
+function CaptureMap({ onReady }: { onReady: (m: any) => void }) {
+  const map = useMap();
+  // useCallback not strictly required, but avoids re-creating the function
+  const report = useCallback(() => { if (map) onReady(map); }, [map, onReady]);
+  // run once when map is available
+  React.useEffect(() => { report(); }, [report]);
+  return null;
 }
 
 export default function Page() {
@@ -109,9 +122,10 @@ export default function Page() {
         zoom={11}
         style={{ height:'100vh', width:'100%' }}
         preferCanvas
-        // Capture Leaflet map instance on ready
-        whenReady={(e: any) => setMap(e.target)}
       >
+        {/* Capture the map instance type-safely */}
+        <CaptureMap onReady={setMap} />
+
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution="&copy; OpenStreetMap contributors"
