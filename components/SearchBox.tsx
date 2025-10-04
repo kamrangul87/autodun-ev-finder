@@ -1,12 +1,15 @@
 'use client';
 import React, { useEffect, useRef, useState } from 'react';
-import { useMap } from 'react-leaflet';
+// NO useMap import here; we get map via props
 
-export default function SearchBox(){
+type Props = {
+  map: any | null; // Leaflet Map instance passed from MapContainer.whenCreated
+};
+
+export default function SearchBox({ map }: Props){
   const [q, setQ] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const acRef = useRef<AbortController | null>(null);
-  const map = useMap();
 
   useEffect(() => {
     if (!q || q.length < 3) { setResults([]); return; }
@@ -35,8 +38,8 @@ export default function SearchBox(){
   }, [q]);
 
   const go = (lat:number, lon:number) => {
-    // @ts-ignore
-    map.setView([lat, lon], 14);
+    if (!map) return;                 // wait until map instance exists
+    map.setView([lat, lon], 14);      // Leaflet pan/zoom
     setResults([]);
   };
 
