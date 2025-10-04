@@ -3,23 +3,7 @@ export const dynamic = 'force-dynamic';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-
-// Fix default marker icons in Next bundlers
-// @ts-ignore
-import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
-// @ts-ignore
-import iconUrl from 'leaflet/dist/images/marker-icon.png';
-// @ts-ignore
-import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
-L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
-
-// Load leaflet.heat only on the client
-if (typeof window !== 'undefined') {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  require('leaflet.heat');
-}
+import 'leaflet/dist/leaflet.css'; // safe in client component
 
 type Station = {
   id: string | number;
@@ -35,7 +19,7 @@ const LONDON_CENTER: [number, number] = [51.5074, -0.1278];
 const LONDON_BBOX = { north: 51.6919, south: 51.2867, east: 0.3340, west: -0.5104 };
 
 /** capture L.Map instance without relying on whenReady/whenCreated props */
-function CaptureMapRef({ onMap }: { onMap: (m: L.Map) => void }) {
+function CaptureMapRef({ onMap }: { onMap: (m: any) => void }) {
   const map = useMap();
   useEffect(() => { onMap(map); }, [map, onMap]);
   return null;
@@ -46,15 +30,26 @@ function HeatLayer({ points }: { points: [number, number, number?][] }) {
   const layerRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!(L as any).heatLayer) return;
-    if (layerRef.current) {
-      map.removeLayer(layerRef.current);
-      layerRef.current = null;
-    }
-    if (!points.length) return;
-    layerRef.current = (L as any).heatLayer(points, { radius: 20, blur: 12, maxZoom: 17 });
-    layerRef.current.addTo(map);
+    let mounted = true;
+    (async () => {
+      // Load Leaflet and plugin ONLY in browser
+      const L = (await import('leaflet')).default as any;
+      await import('leaflet.heat');
+
+      if (!mounted) return;
+
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+      if (!points.length) return;
+
+      layerRef.current = L.heatLayer(points, { radius: 20, blur: 12, maxZoom: 17 });
+      layerRef.current.addTo(map);
+    })();
+
     return () => {
+      mounted = false;
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
@@ -72,7 +67,26 @@ export default function EVHeatmapPage() {
   const [showPolys, setShowPolys] = useState(true);
   const [polys, setPolys] = useState<any | null>(null);
 
-  // Fetch once: full London from OCM (server route handles source + fallback)
+  const mapRef = useRef<any>(null);
+
+  // One-time Leaflet default marker icon fix (done in browser only)
+  useEffect(() => {
+    (async () => {
+      const L = (await import('leaflet')).default as any;
+      const [retina, icon, shadow] = await Promise.all([
+        import('leaflet/dist/images/marker-icon-2x.png'),
+        import('leaflet/dist/images/marker-icon.png'),
+        import('leaflet/dist/images/marker-shadow.png'),
+      ]);
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: (retina as any).default ?? retina,
+        iconUrl: (icon as any).default ?? icon,
+        shadowUrl: (shadow as any).default ?? shadow,
+      });
+    })();
+  }, []);
+
+  // Fetch once: full London from your API (server route handles source + fallback)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -88,7 +102,7 @@ export default function EVHeatmapPage() {
     return () => { cancelled = true; };
   }, []);
 
-  // load council polygons (sample file or your prod file)
+  // Load council polygons
   useEffect(() => {
     (async () => {
       try {
@@ -148,11 +162,9 @@ export default function EVHeatmapPage() {
     }
   }
 
-  const mapRef = useRef<L.Map | null>(null);
-
   return (
     <div style={{ width: '100%', height: '100vh' }}>
-      {/* Controls (not under zoom buttons) */}
+      {/* Controls */}
       <div style={{
         position: 'absolute', zIndex: 1000, left: 12, top: 12,
         display: 'flex', gap: 12, background: 'white', padding: '6px 10px',
@@ -178,7 +190,7 @@ export default function EVHeatmapPage() {
         zoom={11}
         style={{ width: '100%', height: '100%' }}
       >
-        {/* capture L.Map instance here (avoids whenReady/whenCreated typing issues) */}
+        {/* capture L.Map instance here */}
         <CaptureMapRef onMap={(m) => { mapRef.current = m; }} />
 
         <TileLayer
