@@ -6,8 +6,8 @@ import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-l
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
-// fix default marker icons in Next bundlers
-// @ts-ignore - bundler will resolve these assets
+// Fix default marker icons in Next bundlers
+// @ts-ignore
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 // @ts-ignore
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
@@ -15,7 +15,7 @@ import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
 L.Icon.Default.mergeOptions({ iconRetinaUrl, iconUrl, shadowUrl });
 
-// lazy-load leaflet.heat on client
+// Load leaflet.heat only on the client
 if (typeof window !== 'undefined') {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   require('leaflet.heat');
@@ -33,6 +33,13 @@ type Station = {
 
 const LONDON_CENTER: [number, number] = [51.5074, -0.1278];
 const LONDON_BBOX = { north: 51.6919, south: 51.2867, east: 0.3340, west: -0.5104 };
+
+/** capture L.Map instance without relying on whenReady/whenCreated props */
+function CaptureMapRef({ onMap }: { onMap: (m: L.Map) => void }) {
+  const map = useMap();
+  useEffect(() => { onMap(map); }, [map, onMap]);
+  return null;
+}
 
 function HeatLayer({ points }: { points: [number, number, number?][] }) {
   const map = useMap();
@@ -65,57 +72,50 @@ export default function EVHeatmapPage() {
   const [showPolys, setShowPolys] = useState(true);
   const [polys, setPolys] = useState<any | null>(null);
 
-  // -------- fetch once: full London from OCM --------
+  // Fetch once: full London from OCM (server route handles source + fallback)
   useEffect(() => {
     let cancelled = false;
-
-    async function load() {
-      const url = `/api/stations?source=ocm&north=${LONDON_BBOX.north}&south=${LONDON_BBOX.south}&east=${LONDON_BBOX.east}&west=${LONDON_BBOX.west}&max=3000`;
-      const res = await fetch(url, { cache: 'no-store' });
-      const data = await res.json();
-
-      if (!cancelled && data?.items) {
-        setStations(data.items);
+    (async () => {
+      try {
+        const url = `/api/stations?source=ocm&north=${LONDON_BBOX.north}&south=${LONDON_BBOX.south}&east=${LONDON_BBOX.east}&west=${LONDON_BBOX.west}&max=3000`;
+        const res = await fetch(url, { cache: 'no-store' });
+        const data = await res.json();
+        if (!cancelled && data?.items) setStations(data.items);
+      } catch {
+        if (!cancelled) setStations([]);
       }
-    }
-
-    load().catch(() => setStations([]));
+    })();
     return () => { cancelled = true; };
   }, []);
 
-  // councils polygons (local sample file)
+  // load council polygons (sample file or your prod file)
   useEffect(() => {
-    async function loadPolys() {
+    (async () => {
       try {
         const r = await fetch('/data/councils.sample.geojson', { cache: 'no-store' });
         if (r.ok) setPolys(await r.json());
       } catch {}
-    }
-    loadPolys();
+    })();
   }, []);
 
-  const heatPoints = useMemo<[number, number, number?][]>(() => {
-    return stations.map(s => [s.lat, s.lng, 0.7]);
-  }, [stations]);
+  const heatPoints = useMemo<[number, number, number?][]>(() =>
+    stations.map((s) => [s.lat, s.lng, 0.7]), [stations]);
 
-  // very simple postcode/place search (UK first)
   async function geoSearch(term: string) {
     const t = term.trim();
-    if (!t) return;
-    const map = mapRef.current;
-    if (!map) return;
+    if (!t || !mapRef.current) return;
 
-    // UK postcodes first
+    // Try UK postcodes first
     try {
       const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(t)}`);
       const j = await r.json();
       if (j?.status === 200 && j?.result?.latitude) {
-        map.setView([j.result.latitude, j.result.longitude], 14);
+        mapRef.current.setView([j.result.latitude, j.result.longitude], 14);
         return;
       }
     } catch {}
 
-    // Nominatim fallback
+    // Fallback to Nominatim
     try {
       const r2 = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(t)}&limit=1`, {
         headers: { 'Accept-Language': 'en-GB' },
@@ -123,12 +123,11 @@ export default function EVHeatmapPage() {
       const j2 = await r2.json();
       if (Array.isArray(j2) && j2.length) {
         const p = j2[0];
-        map.setView([Number(p.lat), Number(p.lon)], 14);
+        mapRef.current.setView([Number(p.lat), Number(p.lon)], 14);
       }
     } catch {}
   }
 
-  // feedback
   async function quickFeedback(s: Station) {
     try {
       await fetch('/api/feedback', {
@@ -153,7 +152,7 @@ export default function EVHeatmapPage() {
 
   return (
     <div style={{ width: '100%', height: '100vh' }}>
-      {/* top-left controls, shifted so they don't sit under the zoom buttons */}
+      {/* Controls (not under zoom buttons) */}
       <div style={{
         position: 'absolute', zIndex: 1000, left: 12, top: 12,
         display: 'flex', gap: 12, background: 'white', padding: '6px 10px',
@@ -164,10 +163,8 @@ export default function EVHeatmapPage() {
         <label><input type="checkbox" checked={showPolys} onChange={e => setShowPolys(e.target.checked)} /> Polygons</label>
       </div>
 
-      {/* search box */}
       <SearchBox onSearch={geoSearch} />
 
-      {/* count badge */}
       <div style={{
         position: 'absolute', zIndex: 1000, right: 12, top: 12,
         background: 'white', padding: '6px 10px', borderRadius: 8,
@@ -180,8 +177,10 @@ export default function EVHeatmapPage() {
         center={LONDON_CENTER}
         zoom={11}
         style={{ width: '100%', height: '100%' }}
-        whenCreated={(m) => { mapRef.current = m; }}
       >
+        {/* capture L.Map instance here (avoids whenReady/whenCreated typing issues) */}
+        <CaptureMapRef onMap={(m) => { mapRef.current = m; }} />
+
         <TileLayer
           attribution="&copy; OpenStreetMap contributors"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -211,14 +210,14 @@ export default function EVHeatmapPage() {
           </Marker>
         ))}
 
-        {showPolys && polys && <GeoJSON data={polys as any}
-          style={() => ({ color: '#2b6cb0', weight: 1.4, fillOpacity: 0.08 })} />}
+        {showPolys && polys && (
+          <GeoJSON data={polys as any} style={() => ({ color: '#2b6cb0', weight: 1.4, fillOpacity: 0.08 })} />
+        )}
       </MapContainer>
     </div>
   );
 }
 
-/** Simple search box UI */
 function SearchBox({ onSearch }: { onSearch: (q: string) => void }) {
   const [q, setQ] = useState('');
   return (
