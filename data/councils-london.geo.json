@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "City of London" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-0.0976, 51.5202], [-0.0983, 51.5136], [-0.0877, 51.5079], [-0.0976, 51.5202]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Westminster" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-0.1342, 51.5101], [-0.1419, 51.5014], [-0.1278, 51.5074], [-0.1342, 51.5101]
+        ]]
+      }
+    }
+  ]
+}
