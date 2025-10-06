@@ -1,24 +1,23 @@
 "use client";
 import { useEffect, useState } from 'react';
 import ClientMap from '../../components/Map/ClientMap';
-import TopBar from '../../components/ui/TopBar';
+// TopBar UI inline (no external file)
 import Toast from '../../components/ui/Toast';
-import SearchControl from '../../components/Map/SearchControl';
+import { useRef } from 'react';
 import { Station } from '../../lib/stations/types';
 import { ensureLeafletIconFix } from '../../lib/leafletIconFix';
 
-const COUNCIL_URL = '/data/councils-london.geo.json';
+const COUNCIL_URL = '/api/councils';
 const STATIONS_URL = '/api/stations';
 
 export default function Model1HeatmapClient() {
   const [stations, setStations] = useState<Station[]>([]);
-  const [source, setSource] = useState('DEMO');
   const [councilGeoJson, setCouncilGeoJson] = useState<any>(null);
-  const [showCouncil, setShowCouncil] = useState(false);
-  const [toast, setToast] = useState('');
-  const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
+  const [showCouncil, setShowCouncil] = useState(false); // OFF by default
   const [heatOn, setHeatOn] = useState(true);
   const [markersOn, setMarkersOn] = useState(true);
+  const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
+  const [toast, setToast] = useState('');
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
@@ -43,7 +42,6 @@ export default function Model1HeatmapClient() {
       .then(res => res.json())
       .then(data => {
         setStations(data.items || []);
-        setSource(data.source || 'DEMO');
         if (data.items && data.items.length) {
           const lats = data.items.map((s: Station) => s.lat);
           const lngs = data.items.map((s: Station) => s.lng);
@@ -68,25 +66,69 @@ export default function Model1HeatmapClient() {
     }
   }
 
-  function handleSearch(lat: number, lng: number) {
-    setBounds([[lat - 0.01, lng - 0.01], [lat + 0.01, lng + 0.01]]);
-    setToast('Map centered');
+  // Search logic: call /api/geocode?q=...
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  async function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchInputRef.current?.value?.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.bbox) {
+        // bbox: [west, south, east, north]
+        setBounds([[data.bbox[1], data.bbox[0]], [data.bbox[3], data.bbox[2]]]);
+        setToast('Map centered to search bounds');
+      } else if (data.lat && data.lon) {
+        setBounds([[parseFloat(data.lat)-0.01, parseFloat(data.lon)-0.01],[parseFloat(data.lat)+0.01,parseFloat(data.lon)+0.01]]);
+        setToast('Map centered to search');
+      } else {
+        setToast('No result');
+      }
+    } catch {
+      setToast('Search failed');
+    } finally {
+      setSearchLoading(false);
+    }
   }
 
   return (
-  <div className="h-screen w-full flex flex-col">
-      <TopBar
-        heatOn={heatOn}
-        setHeatOn={setHeatOn}
-        markersOn={markersOn}
-        setMarkersOn={setMarkersOn}
-        onFeedbackClick={() => setFeedbackOpen(true)}
-      />
-      <div className="p-2 flex gap-2 items-center">
-        <SearchControl onSearch={handleSearch} />
-        <button className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
-        <span className="ml-4 text-xs bg-gray-200 px-2 py-1 rounded">Stations: {stations.length}</span>
-        <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer" title="Debug" onClick={() => setToast(`Source: ${source}, Count: ${stations.length}, Coords: ${stations[0]?.lat},${stations[0]?.lng}`)}>?</span>
+    <div className="h-screen w-full flex flex-col">
+      {/* Sticky TopBar UI */}
+      <div className="sticky top-0 z-50 bg-white/90 shadow flex flex-col md:flex-row md:items-center gap-2 px-3 py-2 border-b">
+        <div className="flex items-center gap-2">
+          <span className="font-bold text-lg text-blue-900">autodun</span>
+        </div>
+        <form className="flex-1 flex items-center gap-2" onSubmit={handleSearchSubmit}>
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="px-2 py-1 border rounded w-full max-w-md"
+            placeholder="Search city or postcode…"
+            disabled={searchLoading}
+          />
+          <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded" disabled={searchLoading}>
+            {searchLoading ? <span className="animate-spin">⏳</span> : 'Search'}
+          </button>
+          <button type="button" className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
+        </form>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked={heatOn} onChange={e => setHeatOn(e.target.checked)} />
+            <span className="text-sm">Heatmap</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked={markersOn} onChange={e => setMarkersOn(e.target.checked)} />
+            <span className="text-sm">Markers</span>
+          </label>
+          <label className="flex items-center gap-1 cursor-pointer">
+            <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
+            <span className="text-sm">Council</span>
+          </label>
+          <button className="px-2 py-1 bg-amber-500 text-white rounded" onClick={() => setFeedbackOpen(true)}>Feedback</button>
+        </div>
       </div>
       <div className="flex-1 relative" style={{ minHeight: 'calc(var(--vh, 1vh) * 100 - 56px)' }}>
         <ClientMap

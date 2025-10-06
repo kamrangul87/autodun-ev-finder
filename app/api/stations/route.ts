@@ -1,104 +1,134 @@
 
+
 export const runtime = 'nodejs';
-import { fetchStationsOCM } from '../../../lib/stations/providers/opencharge';
-import type { Station } from '../../../types/stations';
+export const revalidate = 0;
 
-// Simple in-memory LRU cache
-const lru = new Map<string, { items: Station[]; ts: number }>();
-const LRU_SIZE = 50;
+import { NextResponse } from 'next/server';
 
-function getCacheKey(params: URLSearchParams) {
-  if (params.has('bbox')) {
-    return `bbox:${params.get('bbox')}`;
-  }
-  if (params.has('lat') && params.has('lng') && params.has('radius')) {
-    // Round coords for cache key
-    const lat = Number(params.get('lat')).toFixed(3);
-    const lng = Number(params.get('lng')).toFixed(3);
-    const radius = params.get('radius');
-    return `center:${lat},${lng},${radius}`;
-  }
-  return 'default';
+type Connector = { type: string; powerKW?: number; quantity?: number };
+type Station = {
+  id: number; name: string; lat: number; lng: number;
+  address?: string; postcode?: string; connectors: Connector[];
+};
+
+type OcmPoi = {
+  ID: number;
+  AddressInfo?: {
+    Title?: string;
+    Latitude?: number;
+    Longitude?: number;
+    AddressLine1?: string;
+    Postcode?: string;
+  };
+  Connections?: Array<{
+    ConnectionType?: { Title?: string } | null;
+    PowerKW?: number | null;
+    Quantity?: number | null;
+  }> | null;
+};
+
+const OCM_ENDPOINT = 'https://api.openchargemap.io/v3/poi/';
+
+function mapToStation(p: OcmPoi): Station | null {
+  const a = p.AddressInfo;
+  if (!a?.Latitude || !a?.Longitude) return null;
+  return {
+    id: p.ID,
+    name: a.Title ?? 'EV Charger',
+    lat: a.Latitude,
+    lng: a.Longitude,
+    address: a.AddressLine1 ?? undefined,
+    postcode: a.Postcode ?? undefined,
+    connectors: (p.Connections ?? []).map(c => ({
+      type: c?.ConnectionType?.Title ?? 'Unknown',
+      powerKW: c?.PowerKW ?? undefined,
+      quantity: c?.Quantity ?? undefined,
+    })),
+  };
 }
 
-export async function GET(request: Request) {
-  const url = new URL(request.url);
-  const params = url.searchParams;
-  let items: Station[] = [];
-  let source = 'OPENCHARGEMAP';
-  let cacheKey = getCacheKey(params);
-  let max = Math.min(Number(params.get('max')) || 200, 200);
-  let bbox: [[number, number], [number, number]] | undefined;
-  let lat: number | undefined;
-  let lng: number | undefined;
-  let radius: number | undefined;
+function parseBBox(raw?: string): [number, number, number, number] | null {
+  if (!raw) return null;
+  const m = raw.match(/\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\),\s*\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)/);
+  if (!m) return null;
+  const south = parseFloat(m[1]), west = parseFloat(m[2]), north = parseFloat(m[3]), east = parseFloat(m[4]);
+  if ([south, west, north, east].some(n => Number.isNaN(n))) return null;
+  return [south, west, north, east];
+}
 
-  if (params.has('bbox')) {
-    // Parse bbox=(south,west),(north,east)
-    const m = params.get('bbox')?.match(/\(([^,]+),([^\)]+)\),\(([^,]+),([^\)]+)\)/);
-    if (m) {
-      bbox = [
-        [parseFloat(m[1]), parseFloat(m[2])],
-        [parseFloat(m[3]), parseFloat(m[4])],
-      ];
-    }
-  } else if (params.has('lat') && params.has('lng') && params.has('radius')) {
-    lat = parseFloat(params.get('lat')!);
-    lng = parseFloat(params.get('lng')!);
-    radius = parseFloat(params.get('radius')!);
+async function ocmFetch(url: URL, signal?: AbortSignal) {
+  const headers: Record<string,string> = { Accept: 'application/json' };
+  const key = process.env.OCM_KEY;
+  if (!key) {
+    return { data: [] as OcmPoi[], error: 'NO_OCM_KEY' };
   }
+  headers['X-API-Key'] = key;           // header
+  url.searchParams.set('key', key);     // query
+  url.searchParams.set('client', process.env.OCM_CLIENT ?? 'autodun-ev-finder');
+  url.searchParams.set('compact', 'true');
+  url.searchParams.set('verbose', 'false');
 
-  // Caching
-  if (bbox) {
-    // 5 min cache for bbox
-    const cached = lru.get(cacheKey);
-    if (cached && Date.now() - cached.ts < 300_000) {
-      items = cached.items;
-      source = 'OPENCHARGEMAP_CACHED';
-    } else {
-      items = await fetchStationsOCM({ bbox, max });
-      lru.set(cacheKey, { items, ts: Date.now() });
-      if (lru.size > LRU_SIZE) {
-        // Remove oldest
-        const oldest = [...lru.entries()].sort((a, b) => a[1].ts - b[1].ts)[0][0];
-        lru.delete(oldest);
-      }
-    }
-  } else if (lat !== undefined && lng !== undefined && radius !== undefined) {
-    // LRU cache for center/radius
-    const cached = lru.get(cacheKey);
-    if (cached && Date.now() - cached.ts < 300_000) {
-      items = cached.items;
-      source = 'OPENCHARGEMAP_CACHED';
-    } else {
-      items = await fetchStationsOCM({ lat, lng, radius, max });
-      lru.set(cacheKey, { items, ts: Date.now() });
-      if (lru.size > LRU_SIZE) {
-        const oldest = [...lru.entries()].sort((a, b) => a[1].ts - b[1].ts)[0][0];
-        lru.delete(oldest);
-      }
-    }
-  } else {
-    // Default London center
-    lat = 51.5074;
-    lng = -0.1278;
-    radius = 10;
-    cacheKey = getCacheKey(new URLSearchParams({ lat: String(lat), lng: String(lng), radius: String(radius) }));
-    const cached = lru.get(cacheKey);
-    if (cached && Date.now() - cached.ts < 300_000) {
-      items = cached.items;
-      source = 'OPENCHARGEMAP_CACHED';
-    } else {
-      items = await fetchStationsOCM({ lat, lng, radius, max });
-      lru.set(cacheKey, { items, ts: Date.now() });
-      if (lru.size > LRU_SIZE) {
-        const oldest = [...lru.entries()].sort((a, b) => a[1].ts - b[1].ts)[0][0];
-        lru.delete(oldest);
-      }
-    }
+  const res = await fetch(url.toString(), { headers, signal, cache: 'no-store' });
+  const txt = await res.text();
+  if (!res.ok) return { data: [] as OcmPoi[], error: `OCM_${res.status}`, text: txt };
+  try {
+    return { data: JSON.parse(txt) as OcmPoi[] };
+  } catch {
+    return { data: [] as OcmPoi[], error: 'OCM_JSON_PARSE' };
   }
+}
 
-  // On error, always respond [] with 200
-  if (!Array.isArray(items)) items = [];
-  return Response.json({ items, source });
+async function byBBox(b: [number, number, number, number], max = 200) {
+  const [south, west, north, east] = b;
+  const url = new URL(OCM_ENDPOINT);
+  url.searchParams.set('maxresults', String(Math.min(max, 200)));
+  url.searchParams.set('boundingbox', `(${south},${west}),(${north},${east})`);
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const { data, error } = await ocmFetch(url, ac.signal);
+    const items = data.map(mapToStation).filter(Boolean) as Station[];
+    return { items, source: 'OCM_BBOX', debug: { url: url.toString(), received: data.length, error } };
+  } finally { clearTimeout(t); }
+}
+
+async function byRadius(lat: number, lng: number, km = 10, max = 200) {
+  const url = new URL(OCM_ENDPOINT);
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lng));
+  url.searchParams.set('distance', String(km));
+  url.searchParams.set('distanceunit', 'KM');
+  url.searchParams.set('maxresults', String(Math.min(max, 200)));
+  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const { data, error } = await ocmFetch(url, ac.signal);
+    const items = data.map(mapToStation).filter(Boolean) as Station[];
+    return { items, source: 'OCM_RADIUS', debug: { url: url.toString(), received: data.length, error } };
+  } finally { clearTimeout(t); }
+}
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const bbox = parseBBox(searchParams.get('bbox') ?? undefined);
+  const lat = searchParams.get('lat'); const lng = searchParams.get('lng');
+  const radius = Number(searchParams.get('radius') ?? '10');
+  const max = Number(searchParams.get('max') ?? '200');
+
+  try {
+    let payload;
+    if (bbox) {
+      payload = await byBBox(bbox, max);
+      if (!payload.items.length) {
+        const cLat = (bbox[0] + bbox[2]) / 2, cLng = (bbox[1] + bbox[3]) / 2;
+        const fb = await byRadius(cLat, cLng, Math.max(radius, 8), max);
+        payload = { ...fb, source: `${payload.source}_FALLBACK` };
+      }
+    } else if (lat && lng) {
+      payload = await byRadius(Number(lat), Number(lng), radius, max);
+    } else {
+      payload = await byRadius(51.5074, -0.1278, 10, max);
+    }
+    return NextResponse.json(payload, { status: 200 });
+  } catch (e: any) {
+    return NextResponse.json({ items: [], source: 'ERROR', debug: { error: String(e?.message ?? e) } }, { status: 200 });
+  }
 }

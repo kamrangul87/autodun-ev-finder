@@ -1,122 +1,67 @@
 // app/api/councils/route.ts
-import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import { NextResponse } from 'next/server';
+import type { FeatureCollection } from 'geojson';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-const ENV_SRC = process.env.COUNCIL_DATA_URL || '';
+const ONS_URL = process.env.COUNCIL_GEO_URL ||
+  'https://ons-inspire.esriuk.com/arcgis/rest/services/Administrative_Boundaries/Local_Authority_Districts_December_2023_UK_BGC/FeatureServer/0/query?where=UPPER(LAD23NM)%20LIKE%20%27%25LONDON%25%27&outFields=LAD23NM,LAD23CD&outSR=4326&f=geojson';
+const STATIC_PATH = process.cwd() + '/data/london-boroughs.geojson';
+let cachedGeoJson: FeatureCollection | null = null;
+let lastFetch = 0;
+const CACHE_MS = 86400 * 1000;
 
-type BBox = [number, number, number, number]; // [west, south, east, north]
 
 function emptyFC(): FeatureCollection {
   return { type: 'FeatureCollection', features: [] };
 }
 
-function parseBBox(searchParams: URLSearchParams): BBox | null {
-  let w = searchParams.get('west');
-  let s = searchParams.get('south');
-  let e = searchParams.get('east');
-  let n = searchParams.get('north');
-
-  // also accept bbox=west,south,east,north
-  if (!(w && s && e && n)) {
-    const bbox = searchParams.get('bbox');
-    if (bbox) {
-      const p = bbox.split(',').map(v => v.trim());
-      if (p.length === 4) [w, s, e, n] = p;
-    }
+function logCouncilLoad(geojson: FeatureCollection, source: string) {
+  if (geojson?.features?.length) {
+    console.info(`[CouncilLayer] Loaded ${geojson.features.length} features from ${source}`);
+  } else {
+    console.warn(`[CouncilLayer] WARNING: No council features loaded from ${source}`);
   }
-  if (!(w && s && e && n)) return null;
-
-  let W = Number(w), S = Number(s), E = Number(e), N = Number(n);
-  if ([W, S, E, N].some(v => Number.isNaN(v))) return null;
-
-  if (E < W) [W, E] = [E, W];
-  if (N < S) [S, N] = [N, S];
-
-  return [W, S, E, N];
 }
 
-function geomBBox(g: Geometry): BBox {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const visit = (c: any) => {
-    if (Array.isArray(c) && typeof c[0] === 'number' && typeof c[1] === 'number') {
-      const x = c[0], y = c[1];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    } else if (Array.isArray(c)) {
-      for (const cc of c) visit(cc);
-    }
-  };
-  // @ts-ignore
-  visit((g as any).coordinates);
-  return [minX, minY, maxX, maxY];
-}
-
-function intersects(a: BBox, b: BBox): boolean {
-  const [aw, as, ae, an] = a;
-  const [bw, bs, be, bn] = b;
-  return !(ae < bw || be < aw || an < bs || bn < as);
-}
-
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const { searchParams, origin } = url;
-
-    const bbox = parseBBox(searchParams);
-    if (!bbox) {
-      return new Response(JSON.stringify(emptyFC()), { status: 200 });
-    }
-
-    // Choose source: ?src=… override, else env var. Support relative paths.
-    let src = searchParams.get('src') || ENV_SRC;
-    if (src && src.startsWith('/')) src = `${origin}${src}`;
-
-    if (!src) {
-      return new Response(JSON.stringify(emptyFC()), {
-        status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': 'none' },
-      });
-    }
-
-    const upstream = await fetch(src, { cache: 'no-store' });
-    if (!upstream.ok) {
-      return new Response(JSON.stringify(emptyFC()), {
-        status: 200,
-        headers: {
-          'content-type': 'application/json',
-          'x-used-source': `fetch-failed:${src}`,
-        },
-      });
-    }
-
-    const fc = (await upstream.json()) as FeatureCollection;
-    if (!fc?.features?.length) {
-      return new Response(JSON.stringify(emptyFC()), {
-        status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': `empty:${src}` },
-      });
-    }
-
-    // Clip by viewport bbox (fast bbox-to-bbox test)
-    const clipped: Feature[] = [];
-    for (const f of fc.features) {
-      if (!f?.geometry) continue;
-      const fb = (f as any).bbox as BBox | undefined;
-      const bb = fb && fb.length === 4 ? fb : geomBBox(f.geometry);
-      if (intersects(bb, bbox)) clipped.push(f);
-    }
-
-    const out: FeatureCollection = { type: 'FeatureCollection', features: clipped };
-    return new Response(JSON.stringify(out), {
-      status: 200,
-      headers: { 'content-type': 'application/json', 'x-used-source': src },
+export async function GET() {
+  const now = Date.now();
+  if (cachedGeoJson && now - lastFetch < CACHE_MS) {
+    logCouncilLoad(cachedGeoJson, 'cache');
+    return NextResponse.json(cachedGeoJson, {
+      headers: { 'Cache-Control': 's-maxage=86400, stale-while-revalidate=86400' }
     });
-  } catch (err) {
-    console.error('Councils route error:', err);
-    return new Response(JSON.stringify(emptyFC()), { status: 200 });
   }
+  let geojson: FeatureCollection | null = null;
+  let source = 'env';
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 10000);
+    const upstream = await fetch(ONS_URL, { cache: 'no-store', signal: ac.signal });
+    clearTimeout(t);
+    if (upstream.ok) {
+      geojson = await upstream.json();
+      source = 'env';
+    }
+  } catch (e) {
+    source = 'env-fail';
+  }
+  if (!geojson || !geojson.features?.length) {
+    try {
+      const fs = require('fs');
+      const raw = fs.readFileSync(STATIC_PATH, 'utf8');
+      geojson = JSON.parse(raw);
+      source = 'static';
+    } catch (e) {
+      geojson = emptyFC();
+      source = 'static-fail';
+    }
+  }
+  cachedGeoJson = geojson;
+  lastFetch = now;
+  logCouncilLoad(geojson as FeatureCollection, source);
+  return NextResponse.json(geojson, {
+    headers: { 'Cache-Control': 's-maxage=86400, stale-while-revalidate=86400' }
+  });
 }
