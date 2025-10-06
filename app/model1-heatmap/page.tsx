@@ -1,5 +1,3 @@
-'use client';
-
 import dynamic from 'next/dynamic';
 import { Suspense } from 'react';
 
@@ -17,8 +15,16 @@ const Model1HeatmapClient = dynamic(() => import('./Model1HeatmapClient'), {
 
 export default function Page() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
-      <Model1HeatmapClient />
-    </Suspense>
+    <>
+      <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossOrigin=""
+      />
+      <Suspense fallback={<div>Loading...</div>}>
+        <Model1HeatmapClient />
+      </Suspense>
+    </>
   );
 }
