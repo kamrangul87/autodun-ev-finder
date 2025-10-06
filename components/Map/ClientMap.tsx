@@ -25,6 +25,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
   const hasAutoCentered = useRef(false);
   const fetchTimer = useRef<number | undefined>(undefined);
   const heatLayerRef = useRef<any>(null);
+  const councilLayerRef = useRef<any>(null);
 
   // Track real user interaction
   useEffect(() => {
@@ -39,6 +40,52 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       map.off('movestart', mark);
     };
   }, [map]);
+  // Council pane setup
+  useEffect(() => {
+    if (!map) return;
+    if (!map.getPane('councils')) {
+      map.createPane('councils');
+      map.getPane('councils')!.style.zIndex = '300';
+    }
+  }, [map]);
+  // Council overlay logic
+  useEffect(() => {
+    if (!map) return;
+    if (!showCouncil) {
+      if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) {
+        map.removeLayer(councilLayerRef.current);
+      }
+      return;
+    }
+    if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) return;
+    fetch('/api/councils').then(res => res.json()).then(geojson => {
+      (async () => {
+        const L = (await import('leaflet')).default;
+        const baseStyle = { color: '#6b7280', weight: 1.5, fillColor: '#60a5fa', fillOpacity: 0.08 };
+        const highlight = { weight: 2.5, fillOpacity: 0.18 };
+        const layer = L.geoJSON(geojson, {
+          pane: 'councils',
+          style: () => baseStyle,
+          onEachFeature: (feature, layer) => {
+            layer.on({
+              mouseover: () => (layer as any).setStyle(highlight),
+              mouseout: () => (layer as any).setStyle(baseStyle),
+            });
+            if (feature?.properties?.name || feature?.properties?.NAME) {
+              layer.bindTooltip(feature.properties.name ?? feature.properties.NAME, { direction: 'top', className: 'council-tooltip' });
+            }
+          },
+        });
+        councilLayerRef.current = layer;
+        layer.addTo(map);
+      })();
+    });
+    return () => {
+      if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) {
+        map.removeLayer(councilLayerRef.current);
+      }
+    };
+  }, [map, showCouncil]);
 
   // Fetch stations after map is ready and on moveend (debounced, guarded)
   useEffect(() => {
@@ -92,15 +139,21 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
 
   // Removed auto-fit effect: map does not auto-pan/zoom on stations change
 
-  // Heatmap layer logic
+  // Stronger heatmap layer logic
   useEffect(() => {
     if (!map) return;
-    let isMounted = true;
     (async () => {
       const L = (await import('leaflet')).default;
       await import('leaflet.heat');
       if (!heatLayerRef.current) {
-        heatLayerRef.current = (L as any).heatLayer([], { radius: 25, blur: 15, maxZoom: 17 });
+        heatLayerRef.current = (L as any).heatLayer([], {
+          radius: 36,
+          blur: 24,
+          maxZoom: 19,
+          gradient: {
+            0.2:'#4FC3F7', 0.4:'#4CAF50', 0.6:'#FFC107', 0.8:'#FF5722', 1:'#E53935'
+          }
+        });
       }
       if (heatOn) {
         if (!map.hasLayer(heatLayerRef.current)) {
@@ -113,12 +166,15 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       }
       // Update heat data
       if (heatLayerRef.current && stations.length) {
-        const pts = stations.map(s => [s.lat, s.lng, Math.min(1, (Array.isArray(s.connectors) ? s.connectors.length : 1) / 4)]);
+        const weight = (c?: any) => {
+          if (Array.isArray(c)) return Math.max(0.4, Math.min(1, c.length / 3));
+          return Math.max(0.4, Math.min(1, (c ?? 1) / 3));
+        };
+        const pts = stations.map(s => [s.lat, s.lng, weight(s.connectors)]);
         heatLayerRef.current.setLatLngs(pts);
       }
     })();
     return () => {
-      isMounted = false;
       if (map && heatLayerRef.current && map.hasLayer(heatLayerRef.current)) {
         map.removeLayer(heatLayerRef.current);
       }
