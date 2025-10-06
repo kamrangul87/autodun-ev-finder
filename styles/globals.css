@@ -20,6 +20,15 @@ html, body { height: 100%; background: #fff; color: #111; }
 /* Map root wrapper so absolute elements (controls/panel) anchor correctly */
 .map-root { position: relative; }
 
+/* mobile full-height helper */
+@supports (height: 100dvh) {
+  .h-100dvh { height: 100dvh; }
+}
+
+/* Touch/scroll polish for Leaflet on mobile */
+.leaflet-container { touch-action: pan-x pan-y; }
+.leaflet-overlay-pane, .leaflet-marker-pane { will-change: transform; } /* smoother on mobile */
+
 /* Ensure the Leaflet map has predictable height; adjust footer/header allowance if needed */
 .leaflet-map {
   height: calc(100vh - 120px);
