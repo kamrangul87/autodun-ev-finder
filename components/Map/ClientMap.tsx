@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
+import { useInvalidateOnResize } from '../../lib/hooks/useInvalidateOnResize';
 import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import { Station } from '../../lib/stations/types';
 import HeatLayer from './HeatLayer';
@@ -15,19 +16,15 @@ export default function ClientMap({ stations, bounds, councilGeoJson, showCounci
   onZoomToData: () => void;
 }) {
   const [map, setMap] = useState<any>(null);
+  useInvalidateOnResize(map);
   useEffect(() => {
-    if (!map) return;
-    const onReady = () => map.invalidateSize();
-    onReady();
-    const onResize = () => map.invalidateSize();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [map]);
-  useEffect(() => {
-    if (map && bounds) {
-      map.fitBounds(bounds, { padding: [40, 40] });
-    }
-  }, [map, bounds]);
+    if (!map || stations.length === 0) return;
+    (async () => {
+      const L = (await import('leaflet')).default;
+      const b = L.latLngBounds(stations.map(s => [s.lat, s.lng] as [number, number]));
+      map.fitBounds(b, { padding: [40, 40] });
+    })();
+  }, [map, stations]);
 
   const heatPoints: [number, number, number][] = stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, (typeof s.connectors === 'number' ? s.connectors : 1)/3))]);
   return (
