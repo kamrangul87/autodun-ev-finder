@@ -85,8 +85,6 @@ export default function Model1HeatmapClient() {
       <div className="p-2 flex gap-2 items-center">
         <SearchControl onSearch={handleSearch} />
         <button className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
-        <span className="ml-4 text-xs bg-gray-200 px-2 py-1 rounded">Stations: {stations.length}</span>
-        <span className="ml-2 text-xs bg-gray-100 px-2 py-1 rounded cursor-pointer" title="Debug" onClick={() => setToast(`Source: ${source}, Count: ${stations.length}, Coords: ${stations[0]?.lat},${stations[0]?.lng}`)}>?</span>
       </div>
       <div className="flex-1 relative" style={{ minHeight: 'calc(var(--vh, 1vh) * 100 - 56px)' }}>
         <ClientMap

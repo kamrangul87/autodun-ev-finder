@@ -56,14 +56,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
   const [source, setSource] = useState('');
   const [debug, setDebug] = useState<any>({});
 
-  useEffect(() => {
-    if (!map || stations.length === 0) return;
-    (async () => {
-      const L = (await import('leaflet')).default;
-      const b = L.latLngBounds(stations.map(s => [s.lat, s.lng] as [number, number]));
-      map.fitBounds(b, { padding: [40, 40] });
-    })();
-  }, [map, stations]);
+  // Removed auto-fit effect: map does not auto-pan/zoom on stations change
 
   const heatPoints: [number, number, number][] = stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, Array.isArray(s.connectors) ? s.connectors.length / 3 : 1))]);
   return (
@@ -104,7 +97,6 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
         )}
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
-        Stations: {stations.length} [{source}]<br />
         Data: Open Charge Map
       </div>
     </div>
