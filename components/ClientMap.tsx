@@ -45,6 +45,11 @@ export default function ClientMap({
   const markersLayerRef = useRef<any>(null);
   const councilLayerRef = useRef<any>(null);
 
+  // --- New refs for programmatic move/auto-fit/guarded fetch ---
+  const isProgrammaticMove = useRef(false);
+  const hasZoomedToData = useRef(false);
+  const fetchTimer = useRef<number | undefined>(undefined);
+
   const [stations, setStations] = useState<Station[]>([]);
   const [councils, setCouncils] = useState<CouncilGeoJSON | null>(null);
   const [ready, setReady] = useState(false);
@@ -93,6 +98,35 @@ export default function ClientMap({
       aborted = true;
     };
   }, [showCouncil, onStationsCount]);
+
+  // --- Guarded, debounced fetch on moveend ---
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    const map = mapRef.current;
+
+    const scheduleFetch = () => {
+      if (isProgrammaticMove.current) return; // ignore our own panning/zooming
+      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
+      fetchTimer.current = window.setTimeout(() => {
+        const b = map.getBounds();
+        const bbox = `(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})`;
+        fetch(`/api/stations?bbox=${encodeURIComponent(bbox)}&max=200`, { cache: 'no-store' })
+          .then(r => r.json())
+          .then(data => {
+            setStations(data.items ?? []);
+            // Optionally set source if you use it
+            // setSource(data.source ?? '');
+          })
+          .catch(console.error);
+      }, 400); // debounce
+    };
+
+    map.on('moveend', scheduleFetch);
+    return () => {
+      map.off('moveend', scheduleFetch);
+      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
+    };
+  }, [ready]);
 
   // Initialize Leaflet map purely on the client.
   useEffect(() => {
@@ -191,6 +225,45 @@ export default function ClientMap({
       }
     })();
   }, [ready, showMarkers, stations]);
+
+  // --- One-time auto-fit after stations set ---
+  useEffect(() => {
+    if (!ready || !mapRef.current) return;
+    const map = mapRef.current;
+    if (hasZoomedToData.current) return;
+    if (!stations || stations.length === 0) return;
+
+    (async () => {
+      const L = (await import('leaflet')).default;
+      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
+      isProgrammaticMove.current = true;
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+      map.once('moveend', () => { isProgrammaticMove.current = false; });
+      hasZoomedToData.current = true;
+    })();
+  }, [ready, stations]);
+
+  // --- Zoom to data button handler ---
+  function handleZoomToData() {
+    const map = mapRef.current;
+    if (!map || !stations?.length) return;
+    (async () => {
+      const L = (await import('leaflet')).default;
+      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
+      isProgrammaticMove.current = true;
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+      map.once('moveend', () => { isProgrammaticMove.current = false; });
+    })();
+  }
+
+  // --- Search action handler (recenters map, resets auto-fit flag) ---
+  function handleSearch(lat: number, lng: number) {
+    const map = mapRef.current;
+    hasZoomedToData.current = false;
+    isProgrammaticMove.current = true;
+    map.setView([lat, lng], 12);
+    map.once('moveend', () => { isProgrammaticMove.current = false; });
+  }
 
   // Render / update heatmap
   useEffect(() => {
