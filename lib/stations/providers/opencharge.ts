@@ -1,79 +1,86 @@
-'use server';
-import type { Station, Connector } from '../../../types/stations';
+import type { Station } from '../../../types/stations';
 
-const OCM_BASE = 'https://api.openchargemap.io/v3/poi/';
-const OCM_KEY = process.env.OCM_KEY;
-const OCM_CLIENT = process.env.OCM_CLIENT || 'autodun-ev-finder';
+const OCM_ENDPOINT = 'https://api.openchargemap.io/v3/poi/';
 
-function mapOCMToStation(poi: any): Station {
+
+type OcmPoi = {
+  ID: number;
+  AddressInfo?: {
+    Title?: string;
+    Latitude?: number;
+    Longitude?: number;
+    AddressLine1?: string;
+    Postcode?: string;
+  };
+  Connections?: Array<{
+    ConnectionType?: { Title?: string } | null;
+    PowerKW?: number | null;
+    Quantity?: number | null;
+  }> | null;
+};
+
+function mapToStation(p: OcmPoi): Station | null {
+  const a = p.AddressInfo;
+  if (!a?.Latitude || !a?.Longitude) return null;
   return {
-    id: poi.ID,
-    name: poi.AddressInfo?.Title || '',
-    lat: poi.AddressInfo?.Latitude,
-    lng: poi.AddressInfo?.Longitude,
-    address: poi.AddressInfo?.AddressLine1 || '',
-    postcode: poi.AddressInfo?.Postcode || '',
-    connectors: Array.isArray(poi.Connections)
-      ? poi.Connections.map((c: any) => ({
-          type: c.ConnectionType?.Title || '',
-          powerKW: c.PowerKW,
-          quantity: c.Quantity,
-        }))
-      : [],
+    id: p.ID,
+    name: a.Title ?? 'EV Charger',
+    lat: a.Latitude,
+    lng: a.Longitude,
+    address: a.AddressLine1 ?? undefined,
+    postcode: a.Postcode ?? undefined,
+    connectors: (p.Connections ?? []).map(c => ({
+      type: c?.ConnectionType?.Title ?? 'Unknown',
+      powerKW: c?.PowerKW ?? undefined,
+      quantity: c?.Quantity ?? undefined,
+    })),
   };
 }
 
-export async function fetchStationsOCM({
-  lat,
-  lng,
-  radius,
-  bbox,
-  max = 200,
-}: {
-  lat?: number;
-  lng?: number;
-  radius?: number;
-  bbox?: [[number, number], [number, number]];
-  max?: number;
-}): Promise<Station[]> {
-  const params: Record<string, string> = {
-    key: OCM_KEY || '',
-    client: OCM_CLIENT,
-    compact: 'true',
-    verbose: 'false',
-    maxresults: String(Math.min(max, 200)),
-  };
-  if (bbox) {
-    // OCM expects boundingbox as lat1,lng1,lat2,lng2
-    params.boundingbox = `${bbox[0][0]},${bbox[0][1]},${bbox[1][0]},${bbox[1][1]}`;
-  } else if (lat && lng && radius) {
-    params.latitude = String(lat);
-    params.longitude = String(lng);
-    params.distance = String(radius);
-  }
-  const url = `${OCM_BASE}?${new URLSearchParams(params).toString()}`;
+async function fetchJson(url: URL, signal?: AbortSignal) {
+  const key = process.env.OCM_KEY;
+  const headers: Record<string,string> = { Accept: 'application/json' };
+  if (key) headers['X-API-Key'] = key; // also attach as query
+  const res = await fetch(url.toString(), { headers, signal, cache: 'no-store' });
+  if (!res.ok) throw new Error(`OCM ${res.status}`);
+  return res.json() as Promise<OcmPoi[]>;
+}
+
+export async function ocmByBBox([south, west, north, east]: [number, number, number, number], max = 200) {
+  const url = new URL(OCM_ENDPOINT);
+  url.searchParams.set('maxresults', String(Math.min(max, 200)));
+  url.searchParams.set('compact', 'true');
+  url.searchParams.set('verbose', 'false');
+  url.searchParams.set('client', process.env.OCM_CLIENT ?? 'autodun-ev-finder');
+  if (process.env.OCM_KEY) url.searchParams.set('key', process.env.OCM_KEY!);
+  url.searchParams.set('boundingbox', `(${south},${west}),(${north},${east})`);
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 10000);
   try {
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 10000);
-    const res = await fetch(url, { signal: ctrl.signal });
-    clearTimeout(timeout);
-    if (!res.ok) {
-      if (res.status === 429 || res.status >= 500) return [];
-      throw new Error(`OCM error: ${res.status}`);
-    }
-    const data = await res.json();
-    if (!Array.isArray(data)) return [];
-    // Deduplicate by ID
-    const seen = new Set<number>();
-    const stations: Station[] = [];
-    for (const poi of data) {
-      if (poi.ID && !seen.has(poi.ID)) {
-        stations.push(mapOCMToStation(poi));
-        seen.add(poi.ID);
-      }
-    }
-    return stations;
-  } catch (e) {
-    return [];
-  }
+    const data = await fetchJson(url, ac.signal);
+    const items = data.map(mapToStation).filter(Boolean) as Station[];
+    return { items, source: 'OCM_BBOX' };
+  } finally { clearTimeout(t); }
+}
+
+export async function ocmByRadius(lat: number, lng: number, km = 10, max = 200) {
+  const url = new URL(OCM_ENDPOINT);
+  url.searchParams.set('latitude', String(lat));
+  url.searchParams.set('longitude', String(lng));
+  url.searchParams.set('distance', String(km));
+  url.searchParams.set('distanceunit', 'KM');
+  url.searchParams.set('maxresults', String(Math.min(max, 200)));
+  url.searchParams.set('compact', 'true');
+  url.searchParams.set('verbose', 'false');
+  url.searchParams.set('client', process.env.OCM_CLIENT ?? 'autodun-ev-finder');
+  if (process.env.OCM_KEY) url.searchParams.set('key', process.env.OCM_KEY!);
+
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 10000);
+  try {
+    const data = await fetchJson(url, ac.signal);
+    const items = data.map(mapToStation).filter(Boolean) as Station[];
+    return { items, source: 'OCM_RADIUS' };
+  } finally { clearTimeout(t); }
 }
