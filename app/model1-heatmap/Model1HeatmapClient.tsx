@@ -4,7 +4,6 @@ import { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import dynamic from 'next/dynamic';
 import { Icon } from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import FloatingControls from '@/components/Map/Controls/FloatingControls';
 import StationPopup from '@/components/Map/Popup/StationPopup';
 
@@ -52,7 +51,6 @@ export default function Model1HeatmapClient() {
   const mapRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
-    // Fetch stations
     fetch('/api/stations?bbox=-0.5,51.3,0.3,51.7')
       .then(res => res.json())
       .then(data => {
