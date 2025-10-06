@@ -77,7 +77,7 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
           <div className="text-center py-8">
             <div className="text-green-600 text-6xl mb-4">✓</div>
             <h3 className="text-xl font-bold text-gray-900 mb-2">Thanks!</h3>
-            <p className="text-gray-600">We've received your feedback.</p>
+            <p className="text-gray-600">We&apos;ve received your feedback.</p>
           </div>
         ) : (
           <>
