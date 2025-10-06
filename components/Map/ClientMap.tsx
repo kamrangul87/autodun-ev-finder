@@ -1,7 +1,8 @@
 "use client";
 import { useEffect, useState, useRef } from 'react';
 import { useInvalidateOnResize } from '../../lib/hooks/useInvalidateOnResize';
-import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
+import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl } from 'react-leaflet';
+import CouncilLayer from './CouncilLayer';
 import type { Station } from '../../types/stations';
 // HeatLayer import not needed; use leaflet.heat directly
 import { createStationDivIcon } from '../../lib/icons/stationDivIcon';
@@ -54,52 +55,18 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       ro.disconnect();
     };
   }, [map]);
-  // Council pane setup
+  // Create heatmap and council panes with correct zIndex
   useEffect(() => {
     if (!map) return;
-    if (!map.getPane('councils')) {
-      map.createPane('councils');
-      map.getPane('councils')!.style.zIndex = '300';
+    if (!map.getPane('heatmap')) {
+      map.createPane('heatmap');
+      map.getPane('heatmap').style.zIndex = '400';
+    }
+    if (!map.getPane('council')) {
+      map.createPane('council');
+      map.getPane('council').style.zIndex = '450';
     }
   }, [map]);
-  // Council overlay logic
-  useEffect(() => {
-    if (!map) return;
-    if (!showCouncil) {
-      if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) {
-        map.removeLayer(councilLayerRef.current);
-      }
-      return;
-    }
-    if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) return;
-    if (!councilGeoJson) return;
-    (async () => {
-      const L = (await import('leaflet')).default;
-      const baseStyle = { color: '#2563eb', weight: 2, fillColor: '#60a5fa', fillOpacity: 0.10 };
-      const highlight = { weight: 3, fillOpacity: 0.22 };
-      const layer = L.geoJSON(councilGeoJson, {
-        pane: 'councils',
-        style: () => baseStyle,
-        onEachFeature: (feature, layer) => {
-          layer.on({
-            mouseover: () => (layer as any).setStyle(highlight),
-            mouseout: () => (layer as any).setStyle(baseStyle),
-          });
-          const name = feature?.properties?.name || feature?.properties?.NAME || feature?.properties?.Borough;
-          if (name) {
-            layer.bindTooltip(name, { direction: 'top', className: 'council-tooltip', sticky: true });
-          }
-        },
-      });
-      councilLayerRef.current = layer;
-      layer.addTo(map);
-    })();
-    return () => {
-      if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) {
-        map.removeLayer(councilLayerRef.current);
-      }
-    };
-  }, [map, showCouncil, councilGeoJson]);
 
   // Fetch stations after map is ready and on moveend (debounced, guarded)
   useEffect(() => {
@@ -226,8 +193,8 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
             ))}
           </Pane>
         )}
-        {/* Heatmap is now managed via leaflet.heat and heatLayerRef */}
-        {/* Council overlay is managed via leaflet geoJSON layer above; no direct GeoJSON here */}
+  {/* Heatmap is managed via leaflet.heat and heatLayerRef */}
+  {showCouncil && <CouncilLayer />}
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
         Data: Open Charge Map | Boundaries: ONS Open Geography

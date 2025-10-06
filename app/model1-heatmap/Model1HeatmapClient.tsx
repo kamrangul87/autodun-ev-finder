@@ -13,7 +13,7 @@ const STATIONS_URL = '/api/stations';
 export default function Model1HeatmapClient() {
   const [stations, setStations] = useState<Station[]>([]);
   const [councilGeoJson, setCouncilGeoJson] = useState<any>(null);
-  const [showCouncil, setShowCouncil] = useState(false);
+  const [showCouncil, setShowCouncil] = useState(false); // OFF by default
   const [heatOn, setHeatOn] = useState(true);
   const [markersOn, setMarkersOn] = useState(true);
   const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
@@ -124,7 +124,7 @@ export default function Model1HeatmapClient() {
             <span className="text-sm">Markers</span>
           </label>
           <label className="flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" checked={showCouncil} onChange={handleToggleCouncil} />
+            <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
             <span className="text-sm">Council</span>
           </label>
           <button className="px-2 py-1 bg-amber-500 text-white rounded" onClick={() => setFeedbackOpen(true)}>Feedback</button>

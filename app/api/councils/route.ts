@@ -1,5 +1,6 @@
 // app/api/councils/route.ts
-import type { Feature, FeatureCollection, Geometry } from 'geojson';
+import { NextResponse } from 'next/server';
+import type { FeatureCollection } from 'geojson';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -11,93 +12,56 @@ let cachedGeoJson: FeatureCollection | null = null;
 let lastFetch = 0;
 const CACHE_MS = 86400 * 1000;
 
-type BBox = [number, number, number, number]; // [west, south, east, north]
 
 function emptyFC(): FeatureCollection {
   return { type: 'FeatureCollection', features: [] };
 }
 
-function parseBBox(searchParams: URLSearchParams): BBox | null {
-  let w = searchParams.get('west');
-  let s = searchParams.get('south');
-  let e = searchParams.get('east');
-  let n = searchParams.get('north');
-
-  // also accept bbox=west,south,east,north
-  if (!(w && s && e && n)) {
-    const bbox = searchParams.get('bbox');
-    if (bbox) {
-      const p = bbox.split(',').map(v => v.trim());
-      if (p.length === 4) [w, s, e, n] = p;
-    }
+function logCouncilLoad(geojson: FeatureCollection, source: string) {
+  if (geojson?.features?.length) {
+    console.info(`[CouncilLayer] Loaded ${geojson.features.length} features from ${source}`);
+  } else {
+    console.warn(`[CouncilLayer] WARNING: No council features loaded from ${source}`);
   }
-  if (!(w && s && e && n)) return null;
-
-  let W = Number(w), S = Number(s), E = Number(e), N = Number(n);
-  if ([W, S, E, N].some(v => Number.isNaN(v))) return null;
-
-  if (E < W) [W, E] = [E, W];
-  if (N < S) [S, N] = [N, S];
-
-  return [W, S, E, N];
-}
-
-function geomBBox(g: Geometry): BBox {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  const visit = (c: any) => {
-    if (Array.isArray(c) && typeof c[0] === 'number' && typeof c[1] === 'number') {
-      const x = c[0], y = c[1];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
-    } else if (Array.isArray(c)) {
-      for (const cc of c) visit(cc);
-    }
-  };
-  // @ts-ignore
-  visit((g as any).coordinates);
-  return [minX, minY, maxX, maxY];
-}
-
-function intersects(a: BBox, b: BBox): boolean {
-  const [aw, as, ae, an] = a;
-  const [bw, bs, be, bn] = b;
-  return !(ae < bw || be < aw || an < bs || bn < as);
 }
 
 export async function GET() {
-  try {
-    const now = Date.now();
-    if (cachedGeoJson && now - lastFetch < CACHE_MS) {
-      return new Response(JSON.stringify(cachedGeoJson), {
-        status: 200,
-        headers: { 'content-type': 'application/json', 'x-used-source': 'cache' },
-      });
-    }
-    let geojson: FeatureCollection | null = null;
-    try {
-      const upstream = await fetch(ONS_URL, { cache: 'no-store' });
-      if (upstream.ok) {
-        geojson = await upstream.json();
-      }
-    } catch {}
-    if (!geojson || !geojson.features?.length) {
-      // fallback to static file
-      try {
-        const fs = require('fs');
-        const raw = fs.readFileSync(STATIC_PATH, 'utf8');
-        geojson = JSON.parse(raw);
-      } catch {}
-    }
-    if (!geojson) geojson = emptyFC();
-    cachedGeoJson = geojson;
-    lastFetch = now;
-    return new Response(JSON.stringify(geojson), {
-      status: 200,
-      headers: { 'content-type': 'application/json', 'x-used-source': geojson === cachedGeoJson ? 'cache' : 'fresh' },
+  const now = Date.now();
+  if (cachedGeoJson && now - lastFetch < CACHE_MS) {
+    logCouncilLoad(cachedGeoJson, 'cache');
+    return NextResponse.json(cachedGeoJson, {
+      headers: { 'Cache-Control': 's-maxage=86400, stale-while-revalidate=86400' }
     });
-  } catch (e) {
-    return new Response(JSON.stringify(emptyFC()), { status: 502 });
   }
+  let geojson: FeatureCollection | null = null;
+  let source = 'env';
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 10000);
+    const upstream = await fetch(ONS_URL, { cache: 'no-store', signal: ac.signal });
+    clearTimeout(t);
+    if (upstream.ok) {
+      geojson = await upstream.json();
+      source = 'env';
+    }
+  } catch (e) {
+    source = 'env-fail';
+  }
+  if (!geojson || !geojson.features?.length) {
+    try {
+      const fs = require('fs');
+      const raw = fs.readFileSync(STATIC_PATH, 'utf8');
+      geojson = JSON.parse(raw);
+      source = 'static';
+    } catch (e) {
+      geojson = emptyFC();
+      source = 'static-fail';
+    }
+  }
+  cachedGeoJson = geojson;
+  lastFetch = now;
+  logCouncilLoad(geojson as FeatureCollection, source);
+  return NextResponse.json(geojson, {
+    headers: { 'Cache-Control': 's-maxage=86400, stale-while-revalidate=86400' }
+  });
 }
