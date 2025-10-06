@@ -1,64 +1,79 @@
-"use client";
-import { useEffect, useRef } from "react";
-import { useMap } from "react-leaflet";
+'use client';
 
-export default function CouncilLayer() {
+import { useEffect, useState, useRef } from 'react';
+import { useMap } from 'react-leaflet';
+import L from 'leaflet';
+
+interface CouncilLayerProps {
+  visible: boolean;
+}
+
+export default function CouncilLayer({ visible }: CouncilLayerProps) {
   const map = useMap();
-  const layerRef = useRef<any>(null);
-  const geoJsonRef = useRef<any>(null);
+  const layerRef = useRef<L.GeoJSON | null>(null);
+  const [councilData, setCouncilData] = useState<any>(null);
 
   useEffect(() => {
-    if (!map.getPane("council")) {
-      map.createPane("council");
-    }
-    const councilPane = map.getPane("council");
-    if (councilPane) councilPane.style.zIndex = "450";
-    fetch("/api/councils")
-      .then((res) => res.json())
-      .then((geojson) => {
-        if (!geojson?.features?.length) {
-          console.warn("[CouncilLayer] No council features loaded");
-          return;
-        }
-        import("leaflet").then((L) => {
-          const style = {
-            color: "#ff7a00",
-            weight: 2,
-            opacity: 0.95,
-            fill: false,
-            dashArray: "6,4",
-          };
-          const highlight = {
-            weight: 3,
-            opacity: 1,
-          };
-          const layer = L.geoJSON(geojson, {
-            pane: "council",
-            style: () => style,
-            onEachFeature: (feature, lyr) => {
-              lyr.on({
-                mouseover: () => (lyr as any).setStyle(highlight),
-                mouseout: () => (lyr as any).setStyle(style),
-              });
-              const name = feature?.properties?.name || feature?.properties?.LAD23NM;
-              if (name) {
-                lyr.bindTooltip(name, {
-                  direction: "top",
-                  className: "council-tooltip",
-                  sticky: true,
-                });
-              }
-            },
-          });
-          layer.addTo(map);
-          layerRef.current = layer;
-        });
-      });
-    return () => {
-      if (layerRef.current && map.hasLayer(layerRef.current)) {
+    fetch('/data/london-boroughs.geojson')
+      .then(res => res.ok ? res.json() : Promise.reject('Not found'))
+      .then(data => {
+        console.log('Council data loaded');
+        setCouncilData(data);
+      })
+      .catch(err => console.error('Council data error:', err));
+  }, []);
+
+  useEffect(() => {
+    if (!councilData || !visible) {
+      if (layerRef.current) {
         map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+      return;
+    }
+
+    if (!map.getPane('boroughs')) {
+      const pane = map.createPane('boroughs');
+      pane.style.zIndex = '450';
+    }
+
+    if (layerRef.current) map.removeLayer(layerRef.current);
+
+    layerRef.current = L.geoJSON(councilData, {
+      pane: 'boroughs',
+      style: {
+        color: '#3A8DFF',
+        weight: 2,
+        dashArray: '6,4',
+        fillColor: '#3A8DFF',
+        fillOpacity: 0.05,
+      },
+      onEachFeature: (feature, layer) => {
+        const name = feature.properties?.NAME || feature.properties?.name || 'Unknown';
+        layer.on({
+          mouseover: (e) => {
+            e.target.setStyle({ weight: 3, fillOpacity: 0.15 });
+            e.target.bindTooltip(name, {
+              permanent: false,
+              direction: 'center',
+              className: 'council-tooltip',
+            }).openTooltip();
+          },
+          mouseout: (e) => {
+            e.target.setStyle({ weight: 2, fillOpacity: 0.05 });
+            e.target.closeTooltip();
+          },
+        });
+      },
+    }).addTo(map);
+
+    return () => {
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
       }
     };
-  }, [map]);
+  }, [map, councilData, visible]);
+
   return null;
 }

@@ -1,30 +1,73 @@
-"use client";
-import { useEffect } from "react";
-import { useMap } from "react-leaflet";
+'use client';
 
-type HeatPoint = [number, number, number?]; // [lat, lng, intensity]
+import { useEffect, useRef } from 'react';
+import { useMap } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet.heat';
 
-export default function HeatLayer({
-  points,
-  radius = 30,
-  blur = 20,
-  max = 1.0,
-}: { points: HeatPoint[]; radius?: number; blur?: number; max?: number }) {
+interface Station {
+  latitude: number;
+  longitude: number;
+  connectors?: number;
+}
+
+interface HeatLayerProps {
+  stations: Station[];
+  visible: boolean;
+}
+
+export default function HeatLayer({ stations, visible }: HeatLayerProps) {
   const map = useMap();
+  const heatLayerRef = useRef<any>(null);
+
   useEffect(() => {
-    let layer: any;
-    let cancelled = false;
-    (async () => {
-      const L = (await import("leaflet")).default;
-      await import("leaflet.heat"); // augments L
-      if (cancelled) return;
-      layer = (L as any).heatLayer(points, { radius, blur, max });
-      layer.addTo(map);
-    })();
+    if (!visible) {
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
+      }
+      return;
+    }
+
+    if (!stations.length) return;
+
+    if (!map.getPane('heatmap')) {
+      const pane = map.createPane('heatmap');
+      pane.style.zIndex = '400';
+    }
+
+    const heatPoints = stations.map(s => {
+      const intensity = Math.min(Math.max(s.connectors || 1, 1), 8);
+      return [s.latitude, s.longitude, intensity];
+    }) as [number, number, number][];
+
+    if (heatLayerRef.current) {
+      map.removeLayer(heatLayerRef.current);
+    }
+
+    heatLayerRef.current = (L as any).heatLayer(heatPoints, {
+      radius: 28,
+      blur: 22,
+      maxZoom: 18,
+      max: 8,
+      pane: 'heatmap',
+      gradient: {
+        0.0: 'rgba(0, 255, 0, 0)',
+        0.2: '#00ff00',
+        0.4: '#ffff00',
+        0.6: '#ff8000',
+        0.8: '#ff0000',
+        1.0: '#cc0000',
+      },
+    }).addTo(map);
+
     return () => {
-      cancelled = true;
-      if (layer) map.removeLayer(layer);
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
+      }
     };
-  }, [map, points, radius, blur, max]);
+  }, [map, stations, visible]);
+
   return null;
 }

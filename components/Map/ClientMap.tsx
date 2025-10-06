@@ -194,7 +194,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
           </Pane>
         )}
   {/* Heatmap is managed via leaflet.heat and heatLayerRef */}
-  {showCouncil && <CouncilLayer />}
+  <CouncilLayer visible={showCouncil} />
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
         Data: Open Charge Map | Boundaries: ONS Open Geography
