@@ -18,7 +18,18 @@ export async function GET(req: NextRequest) {
       return new Response(JSON.stringify({ error: 'no results' }), { status: 404 });
     }
     const hit = arr[0];
-    return new Response(JSON.stringify({ lat: hit.lat, lon: hit.lon, display_name: hit.display_name }), {
+    let bbox: number[] | null = null;
+    if (hit.boundingbox && Array.isArray(hit.boundingbox) && hit.boundingbox.length === 4) {
+      const raw = hit.boundingbox.map(Number);
+      // [south, north, west, east] -> [west, south, east, north]
+      bbox = [raw[2], raw[0], raw[3], raw[1]];
+    }
+    return new Response(JSON.stringify({
+      lat: hit.lat,
+      lon: hit.lon,
+      display_name: hit.display_name,
+      bbox
+    }), {
       headers: { 'content-type': 'application/json' },
     });
   } catch (e) {

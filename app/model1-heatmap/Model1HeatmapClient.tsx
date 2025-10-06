@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import ClientMap from '../../components/Map/ClientMap';
 // TopBar UI inline (no external file)
 import Toast from '../../components/ui/Toast';
-import SearchControl from '../../components/Map/SearchControl';
+import { useRef } from 'react';
 import { Station } from '../../lib/stations/types';
 import { ensureLeafletIconFix } from '../../lib/leafletIconFix';
 
@@ -66,9 +66,32 @@ export default function Model1HeatmapClient() {
     }
   }
 
-  function handleSearch(lat: number, lng: number) {
-    setBounds([[lat - 0.01, lng - 0.01], [lat + 0.01, lng + 0.01]]);
-    setToast('Map centered');
+  // Search logic: call /api/geocode?q=...
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  async function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const q = searchInputRef.current?.value?.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (data.bbox) {
+        // bbox: [west, south, east, north]
+        setBounds([[data.bbox[1], data.bbox[0]], [data.bbox[3], data.bbox[2]]]);
+        setToast('Map centered to search bounds');
+      } else if (data.lat && data.lon) {
+        setBounds([[parseFloat(data.lat)-0.01, parseFloat(data.lon)-0.01],[parseFloat(data.lat)+0.01,parseFloat(data.lon)+0.01]]);
+        setToast('Map centered to search');
+      } else {
+        setToast('No result');
+      }
+    } catch {
+      setToast('Search failed');
+    } finally {
+      setSearchLoading(false);
+    }
   }
 
   return (
@@ -78,10 +101,19 @@ export default function Model1HeatmapClient() {
         <div className="flex items-center gap-2">
           <span className="font-bold text-lg text-blue-900">autodun</span>
         </div>
-        <div className="flex-1 flex items-center gap-2">
-          <SearchControl onSearch={handleSearch} />
-          <button className="px-3 py-1 bg-blue-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
-        </div>
+        <form className="flex-1 flex items-center gap-2" onSubmit={handleSearchSubmit}>
+          <input
+            ref={searchInputRef}
+            type="text"
+            className="px-2 py-1 border rounded w-full max-w-md"
+            placeholder="Search city or postcode…"
+            disabled={searchLoading}
+          />
+          <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded" disabled={searchLoading}>
+            {searchLoading ? <span className="animate-spin">⏳</span> : 'Search'}
+          </button>
+          <button type="button" className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
+        </form>
         <div className="flex items-center gap-3">
           <label className="flex items-center gap-1 cursor-pointer">
             <input type="checkbox" checked={heatOn} onChange={e => setHeatOn(e.target.checked)} />

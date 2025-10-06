@@ -26,6 +26,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
   const fetchTimer = useRef<number | undefined>(undefined);
   const heatLayerRef = useRef<any>(null);
   const councilLayerRef = useRef<any>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
 
   // Track real user interaction
   useEffect(() => {
@@ -38,6 +39,19 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       map.off('dragstart', mark);
       map.off('zoomstart', mark);
       map.off('movestart', mark);
+    };
+  }, [map]);
+
+  // ResizeObserver for map container
+  useEffect(() => {
+    if (!map || !mapContainerRef.current) return;
+    const ro = new window.ResizeObserver(() => {
+      map.invalidateSize({ pan: false });
+    });
+    ro.observe(mapContainerRef.current);
+    map.once('tileload', () => map.invalidateSize({ pan: false }));
+    return () => {
+      ro.disconnect();
     };
   }, [map]);
   // Council pane setup
@@ -128,7 +142,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       const L = (await import('leaflet')).default;
       const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
       isProgrammaticMove.current = true;
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12, animate: false });
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13, animate: false });
       map.once('moveend', () => { isProgrammaticMove.current = false; });
       hasAutoCentered.current = true;
     })();
@@ -147,9 +161,11 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       await import('leaflet.heat');
       if (!heatLayerRef.current) {
         heatLayerRef.current = (L as any).heatLayer([], {
-          radius: 36,
-          blur: 24,
-          maxZoom: 19,
+          radius: 26,
+          blur: 22,
+          max: 2,
+          minOpacity: 0.25,
+          maxOpacity: 0.85,
           gradient: {
             0.2:'#4FC3F7', 0.4:'#4CAF50', 0.6:'#FFC107', 0.8:'#FF5722', 1:'#E53935'
           }
@@ -166,11 +182,15 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       }
       // Update heat data
       if (heatLayerRef.current && stations.length) {
-        const weight = (c?: any) => {
-          let w = Array.isArray(c) ? c.length : (c ?? 1);
-          return Math.max(0.5, Math.min(1.0, w / 2.5));
-        };
-        const pts = stations.map(s => [s.lat, s.lng, weight(s.connectors)]);
+        const pts = stations.map(s => {
+          // connectors_count, avg_kw
+          let connectors = Array.isArray(s.connectors) ? s.connectors.length : 1;
+          let avgKW = Array.isArray(s.connectors) && s.connectors.length
+            ? (s.connectors.reduce((sum, c) => sum + (c.powerKW ?? 7), 0) / s.connectors.length)
+            : 7;
+          let weight = Math.max(0.2, Math.min(2.0, (connectors * avgKW) / 50));
+          return [s.lat, s.lng, weight];
+        });
         heatLayerRef.current.setLatLngs(pts);
       }
     })();
@@ -181,7 +201,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
     };
   }, [map, stations, heatOn]);
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full" ref={mapContainerRef}>
       <MapContainer
         className="h-full w-full"
         style={{ height: '100%', width: '100%', minHeight: '75vh' }}
@@ -210,7 +230,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
         {/* Council overlay is managed via leaflet geoJSON layer above; no direct GeoJSON here */}
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
-        Data: Open Charge Map
+        Data: Open Charge Map | Boundaries: ONS Open Geography
       </div>
     </div>
   );
