@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useInvalidateOnResize } from '../../lib/hooks/useInvalidateOnResize';
 import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import type { Station } from '../../types/stations';
@@ -19,10 +19,30 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
   const [loading, setLoading] = useState(false);
   useInvalidateOnResize(map);
 
-  // Fetch stations after map is ready and on moveend
+  // Guards for programmatic moves and one-time auto-center
+  const isProgrammaticMove = useRef(false);
+  const userInteracted = useRef(false);
+  const hasAutoCentered = useRef(false);
+  const fetchTimer = useRef<number | undefined>(undefined);
+  const heatLayerRef = useRef<any>(null);
+
+  // Track real user interaction
   useEffect(() => {
     if (!map) return;
-    let timeout: any;
+    const mark = () => { userInteracted.current = true; };
+    map.on('dragstart', mark);
+    map.on('zoomstart', mark);
+    map.on('movestart', mark);
+    return () => {
+      map.off('dragstart', mark);
+      map.off('zoomstart', mark);
+      map.off('movestart', mark);
+    };
+  }, [map]);
+
+  // Fetch stations after map is ready and on moveend (debounced, guarded)
+  useEffect(() => {
+    if (!map) return;
     const fetchStations = async () => {
       setLoading(true);
       const b = map.getBounds();
@@ -34,7 +54,6 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
         setStations(Array.isArray(data.items) ? data.items : []);
         setSource(data.source ?? '');
         setDebug(data.debug ?? {});
-        console.log('stations-debug', data.debug);
       } catch {
         setStations([]);
       } finally {
@@ -43,22 +62,68 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
     };
     fetchStations();
     const onMoveEnd = () => {
-      clearTimeout(timeout);
-      timeout = setTimeout(fetchStations, 400);
+      if (isProgrammaticMove.current) return;
+      if (!userInteracted.current) return;
+      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
+      fetchTimer.current = window.setTimeout(fetchStations, 500);
     };
     map.on('moveend', onMoveEnd);
     return () => {
       map.off('moveend', onMoveEnd);
-      clearTimeout(timeout);
+      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
     };
   }, [map]);
+
+  // One-time auto-center to data after first stations fetch
+  useEffect(() => {
+    if (!map || stations.length === 0 || hasAutoCentered.current) return;
+    (async () => {
+      const L = (await import('leaflet')).default;
+      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
+      isProgrammaticMove.current = true;
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12, animate: false });
+      map.once('moveend', () => { isProgrammaticMove.current = false; });
+      hasAutoCentered.current = true;
+    })();
+  }, [map, stations]);
 
   const [source, setSource] = useState('');
   const [debug, setDebug] = useState<any>({});
 
   // Removed auto-fit effect: map does not auto-pan/zoom on stations change
 
-  const heatPoints: [number, number, number][] = stations.map(s => [s.lat, s.lng, Math.max(0.3, Math.min(1, Array.isArray(s.connectors) ? s.connectors.length / 3 : 1))]);
+  // Heatmap layer logic
+  useEffect(() => {
+    if (!map) return;
+    let isMounted = true;
+    (async () => {
+      const L = (await import('leaflet')).default;
+      await import('leaflet.heat');
+      if (!heatLayerRef.current) {
+        heatLayerRef.current = (L as any).heatLayer([], { radius: 25, blur: 15, maxZoom: 17 });
+      }
+      if (heatOn) {
+        if (!map.hasLayer(heatLayerRef.current)) {
+          heatLayerRef.current.addTo(map);
+        }
+      } else {
+        if (map.hasLayer(heatLayerRef.current)) {
+          map.removeLayer(heatLayerRef.current);
+        }
+      }
+      // Update heat data
+      if (heatLayerRef.current && stations.length) {
+        const pts = stations.map(s => [s.lat, s.lng, Math.min(1, (Array.isArray(s.connectors) ? s.connectors.length : 1) / 4)]);
+        heatLayerRef.current.setLatLngs(pts);
+      }
+    })();
+    return () => {
+      isMounted = false;
+      if (map && heatLayerRef.current && map.hasLayer(heatLayerRef.current)) {
+        map.removeLayer(heatLayerRef.current);
+      }
+    };
+  }, [map, stations, heatOn]);
   return (
     <div className="relative h-full w-full">
       <MapContainer
@@ -85,11 +150,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
             ))}
           </Pane>
         )}
-        {heatOn && (
-          <Pane name="heat" style={{ zIndex: 600 }}>
-            <HeatLayer points={heatPoints} radius={32} blur={20} max={1.0} />
-          </Pane>
-        )}
+        {/* Heatmap is now managed via leaflet.heat and heatLayerRef */}
         {showCouncil && councilGeoJson && (
           <Pane name="council" style={{ zIndex: 500 }}>
             <GeoJSON data={councilGeoJson} style={() => ({ weight: 1, color: '#3b82f6', fillOpacity: 0.08 })} />
