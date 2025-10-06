@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 import { useInvalidateOnResize } from '../../lib/hooks/useInvalidateOnResize';
 import { MapContainer, TileLayer, Pane, Marker, Popup, ZoomControl, GeoJSON } from 'react-leaflet';
 import type { Station } from '../../types/stations';
-import HeatLayer from './HeatLayer';
+// HeatLayer import not needed; use leaflet.heat directly
 import { createStationDivIcon } from '../../lib/icons/stationDivIcon';
 
 export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn, markersOn, onZoomToData }: {
@@ -58,34 +58,34 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       return;
     }
     if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) return;
-    fetch('/api/councils').then(res => res.json()).then(geojson => {
-      (async () => {
-        const L = (await import('leaflet')).default;
-        const baseStyle = { color: '#6b7280', weight: 1.5, fillColor: '#60a5fa', fillOpacity: 0.08 };
-        const highlight = { weight: 2.5, fillOpacity: 0.18 };
-        const layer = L.geoJSON(geojson, {
-          pane: 'councils',
-          style: () => baseStyle,
-          onEachFeature: (feature, layer) => {
-            layer.on({
-              mouseover: () => (layer as any).setStyle(highlight),
-              mouseout: () => (layer as any).setStyle(baseStyle),
-            });
-            if (feature?.properties?.name || feature?.properties?.NAME) {
-              layer.bindTooltip(feature.properties.name ?? feature.properties.NAME, { direction: 'top', className: 'council-tooltip' });
-            }
-          },
-        });
-        councilLayerRef.current = layer;
-        layer.addTo(map);
-      })();
-    });
+    if (!councilGeoJson) return;
+    (async () => {
+      const L = (await import('leaflet')).default;
+      const baseStyle = { color: '#2563eb', weight: 2, fillColor: '#60a5fa', fillOpacity: 0.10 };
+      const highlight = { weight: 3, fillOpacity: 0.22 };
+      const layer = L.geoJSON(councilGeoJson, {
+        pane: 'councils',
+        style: () => baseStyle,
+        onEachFeature: (feature, layer) => {
+          layer.on({
+            mouseover: () => (layer as any).setStyle(highlight),
+            mouseout: () => (layer as any).setStyle(baseStyle),
+          });
+          const name = feature?.properties?.name || feature?.properties?.NAME || feature?.properties?.Borough;
+          if (name) {
+            layer.bindTooltip(name, { direction: 'top', className: 'council-tooltip', sticky: true });
+          }
+        },
+      });
+      councilLayerRef.current = layer;
+      layer.addTo(map);
+    })();
     return () => {
       if (councilLayerRef.current && map.hasLayer(councilLayerRef.current)) {
         map.removeLayer(councilLayerRef.current);
       }
     };
-  }, [map, showCouncil]);
+  }, [map, showCouncil, councilGeoJson]);
 
   // Fetch stations after map is ready and on moveend (debounced, guarded)
   useEffect(() => {
@@ -167,8 +167,8 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
       // Update heat data
       if (heatLayerRef.current && stations.length) {
         const weight = (c?: any) => {
-          if (Array.isArray(c)) return Math.max(0.4, Math.min(1, c.length / 3));
-          return Math.max(0.4, Math.min(1, (c ?? 1) / 3));
+          let w = Array.isArray(c) ? c.length : (c ?? 1);
+          return Math.max(0.5, Math.min(1.0, w / 2.5));
         };
         const pts = stations.map(s => [s.lat, s.lng, weight(s.connectors)]);
         heatLayerRef.current.setLatLngs(pts);
@@ -207,11 +207,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
           </Pane>
         )}
         {/* Heatmap is now managed via leaflet.heat and heatLayerRef */}
-        {showCouncil && councilGeoJson && (
-          <Pane name="council" style={{ zIndex: 500 }}>
-            <GeoJSON data={councilGeoJson} style={() => ({ weight: 1, color: '#3b82f6', fillOpacity: 0.08 })} />
-          </Pane>
-        )}
+        {/* Council overlay is managed via leaflet geoJSON layer above; no direct GeoJSON here */}
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
         Data: Open Charge Map
