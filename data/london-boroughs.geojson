@@ -11,6 +11,5 @@
       "properties": { "name": "London Borough of Camden" },
       "geometry": { "type": "Polygon", "coordinates": [[[ -0.145, 51.529 ], [ -0.120, 51.529 ], [ -0.120, 51.545 ], [ -0.145, 51.545 ], [ -0.145, 51.529 ]]] }
     }
-    // ... more boroughs here for real deployment
   ]
 }
