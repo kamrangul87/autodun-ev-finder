@@ -1,22 +1,35 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
-import { useMap } from 'react-leaflet';
-import L from 'leaflet';
+import { useEffect, useState } from 'react';
+import { Marker, Popup } from 'react-leaflet';
+import { Icon, LatLngExpression } from 'leaflet';
 
 interface CouncilLayerProps {
   visible: boolean;
 }
 
+interface Borough {
+  name: string;
+  center: LatLngExpression;
+}
+
+// Orange/red icon for council markers
+const councilIcon = new Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-orange.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
 export default function CouncilLayer({ visible }: CouncilLayerProps) {
-  const map = useMap();
-  const layerRef = useRef<L.GeoJSON | null>(null);
-  const [councilData, setCouncilData] = useState<any>(null);
+  const [boroughs, setBoroughs] = useState<Borough[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (councilData) return;
-    
+    if (boroughs.length > 0 || !visible) return;
+
     setLoading(true);
     
     // Try API first, fallback to static file
@@ -24,75 +37,64 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
       .catch(() => fetch('/data/councils-london.geo.json'))
       .then(res => res.ok ? res.json() : Promise.reject('Load failed'))
       .then(data => {
-        console.log('Council data loaded:', data.features?.length, 'features');
-        setCouncilData(data);
+        // Extract borough centers from GeoJSON
+        const extracted: Borough[] = data.features?.map((feature: any) => {
+          const name = feature.properties?.NAME || 
+                       feature.properties?.name || 
+                       feature.properties?.LAD23NM || 
+                       'Unknown Borough';
+          
+          // Calculate centroid from geometry
+          let center: LatLngExpression = [51.5074, -0.1278]; // London default
+          
+          if (feature.geometry?.type === 'Polygon' && feature.geometry.coordinates?.[0]) {
+            const coords = feature.geometry.coordinates[0];
+            const lats = coords.map((c: number[]) => c[1]);
+            const lngs = coords.map((c: number[]) => c[0]);
+            center = [
+              lats.reduce((a: number, b: number) => a + b, 0) / lats.length,
+              lngs.reduce((a: number, b: number) => a + b, 0) / lngs.length,
+            ];
+          } else if (feature.geometry?.type === 'MultiPolygon' && feature.geometry.coordinates?.[0]?.[0]) {
+            const coords = feature.geometry.coordinates[0][0];
+            const lats = coords.map((c: number[]) => c[1]);
+            const lngs = coords.map((c: number[]) => c[0]);
+            center = [
+              lats.reduce((a: number, b: number) => a + b, 0) / lats.length,
+              lngs.reduce((a: number, b: number) => a + b, 0) / lngs.length,
+            ];
+          }
+          
+          return { name, center };
+        }) || [];
+        
+        console.log('Council markers loaded:', extracted.length, 'boroughs');
+        setBoroughs(extracted);
       })
       .catch(err => {
         console.warn('Failed to load council data:', err);
       })
       .finally(() => setLoading(false));
-  }, [councilData]);
+  }, [boroughs.length, visible]);
 
-  useEffect(() => {
-    if (!councilData || !visible) {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
-      }
-      return;
-    }
+  if (!visible) return null;
 
-    // Create pane if needed
-    if (!map.getPane('councils')) {
-      const pane = map.createPane('councils');
-      pane.style.zIndex = '450';
-    }
-
-    // Remove old layer
-    if (layerRef.current) {
-      map.removeLayer(layerRef.current);
-    }
-
-    // Add new layer
-    layerRef.current = L.geoJSON(councilData, {
-      pane: 'councils',
-      style: {
-        color: '#3A8DFF',
-        weight: 2,
-        dashArray: '6, 4',
-        fillColor: '#3A8DFF',
-        fillOpacity: 0.08,
-      },
-      onEachFeature: (feature, layer) => {
-        const name = feature.properties?.NAME || 
-                     feature.properties?.name || 
-                     feature.properties?.LAD23NM || 
-                     'Unknown';
-        
-        layer.on({
-          mouseover: (e) => {
-            e.target.setStyle({ weight: 3, fillOpacity: 0.15 });
-            e.target.bindTooltip(name, {
-              permanent: false,
-              direction: 'center',
-              className: 'council-tooltip',
-            }).openTooltip();
-          },
-          mouseout: (e) => {
-            e.target.setStyle({ weight: 2, fillOpacity: 0.08 });
-            e.target.closeTooltip();
-          },
-        });
-      },
-    }).addTo(map);
-
-    return () => {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
-      }
-    };
-  }, [map, councilData, visible]);
-
-  return null;
+  return (
+    <>
+      {boroughs.map((borough, idx) => (
+        <Marker
+          key={idx}
+          position={borough.center}
+          icon={councilIcon}
+        >
+          <Popup>
+            <div>
+              <strong>{borough.name}</strong>
+              <p className="text-xs text-gray-600 mt-1">London Borough</p>
+            </div>
+          </Popup>
+        </Marker>
+      ))}
+    </>
+  );
 }
