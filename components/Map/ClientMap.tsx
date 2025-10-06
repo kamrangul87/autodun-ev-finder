@@ -19,30 +19,42 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
   const [loading, setLoading] = useState(false);
   useInvalidateOnResize(map);
 
-  // Fetch stations when bounds change
+  // Fetch stations after map is ready and on moveend
   useEffect(() => {
-    async function fetchStations() {
+    if (!map) return;
+    let timeout: any;
+    const fetchStations = async () => {
       setLoading(true);
-      let url = '';
-      if (bounds) {
-        // bounds: [[south, west], [north, east]]
-        const [[south, west], [north, east]] = bounds;
-        url = `/api/stations?bbox=(${south},${west}),(${north},${east})&max=200`;
-      } else {
-        url = `/api/stations?lat=51.5074&lng=-0.1278&radius=10&max=200`;
-      }
+      const b = map.getBounds();
+      const bbox = `(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})`;
+      const url = `/api/stations?bbox=${encodeURIComponent(bbox)}&max=200`;
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { cache: 'no-store' });
         const data = await res.json();
         setStations(Array.isArray(data.items) ? data.items : []);
+        setSource(data.source ?? '');
+        setDebug(data.debug ?? {});
+        console.log('stations-debug', data.debug);
       } catch {
         setStations([]);
       } finally {
         setLoading(false);
       }
-    }
+    };
     fetchStations();
-  }, [bounds]);
+    const onMoveEnd = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(fetchStations, 400);
+    };
+    map.on('moveend', onMoveEnd);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      clearTimeout(timeout);
+    };
+  }, [map]);
+
+  const [source, setSource] = useState('');
+  const [debug, setDebug] = useState<any>({});
 
   useEffect(() => {
     if (!map || stations.length === 0) return;
@@ -92,6 +104,7 @@ export default function ClientMap({ bounds, councilGeoJson, showCouncil, heatOn,
         )}
       </MapContainer>
       <div className="absolute bottom-2 left-2 text-xs bg-white/80 rounded px-2 py-1 shadow z-[1200]">
+        Stations: {stations.length} [{source}]<br />
         Data: Open Charge Map
       </div>
     </div>
