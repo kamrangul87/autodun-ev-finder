@@ -12,16 +12,26 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
   const map = useMap();
   const layerRef = useRef<L.GeoJSON | null>(null);
   const [councilData, setCouncilData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    fetch('/data/london-boroughs.geojson')
-      .then(res => res.ok ? res.json() : Promise.reject('Not found'))
+    if (councilData) return;
+    
+    setLoading(true);
+    
+    // Try API first, fallback to static file
+    fetch('/api/councils')
+      .catch(() => fetch('/data/councils-london.geo.json'))
+      .then(res => res.ok ? res.json() : Promise.reject('Load failed'))
       .then(data => {
-        console.log('Council data loaded');
+        console.log('Council data loaded:', data.features?.length, 'features');
         setCouncilData(data);
       })
-      .catch(err => console.error('Council data error:', err));
-  }, []);
+      .catch(err => {
+        console.warn('Failed to load council data:', err);
+      })
+      .finally(() => setLoading(false));
+  }, [councilData]);
 
   useEffect(() => {
     if (!councilData || !visible) {
@@ -32,24 +42,33 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
       return;
     }
 
-    if (!map.getPane('boroughs')) {
-      const pane = map.createPane('boroughs');
+    // Create pane if needed
+    if (!map.getPane('councils')) {
+      const pane = map.createPane('councils');
       pane.style.zIndex = '450';
     }
 
-    if (layerRef.current) map.removeLayer(layerRef.current);
+    // Remove old layer
+    if (layerRef.current) {
+      map.removeLayer(layerRef.current);
+    }
 
+    // Add new layer
     layerRef.current = L.geoJSON(councilData, {
-      pane: 'boroughs',
+      pane: 'councils',
       style: {
         color: '#3A8DFF',
         weight: 2,
-        dashArray: '6,4',
+        dashArray: '6, 4',
         fillColor: '#3A8DFF',
-        fillOpacity: 0.05,
+        fillOpacity: 0.08,
       },
       onEachFeature: (feature, layer) => {
-        const name = feature.properties?.NAME || feature.properties?.name || 'Unknown';
+        const name = feature.properties?.NAME || 
+                     feature.properties?.name || 
+                     feature.properties?.LAD23NM || 
+                     'Unknown';
+        
         layer.on({
           mouseover: (e) => {
             e.target.setStyle({ weight: 3, fillOpacity: 0.15 });
@@ -60,7 +79,7 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
             }).openTooltip();
           },
           mouseout: (e) => {
-            e.target.setStyle({ weight: 2, fillOpacity: 0.05 });
+            e.target.setStyle({ weight: 2, fillOpacity: 0.08 });
             e.target.closeTooltip();
           },
         });

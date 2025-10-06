@@ -1,11 +1,24 @@
+import { NextResponse } from 'next/server';
 
-// App Router API handler
 export async function POST(request: Request) {
-  const body = await request.json();
-  const { stationId, vote, message } = body;
-  if (!stationId || (vote && !['good', 'bad'].includes(vote))) {
-    return Response.json({ error: 'Invalid input' }, { status: 400 });
+  try {
+    const body = await request.json();
+    const { email, message } = body;
+
+    // Log feedback (in production, save to database)
+    console.log('Feedback received:', {
+      email: email || 'anonymous',
+      message,
+      timestamp: new Date().toISOString(),
+      ip: request.headers.get('x-forwarded-for') || 'unknown',
+    });
+
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (error) {
+    console.error('Feedback error:', error);
+    return NextResponse.json(
+      { error: 'Failed to process feedback' },
+      { status: 500 }
+    );
   }
-  // Accept and log feedback (no DB for MVP)
-  return Response.json({ ok: true });
 }
