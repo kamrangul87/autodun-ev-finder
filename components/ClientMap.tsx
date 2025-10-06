@@ -1,17 +1,22 @@
+
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { MapContainer } from 'react-leaflet';
+
+// Stable initial center/zoom for MapContainer
+const INITIAL_CENTER: [number, number] = [51.5074, -0.1278]; // London
+const INITIAL_ZOOM: number = 11;
 
 type LatLng = [number, number];
 
 export type Props = {
-  initialCenter?: LatLng;
-  initialZoom?: number;
   showHeatmap?: boolean;
   showMarkers?: boolean;
   showCouncil?: boolean;
   heatOptions?: { intensity?: number; radius?: number; blur?: number };
   onStationsCount?: (n: number) => void;
+
 };
 
 type Station = {
@@ -30,15 +35,14 @@ type CouncilGeoJSON = {
   features: Array<any>;
 };
 
-export default function ClientMap({
-  initialCenter = [51.509865, -0.118092],
-  initialZoom = 7,
-  showHeatmap = true,
-  showMarkers = true,
-  showCouncil = false,
-  heatOptions,
-  onStationsCount,
-}: Props) {
+export default function ClientMap(props: Props) {
+  const {
+    showHeatmap = true,
+    showMarkers = true,
+    showCouncil = false,
+    heatOptions,
+    onStationsCount,
+  } = props;
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const heatLayerRef = useRef<any>(null);
@@ -173,8 +177,8 @@ export default function ClientMap({
       await import('leaflet.heat');
 
       const map = L.map(container as HTMLElement, {
-        center: initialCenter,
-        zoom: initialZoom,
+        center: INITIAL_CENTER,
+        zoom: INITIAL_ZOOM,
         zoomControl: true,
       });
       mapRef.current = map;
@@ -201,7 +205,7 @@ export default function ClientMap({
       markersLayerRef.current = null;
       councilLayerRef.current = null;
     };
-  }, [initialCenter, initialZoom]);
+  }, []);
 
   // Render / update markers
   useEffect(() => {
@@ -338,9 +342,22 @@ export default function ClientMap({
   }, [ready, showCouncil, councils]);
 
   // --- Ensure the map container height is fixed ---
+  // --- Ensure the map container height is fixed ---
+  // --- Stable MapContainer, no key/bounds, constant center/zoom ---
   return (
     <div className="w-full h-[calc(100vh-160px)]">
-      <div ref={mapDivRef} className="w-full h-full" />
+      {/* MapContainer is stable, not controlled by data. No key/bounds. */}
+      <MapContainer
+        center={INITIAL_CENTER}
+        zoom={INITIAL_ZOOM}
+        scrollWheelZoom
+        style={{ height: 'calc(100vh - 160px)', minHeight: 500 }}
+        className="w-full"
+      >
+        {/* layers & children go here */}
+      </MapContainer>
     </div>
   );
+  // --- REMOVE any automatic fitBounds/flyTo/setView/locate/invalidateSize on stations change ---
+  // (No useEffect for auto-centering on stations)
 }
