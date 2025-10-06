@@ -47,7 +47,8 @@ export default function ClientMap({
 
   // --- New refs for programmatic move/auto-fit/guarded fetch ---
   const isProgrammaticMove = useRef(false);
-  const hasZoomedToData = useRef(false);
+  const hasDoneInitialFetch = useRef(false);
+  const userInteracted = useRef(false);
   const fetchTimer = useRef<number | undefined>(undefined);
 
   const [stations, setStations] = useState<Station[]>([]);
@@ -99,13 +100,45 @@ export default function ClientMap({
     };
   }, [showCouncil, onStationsCount]);
 
-  // --- Guarded, debounced fetch on moveend ---
+  // --- Track real user interaction ---
   useEffect(() => {
-    if (!ready || !mapRef.current) return;
     const map = mapRef.current;
+    if (!map) return;
+    const mark = () => { userInteracted.current = true; };
+    map.on('dragstart', mark);
+    map.on('zoomstart', mark);
+    map.on('movestart', mark);
+    return () => {
+      map.off('dragstart', mark);
+      map.off('zoomstart', mark);
+      map.off('movestart', mark);
+    };
+  }, [ready]);
 
+  // --- Do ONE initial fetch after map is ready, NO fitBounds ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || hasDoneInitialFetch.current) return;
+    hasDoneInitialFetch.current = true;
+    const b = map.getBounds();
+    const bbox = `(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})`;
+    fetch(`/api/stations?bbox=${encodeURIComponent(bbox)}&max=200`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(data => {
+        setStations(data.items ?? []);
+        // Optionally set source if you use it
+        // setSource(data.source ?? '');
+      })
+      .catch(console.error);
+  }, [ready]);
+
+  // --- Debounced fetch on moveend, ONLY after user interaction and not programmatic ---
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
     const scheduleFetch = () => {
-      if (isProgrammaticMove.current) return; // ignore our own panning/zooming
+      if (isProgrammaticMove.current) return;
+      if (!userInteracted.current) return;
       if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
       fetchTimer.current = window.setTimeout(() => {
         const b = map.getBounds();
@@ -118,9 +151,8 @@ export default function ClientMap({
             // setSource(data.source ?? '');
           })
           .catch(console.error);
-      }, 400); // debounce
+      }, 450);
     };
-
     map.on('moveend', scheduleFetch);
     return () => {
       map.off('moveend', scheduleFetch);
@@ -226,22 +258,7 @@ export default function ClientMap({
     })();
   }, [ready, showMarkers, stations]);
 
-  // --- One-time auto-fit after stations set ---
-  useEffect(() => {
-    if (!ready || !mapRef.current) return;
-    const map = mapRef.current;
-    if (hasZoomedToData.current) return;
-    if (!stations || stations.length === 0) return;
-
-    (async () => {
-      const L = (await import('leaflet')).default;
-      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
-      isProgrammaticMove.current = true;
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
-      map.once('moveend', () => { isProgrammaticMove.current = false; });
-      hasZoomedToData.current = true;
-    })();
-  }, [ready, stations]);
+  // --- REMOVE any automatic fitBounds/centering effects on stations change ---
 
   // --- Zoom to data button handler ---
   function handleZoomToData() {
@@ -251,17 +268,17 @@ export default function ClientMap({
       const L = (await import('leaflet')).default;
       const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
       isProgrammaticMove.current = true;
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12 });
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12, animate: false });
       map.once('moveend', () => { isProgrammaticMove.current = false; });
     })();
   }
 
-  // --- Search action handler (recenters map, resets auto-fit flag) ---
+  // --- Search action handler (recenters map, resets userInteracted) ---
   function handleSearch(lat: number, lng: number) {
     const map = mapRef.current;
-    hasZoomedToData.current = false;
+    userInteracted.current = false;
     isProgrammaticMove.current = true;
-    map.setView([lat, lng], 12);
+    map.setView([lat, lng], 12, { animate: false });
     map.once('moveend', () => { isProgrammaticMove.current = false; });
   }
 
@@ -320,8 +337,9 @@ export default function ClientMap({
     })();
   }, [ready, showCouncil, councils]);
 
+  // --- Ensure the map container height is fixed ---
   return (
-    <div className="w-full h-full">
+    <div className="w-full h-[calc(100vh-160px)]">
       <div ref={mapDivRef} className="w-full h-full" />
     </div>
   );
