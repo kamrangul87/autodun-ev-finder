@@ -90,7 +90,6 @@ export default function Model1HeatmapClient() {
       </div>
       <div className="flex-1 relative" style={{ minHeight: 'calc(var(--vh, 1vh) * 100 - 56px)' }}>
         <ClientMap
-          stations={stations}
           bounds={bounds}
           councilGeoJson={councilGeoJson}
           showCouncil={showCouncil}
