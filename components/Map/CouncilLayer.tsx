@@ -15,25 +15,29 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
 
   useEffect(() => {
     fetch('/data/london-boroughs.geojson')
-      .then(res => res.json())
-      .then(data => setCouncilData(data))
-      .catch(err => console.error('Failed to load council data:', err));
+      .then(res => res.ok ? res.json() : Promise.reject('Not found'))
+      .then(data => {
+        console.log('Council data loaded');
+        setCouncilData(data);
+      })
+      .catch(err => console.error('Council data error:', err));
   }, []);
 
   useEffect(() => {
-    if (!councilData) return;
+    if (!councilData || !visible) {
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+      return;
+    }
 
     if (!map.getPane('boroughs')) {
       const pane = map.createPane('boroughs');
       pane.style.zIndex = '450';
     }
 
-    if (layerRef.current) {
-      map.removeLayer(layerRef.current);
-      layerRef.current = null;
-    }
-
-    if (!visible) return;
+    if (layerRef.current) map.removeLayer(layerRef.current);
 
     layerRef.current = L.geoJSON(councilData, {
       pane: 'boroughs',
@@ -41,25 +45,23 @@ export default function CouncilLayer({ visible }: CouncilLayerProps) {
         color: '#3A8DFF',
         weight: 2,
         dashArray: '6,4',
-        fillOpacity: 0.0,
+        fillColor: '#3A8DFF',
+        fillOpacity: 0.05,
       },
       onEachFeature: (feature, layer) => {
         const name = feature.properties?.NAME || feature.properties?.name || 'Unknown';
-        
         layer.on({
           mouseover: (e) => {
-            const target = e.target;
-            target.setStyle({ weight: 3 });
-            target.bindTooltip(name, {
+            e.target.setStyle({ weight: 3, fillOpacity: 0.15 });
+            e.target.bindTooltip(name, {
               permanent: false,
               direction: 'center',
               className: 'council-tooltip',
             }).openTooltip();
           },
           mouseout: (e) => {
-            const target = e.target;
-            target.setStyle({ weight: 2 });
-            target.closeTooltip();
+            e.target.setStyle({ weight: 2, fillOpacity: 0.05 });
+            e.target.closeTooltip();
           },
         });
       },
