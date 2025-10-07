@@ -1,8 +1,7 @@
-
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { MapContainer } from 'react-leaflet';
+import { MapContainer, TileLayer } from 'react-leaflet';
 
 // Stable initial center/zoom for MapContainer
 const INITIAL_CENTER: [number, number] = [51.5074, -0.1278]; // London
@@ -16,7 +15,6 @@ export type Props = {
   showCouncil?: boolean;
   heatOptions?: { intensity?: number; radius?: number; blur?: number };
   onStationsCount?: (n: number) => void;
-
 };
 
 type Station = {
@@ -43,13 +41,15 @@ export default function ClientMap(props: Props) {
     heatOptions,
     onStationsCount,
   } = props;
-  const mapDivRef = useRef<HTMLDivElement | null>(null);
+
+  // NOTE: we no longer manually create an <div ref={mapDivRef}> Leaflet map.
+  // MapContainer will create the Leaflet map; we capture it with whenCreated.
   const mapRef = useRef<any>(null);
   const heatLayerRef = useRef<any>(null);
   const markersLayerRef = useRef<any>(null);
   const councilLayerRef = useRef<any>(null);
 
-  // --- New refs for programmatic move/auto-fit/guarded fetch ---
+  // --- Programmatic/user move flags (kept as-is)
   const isProgrammaticMove = useRef(false);
   const hasDoneInitialFetch = useRef(false);
   const userInteracted = useRef(false);
@@ -59,7 +59,7 @@ export default function ClientMap(props: Props) {
   const [councils, setCouncils] = useState<CouncilGeoJSON | null>(null);
   const [ready, setReady] = useState(false);
 
-  // Fetch data with safe fallbacks
+  // Fetch data with safe fallbacks (unchanged)
   useEffect(() => {
     let aborted = false;
 
@@ -104,7 +104,7 @@ export default function ClientMap(props: Props) {
     };
   }, [showCouncil, onStationsCount]);
 
-  // --- Track real user interaction ---
+  // Track real user interaction (unchanged)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -119,7 +119,7 @@ export default function ClientMap(props: Props) {
     };
   }, [ready]);
 
-  // --- Do ONE initial fetch after map is ready, NO fitBounds ---
+  // Do ONE initial bbox fetch after map is ready (unchanged)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || hasDoneInitialFetch.current) return;
@@ -130,13 +130,11 @@ export default function ClientMap(props: Props) {
       .then(r => r.json())
       .then(data => {
         setStations(data.items ?? []);
-        // Optionally set source if you use it
-        // setSource(data.source ?? '');
       })
       .catch(console.error);
   }, [ready]);
 
-  // --- Debounced fetch on moveend, ONLY after user interaction and not programmatic ---
+  // Debounced fetch on moveend (unchanged)
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -151,8 +149,6 @@ export default function ClientMap(props: Props) {
           .then(r => r.json())
           .then(data => {
             setStations(data.items ?? []);
-            // Optionally set source if you use it
-            // setSource(data.source ?? '');
           })
           .catch(console.error);
       }, 450);
@@ -164,50 +160,26 @@ export default function ClientMap(props: Props) {
     };
   }, [ready]);
 
-  // Initialize Leaflet map purely on the client.
+  /**
+   * ✅ Minimal replacement for your previous manual Leaflet init:
+   * - We use MapContainer's `whenCreated` to get the Leaflet map instance.
+   * - After the map is created, we create reusable layer groups.
+   */
   useEffect(() => {
-    if (mapRef.current) return;
-
-    // ✅ capture element BEFORE async boundary so TS knows it's not null
-    const container = mapDivRef.current;
-    if (!container) return;
-
+    if (!ready || !mapRef.current) return;
     (async () => {
       const L = (await import('leaflet')).default;
-      await import('leaflet.heat');
-
-      const map = L.map(container as HTMLElement, {
-        center: INITIAL_CENTER,
-        zoom: INITIAL_ZOOM,
-        zoomControl: true,
-      });
-      mapRef.current = map;
-
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>',
-      }).addTo(map);
-
-      markersLayerRef.current = L.layerGroup();
-      heatLayerRef.current = null;
-      councilLayerRef.current = L.layerGroup();
-
-      setReady(true);
-    })();
-
-    return () => {
-      if (mapRef.current) {
-        mapRef.current.remove();
-        mapRef.current = null;
+      if (!markersLayerRef.current) {
+        markersLayerRef.current = L.layerGroup().addTo(mapRef.current);
       }
-      heatLayerRef.current = null;
-      markersLayerRef.current = null;
-      councilLayerRef.current = null;
-    };
-  }, []);
+      if (!councilLayerRef.current) {
+        councilLayerRef.current = L.layerGroup().addTo(mapRef.current);
+      }
+      // heatLayerRef is created on-demand in the heatmap effect below
+    })();
+  }, [ready]);
 
-  // Render / update markers
+  // Render / update markers (unchanged)
   useEffect(() => {
     if (!ready || !mapRef.current || !markersLayerRef.current) return;
 
@@ -262,9 +234,7 @@ export default function ClientMap(props: Props) {
     })();
   }, [ready, showMarkers, stations]);
 
-  // --- REMOVE any automatic fitBounds/centering effects on stations change ---
-
-  // --- Zoom to data button handler ---
+  // Zoom to data button handler (unchanged)
   function handleZoomToData() {
     const map = mapRef.current;
     if (!map || !stations?.length) return;
@@ -277,7 +247,7 @@ export default function ClientMap(props: Props) {
     })();
   }
 
-  // --- Search action handler (recenters map, resets userInteracted) ---
+  // Search action (unchanged)
   function handleSearch(lat: number, lng: number) {
     const map = mapRef.current;
     userInteracted.current = false;
@@ -286,7 +256,7 @@ export default function ClientMap(props: Props) {
     map.once('moveend', () => { isProgrammaticMove.current = false; });
   }
 
-  // Render / update heatmap
+  // Render / update heatmap (unchanged)
   useEffect(() => {
     if (!ready || !mapRef.current) return;
 
@@ -316,7 +286,7 @@ export default function ClientMap(props: Props) {
     })();
   }, [ready, showHeatmap, stations, heatOptions?.intensity, heatOptions?.radius, heatOptions?.blur]);
 
-  // Render / update council polygons
+  // Render / update council polygons (unchanged)
   useEffect(() => {
     if (!ready || !mapRef.current || !councilLayerRef.current) return;
 
@@ -341,23 +311,36 @@ export default function ClientMap(props: Props) {
     })();
   }, [ready, showCouncil, councils]);
 
-  // --- Ensure the map container height is fixed ---
-  // --- Ensure the map container height is fixed ---
-  // --- Stable MapContainer, no key/bounds, constant center/zoom ---
+  // Stable MapContainer (kept as you had it)
   return (
     <div className="w-full h-[calc(100vh-160px)]">
-      {/* MapContainer is stable, not controlled by data. No key/bounds. */}
       <MapContainer
         center={INITIAL_CENTER}
         zoom={INITIAL_ZOOM}
         scrollWheelZoom
         style={{ height: 'calc(100vh - 160px)', minHeight: 500 }}
         className="w-full"
+        // ✅ This replaces the old manual Leaflet init:
+        whenCreated={(m) => {
+          mapRef.current = m;
+          setReady(true);
+        }}
       >
-        {/* layers & children go here */}
+        {/* ✅ Base tiles must be inside MapContainer or the map looks blank */}
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          eventHandlers={{
+            tileerror: (e) => {
+              if (process.env.NODE_ENV !== 'production') {
+                // eslint-disable-next-line no-console
+                console.warn('tileerror', e);
+              }
+            },
+          }}
+        />
+        {/* Your overlay layers are managed imperatively via refs in effects above */}
       </MapContainer>
     </div>
   );
-  // --- REMOVE any automatic fitBounds/flyTo/setView/locate/invalidateSize on stations change ---
-  // (No useEffect for auto-centering on stations)
 }
