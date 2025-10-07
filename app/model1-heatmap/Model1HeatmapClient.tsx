@@ -37,6 +37,8 @@ function MapController({ onMapReady }: { onMapReady: (map: L.Map) => void }) {
   
   useEffect(() => {
     onMapReady(map);
+    // Force map to recalculate size
+    setTimeout(() => map.invalidateSize(), 100);
   }, [map, onMapReady]);
   
   return null;
@@ -48,9 +50,16 @@ export default function Model1HeatmapClient() {
   const [showMarkers, setShowMarkers] = useState(true);
   const [showCouncil, setShowCouncil] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    
     fetch('/api/stations?bbox=-0.5,51.3,0.3,51.7')
       .then(res => res.json())
       .then(data => {
@@ -59,7 +68,7 @@ export default function Model1HeatmapClient() {
         }
       })
       .catch(err => console.error('Failed to fetch stations:', err));
-  }, []);
+  }, [mounted]);
 
   const handleSearchResult = (lat: number, lon: number, zoom = 13) => {
     if (mapRef.current) {
@@ -67,8 +76,16 @@ export default function Model1HeatmapClient() {
     }
   };
 
+  if (!mounted) {
+    return (
+      <div style={{ width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div>Loading map...</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="relative w-full h-screen">
+    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
       <FloatingControls
         showHeatmap={showHeatmap}
         showMarkers={showMarkers}
@@ -83,12 +100,14 @@ export default function Model1HeatmapClient() {
       <MapContainer
         center={[51.5074, -0.1278]}
         zoom={11}
-        className="w-full h-full"
+        style={{ width: '100%', height: '100%' }}
         zoomControl={true}
+        scrollWheelZoom={true}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          maxZoom={19}
         />
         
         <MapController onMapReady={(map) => { mapRef.current = map; }} />
@@ -109,11 +128,43 @@ export default function Model1HeatmapClient() {
       </MapContainer>
 
       {feedbackOpen && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/50 p-4" onClick={() => setFeedbackOpen(false)}>
-          <div className="bg-white rounded-xl p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-xl font-bold mb-4">Feedback</h2>
-            <p className="text-sm text-gray-600">Feedback modal coming soon...</p>
-            <button onClick={() => setFeedbackOpen(false)} className="mt-4 px-4 py-2 bg-blue-600 text-white rounded">
+        <div 
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 2000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            padding: '16px'
+          }}
+          onClick={() => setFeedbackOpen(false)}
+        >
+          <div 
+            style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              padding: '24px',
+              maxWidth: '448px',
+              width: '100%'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: '20px', fontWeight: 'bold', marginBottom: '16px' }}>Feedback</h2>
+            <p style={{ fontSize: '14px', color: '#6b7280' }}>Feedback form coming soon...</p>
+            <button 
+              onClick={() => setFeedbackOpen(false)}
+              style={{
+                marginTop: '16px',
+                padding: '8px 16px',
+                backgroundColor: '#2563eb',
+                color: 'white',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer'
+              }}
+            >
               Close
             </button>
           </div>
