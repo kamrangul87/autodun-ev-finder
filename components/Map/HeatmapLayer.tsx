@@ -34,22 +34,27 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
       .map(s => [
         s.latitude,
         s.longitude,
-        (s.connectors || 1) * 0.3
+        Math.min((s.connectors || 1) * 0.4, 1.0)
       ]) as [number, number, number][];
+
+    if (heatPoints.length === 0) {
+      console.warn('[Heatmap] No valid points to render');
+      return;
+    }
 
     if (heatLayerRef.current) {
       map.removeLayer(heatLayerRef.current);
     }
 
     heatLayerRef.current = (L as any).heatLayer(heatPoints, {
-      radius: 20,
-      blur: 25,
-      maxZoom: 25, // Don't disappear at high zoom
+      radius: 22,
+      blur: 20,
+      maxZoom: 25,
       minOpacity: 0.3,
       max: 1.0,
       gradient: {
         0.0: 'rgba(0,0,255,0)',
-        0.2: 'rgba(0,0,255,0.5)',
+        0.2: 'rgba(0,0,255,0.6)',
         0.4: 'rgba(0,255,255,0.7)',
         0.6: 'rgba(0,255,0,0.8)',
         0.8: 'rgba(255,255,0,0.9)',

@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { Icon, Map as LeafletMap, LatLngBounds } from 'leaflet';
 import dynamic from 'next/dynamic';
 
+// Client-only dynamic imports to prevent SSR issues
 const CouncilLayer = dynamic(() => import('@/components/Map/CouncilLayer'), { ssr: false });
 const HeatLayer = dynamic(() => import('@/components/Map/HeatmapLayer'), { ssr: false });
 
@@ -34,19 +35,12 @@ function MapInit({ onReady, onMoveEnd }: { onReady: (map: LeafletMap) => void; o
     onReady(map);
     setTimeout(() => map.invalidateSize(), 100);
     
-    // Fetch on initial load (only once)
     if (!initializedRef.current) {
-      console.log('[MapInit] Initial fetch triggered');
       onMoveEnd(map.getBounds());
       initializedRef.current = true;
     }
     
-    // Fetch when map moves/zooms
-    const handleMoveEnd = () => {
-      console.log('[MapInit] Move end - fetching for new bounds');
-      onMoveEnd(map.getBounds());
-    };
-    
+    const handleMoveEnd = () => onMoveEnd(map.getBounds());
     map.on('moveend', handleMoveEnd);
     
     return () => {
@@ -66,7 +60,6 @@ export default function Model1HeatmapClient() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const fetchTimeoutRef = useRef<NodeJS.Timeout>();
   const lastFetchRef = useRef<string>('');
@@ -74,46 +67,24 @@ export default function Model1HeatmapClient() {
   useEffect(() => setMounted(true), []);
 
   const fetchStations = useCallback((bounds: LatLngBounds) => {
-    // Debounce fetching
-    if (fetchTimeoutRef.current) {
-      clearTimeout(fetchTimeoutRef.current);
-    }
+    if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
     
     fetchTimeoutRef.current = setTimeout(() => {
       const sw = bounds.getSouthWest();
       const ne = bounds.getNorthEast();
       const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
       
-      // Don't refetch if same bbox
-      if (bbox === lastFetchRef.current) {
-        console.log('[Fetch] Skipping - same bbox');
-        return;
-      }
+      if (bbox === lastFetchRef.current) return;
       
       lastFetchRef.current = bbox;
       setLoading(true);
-      setError(null);
-      console.log('[Fetch] Starting for bbox:', bbox);
       
-      const url = `/api/stations?bbox=${bbox}`;
-      console.log('[Fetch] URL:', url);
-      
-      fetch(url)
+      fetch(`/api/stations?bbox=${bbox}`)
         .then(res => {
-          console.log('[Fetch] Response status:', res.status);
-          console.log('[Fetch] Response headers:', Object.fromEntries(res.headers.entries()));
-          if (!res.ok) {
-            return res.text().then(text => {
-              console.error('[Fetch] Error response body:', text);
-              throw new Error(`HTTP ${res.status}: ${text.substring(0, 100)}`);
-            });
-          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           return res.json();
         })
         .then(data => {
-          console.log('[Fetch] Data received:', data);
-          console.log('[Fetch] Data type:', typeof data, 'Is array:', Array.isArray(data));
-          
           let items: any[] = [];
           
           if (Array.isArray(data)) {
@@ -127,13 +98,11 @@ export default function Model1HeatmapClient() {
           } else if (data.data) {
             items = data.data;
           } else {
-            console.warn('[Fetch] Unexpected data structure:', Object.keys(data));
+            console.warn('[Stations] Unexpected API structure:', Object.keys(data));
           }
           
-          console.log('[Fetch] Items extracted:', items.length);
-          
-          if (items.length > 0) {
-            console.log('[Fetch] Sample item:', items[0]);
+          if (items.length === 0) {
+            console.warn('[Stations] No stations in API response for bbox:', bbox);
           }
           
           const transformed = items.map((s: any, idx: number) => ({
@@ -143,27 +112,23 @@ export default function Model1HeatmapClient() {
             name: s.name || s.title || s.AddressInfo?.Title || 'Charging Station',
             address: s.address || s.AddressInfo?.AddressLine1,
             connectors: s.connectors || s.Connections?.length || s.NumberOfPoints || 0,
-          })).filter((s: Station) => 
-            s.latitude && s.longitude &&
-            !isNaN(s.latitude) && !isNaN(s.longitude) &&
-            s.latitude >= -90 && s.latitude <= 90 &&
-            s.longitude >= -180 && s.longitude <= 180
-          );
-          
-          console.log('[Fetch] Valid stations:', transformed.length);
-          if (transformed.length > 0) {
-            console.log('[Fetch] Sample transformed:', transformed[0]);
-          }
+          })).filter((s: Station) => {
+            const isValid = s.latitude && s.longitude &&
+              !isNaN(s.latitude) && !isNaN(s.longitude) &&
+              s.latitude >= -90 && s.latitude <= 90 &&
+              s.longitude >= -180 && s.longitude <= 180;
+            
+            if (!isValid && s.id) {
+              console.warn('[Stations] Invalid coordinates for station:', s.id);
+            }
+            
+            return isValid;
+          });
           
           setStations(transformed);
-          
-          if (transformed.length === 0 && items.length > 0) {
-            setError('API returned data but no valid coordinates found. Check console for details.');
-          }
         })
         .catch(err => {
-          console.error('[Fetch] Error:', err);
-          setError(`Failed to load stations: ${err.message}`);
+          console.error('[Stations] Fetch error:', err);
         })
         .finally(() => {
           setLoading(false);
@@ -177,22 +142,35 @@ export default function Model1HeatmapClient() {
 
     setSearching(true);
     try {
-      const response = await fetch(
+      const postcodesRes = await fetch(
+        `https://api.postcodes.io/postcodes/${encodeURIComponent(searchQuery)}`
+      );
+      
+      if (postcodesRes.ok) {
+        const data = await postcodesRes.json();
+        if (data.result) {
+          const { latitude, longitude } = data.result;
+          mapRef.current.flyTo([latitude, longitude], 13, { duration: 1.5 });
+          return;
+        }
+      }
+      
+      const nominatimRes = await fetch(
         `https://nominatim.openstreetmap.org/search?` +
         `q=${encodeURIComponent(searchQuery)}&format=json&countrycodes=gb&limit=1`,
         { headers: { 'User-Agent': 'autodun-ev-finder' } }
       );
 
-      if (!response.ok) throw new Error('Search failed');
-      
-      const results = await response.json();
-      
-      if (results && results[0]) {
-        const { lat, lon } = results[0];
-        mapRef.current.flyTo([parseFloat(lat), parseFloat(lon)], 13, { duration: 1.5 });
-      } else {
-        alert('Location not found');
+      if (nominatimRes.ok) {
+        const results = await nominatimRes.json();
+        if (results && results[0]) {
+          const { lat, lon } = results[0];
+          mapRef.current.flyTo([parseFloat(lat), parseFloat(lon)], 13, { duration: 1.5 });
+          return;
+        }
       }
+      
+      alert('Location not found. Try a UK postcode or city name.');
     } catch (error) {
       console.error('[Search] Error:', error);
       alert('Search failed. Please try again.');
@@ -202,7 +180,7 @@ export default function Model1HeatmapClient() {
   };
 
   if (!mounted) {
-    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading map...</div>;
   }
 
   return (
@@ -214,7 +192,7 @@ export default function Model1HeatmapClient() {
             type="text" 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search city or postcode..." 
+            placeholder="Search UK postcode or city..." 
             disabled={searching}
             style={{ flex: '1 1 auto', maxWidth: '320px', padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: '4px', fontSize: '14px' }}
           />
@@ -240,7 +218,6 @@ export default function Model1HeatmapClient() {
             🗺️ Council
           </label>
           {loading && <span style={{ color: '#2563eb', fontSize: '12px', fontWeight: '500' }}>⟳ Loading...</span>}
-          {error && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
         </div>
       </div>
 
@@ -289,6 +266,14 @@ export default function Model1HeatmapClient() {
           ))}
         </MapContainer>
       </div>
+
+      {!loading && stations.length === 0 && mounted && (
+        <div style={{ position: 'absolute', bottom: '20px', left: '50%', transform: 'translateX(-50%)', background: 'white', padding: '12px 20px', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 1000 }}>
+          <p style={{ margin: 0, fontSize: '14px', color: '#6b7280' }}>
+            No charging stations in this area
+          </p>
+        </div>
+      )}
     </div>
   );
 }
