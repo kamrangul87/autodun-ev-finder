@@ -31,7 +31,7 @@ export default function FloatingControls(props: FloatingControlsProps) {
 
   // Sync URL params
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = new URLSearchParams(searchParams?.toString() || '');
     params.set('heatmap', props.showHeatmap ? '1' : '0');
     params.set('markers', props.showMarkers ? '1' : '0');
     params.set('council', props.showCouncil ? '1' : '0');
@@ -75,7 +75,7 @@ export default function FloatingControls(props: FloatingControlsProps) {
         props.onSearchResult(pos.coords.latitude, pos.coords.longitude, 13);
         setSearching(false);
       },
-      (error) => {
+      () => {
         setSearchError('Location access denied');
         setSearching(false);
       }
