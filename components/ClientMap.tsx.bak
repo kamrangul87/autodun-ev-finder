@@ -296,6 +296,8 @@ export default function ClientMap(props: Props) {
 
       if (showCouncil && councils?.features?.length) {
         const layer = L.geoJSON(councils as any, {
+          pane: 'council',
+          onEachFeature: (_f:any, layer:any) => layer.bindTooltip(layer.feature?.properties?.name || 'Council', {sticky:true}),
           style: () => ({
             color: '#228be6',
             weight: 1,

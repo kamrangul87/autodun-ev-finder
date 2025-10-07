@@ -205,17 +205,9 @@ export default function ClientMap(props: Props) {
           marker.on('popupopen', () => {
             const btn = document.getElementById(`qb-${s.id}`);
             if (btn) {
-              btn.onclick = async () => {
-                try {
-                  await fetch('/api/feedback', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ stationId: s.id ?? null, action: 'quick' }),
-                  });
-                  marker.closePopup();
-                } catch {
-                  marker.closePopup();
-                }
+              btn.onclick = () => {
+                window.dispatchEvent(new CustomEvent('autodun:feedback', { detail: { stationId: s.id ?? null, name: s.name || 'Charging Point' } }));
+                marker.closePopup();
               };
             }
           });
