@@ -1,38 +1,24 @@
 import { NextRequest } from 'next/server';
-export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const q = (req.nextUrl.searchParams.get('q') || '').trim();
-  if (!q) return new Response(JSON.stringify({ error: 'q required' }), { status: 400 });
-  try {
-    const u = new URL('https://nominatim.openstreetmap.org/search');
-    u.searchParams.set('q', q);
-    u.searchParams.set('format', 'json');
-    u.searchParams.set('limit', '1');
-    const r = await fetch(u.toString(), {
-      headers: { 'User-Agent': 'Autodun EV Finder' },
-      cache: 'no-store',
-    });
-    const arr = await r.json();
-    if (!Array.isArray(arr) || !arr.length) {
-      return new Response(JSON.stringify({ error: 'no results' }), { status: 404 });
-    }
-    const hit = arr[0];
-    let bbox: number[] | null = null;
-    if (hit.boundingbox && Array.isArray(hit.boundingbox) && hit.boundingbox.length === 4) {
-      const raw = hit.boundingbox.map(Number);
-      // [south, north, west, east] -> [west, south, east, north]
-      bbox = [raw[2], raw[0], raw[3], raw[1]];
-    }
-    return new Response(JSON.stringify({
-      lat: hit.lat,
-      lon: hit.lon,
-      display_name: hit.display_name,
-      bbox
-    }), {
-      headers: { 'content-type': 'application/json' },
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ error: 'geocode failed' }), { status: 500 });
-  }
+  const q = req.nextUrl.searchParams.get('q') || '';
+  if (!q.trim()) return Response.json({ error: 'q required' }, { status: 400 });
+
+  // free + UK-biased nominatim
+  const url = new URL('https://nominatim.openstreetmap.org/search');
+  url.searchParams.set('q', q + ', UK');
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('limit', '1');
+  url.searchParams.set('addressdetails', '0');
+
+  const res = await fetch(url.toString(), {
+    headers: { 'User-Agent': 'autodun-nexus/1.0 (contact: site)' },
+    cache: 'no-store',
+  });
+  if (!res.ok) return Response.json({ error: 'geocode failed' }, { status: 502 });
+  const arr = await res.json() as any[];
+  if (!arr?.length) return Response.json({ error: 'not_found' }, { status: 404 });
+
+  const { lat, lon } = arr[0];
+  return Response.json({ lat: parseFloat(lat), lng: parseFloat(lon) });
 }
