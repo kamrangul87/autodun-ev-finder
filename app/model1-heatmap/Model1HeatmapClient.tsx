@@ -5,7 +5,6 @@ import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
 import { Icon, Map as LeafletMap } from 'leaflet';
 import dynamic from 'next/dynamic';
 
-// Guard SSR: council layer loaded client-only
 const CouncilLayer = dynamic(() => import('@/components/Map/CouncilLayer'), { ssr: false });
 
 interface Station {
@@ -27,20 +26,12 @@ const stationIcon = new Icon({
   shadowSize: [41, 41],
 });
 
-// Keep MapContainer mounted; control layers via refs
 function MapInit({ onReady }: { onReady: (map: LeafletMap) => void }) {
   const map = useMap();
-  
   useEffect(() => {
-    console.log('[MapInit] MapContainer mounted');
     onReady(map);
-    // Fix: invalidate size after mount to handle flex parent
-    requestAnimationFrame(() => {
-      map.invalidateSize();
-      console.log('[MapInit] Size invalidated');
-    });
+    setTimeout(() => map.invalidateSize(), 100);
   }, [map, onReady]);
-  
   return null;
 }
 
@@ -52,132 +43,75 @@ export default function Model1HeatmapClient() {
   const [mounted, setMounted] = useState(false);
   const mapRef = useRef<LeafletMap | null>(null);
 
-  useEffect(() => {
-    setMounted(true);
-    console.log('[Client] Component mounted');
-  }, []);
+  useEffect(() => setMounted(true), []);
 
-  // Fetch stations once; keep previous on error (stale-while-revalidate)
   useEffect(() => {
     if (!mounted) return;
-    
-    console.log('[Fetch] Fetching stations...');
     fetch('/api/stations?bbox=-0.5,51.3,0.3,51.7')
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
+      .then(res => res.ok ? res.json() : Promise.reject())
       .then(data => {
         const items = data.stations || data.items || [];
-        console.log('[Fetch] Success:', items.length, 'stations');
         if (items.length) setStations(items);
       })
-      .catch(err => {
-        console.warn('[Fetch] Failed, keeping previous:', err);
-      });
+      .catch(err => console.warn('Stations fetch failed:', err));
   }, [mounted]);
 
-  if (!mounted) {
-    return <div className="flex items-center justify-center flex-1 text-gray-600">Loading...</div>;
-  }
+  if (!mounted) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
 
   return (
-    <div className="flex flex-col h-full w-full">
-      {/* Header - normal flow, z-index keeps it above map */}
-      <div className="bg-white shadow-sm z-50 relative">
-        <div className="px-4 py-2 flex items-center gap-4 flex-wrap">
-          <a href="/" className="font-bold text-lg">⚡ autodun</a>
+    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', zIndex: 50, position: 'relative' }}>
+        <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <a href="/" style={{ fontWeight: 'bold', fontSize: '18px' }}>⚡ autodun</a>
           <input 
             type="text" 
             placeholder="Search city or postcode..." 
-            className="flex-1 max-w-xs px-3 py-1.5 border rounded text-sm"
+            style={{ flex: '1 1 auto', maxWidth: '320px', padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: '4px', fontSize: '14px' }}
           />
-          <button className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          <button style={{ padding: '6px 12px', background: '#2563eb', color: 'white', fontSize: '14px', borderRadius: '4px', border: 'none', cursor: 'pointer' }}>
             Go
           </button>
         </div>
-        <div className="px-4 pb-2 flex gap-4 text-sm">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input 
-              type="checkbox" 
-              checked={showHeatmap} 
-              onChange={() => {
-                console.log('[Toggle] Heatmap:', !showHeatmap);
-                setShowHeatmap(v => !v);
-              }} 
-            />
+        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showHeatmap} onChange={() => setShowHeatmap(v => !v)} />
             🔥 Heatmap
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input 
-              type="checkbox" 
-              checked={showMarkers} 
-              onChange={() => {
-                console.log('[Toggle] Markers:', !showMarkers);
-                setShowMarkers(v => !v);
-              }} 
-            />
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showMarkers} onChange={() => setShowMarkers(v => !v)} />
             📍 Markers
           </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input 
-              type="checkbox" 
-              checked={showCouncil} 
-              onChange={() => {
-                console.log('[Toggle] Council:', !showCouncil);
-                setShowCouncil(v => !v);
-              }} 
-            />
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
             🗺️ Council
           </label>
         </div>
       </div>
 
-      {/* Map region - inherits height via flex:1 (no fixed sizes) */}
-      <div className="flex-1 relative">
+      <div style={{ flex: '1 1 auto', position: 'relative', minHeight: 0 }}>
         <MapContainer
           center={[51.5074, -0.1278]}
           zoom={11}
-          className="h-full w-full"
+          style={{ width: '100%', height: '100%' }}
           zoomControl={true}
           scrollWheelZoom={true}
         >
-          {/* Base tiles always present - never conditionally rendered */}
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={19}
-            eventHandlers={{
-              tileerror: (e) => {
-                console.warn('[TileLayer] Tile error:', e);
-              }
-            }}
           />
-          
-          <MapInit onReady={(m) => { 
-            mapRef.current = m; 
-            console.log('[MapInit] Map ready');
-          }} />
-          
-          {/* Council layer - toggled via visibility prop (no remount) */}
+          <MapInit onReady={m => { mapRef.current = m; }} />
           {showCouncil && <CouncilLayer visible={true} />}
-          
-          {/* Markers - conditionally rendered but MapContainer stays mounted */}
           {showMarkers && stations
             .filter(s => s.latitude && s.longitude && !isNaN(s.latitude) && !isNaN(s.longitude))
             .map(station => (
-              <Marker 
-                key={station.id} 
-                position={[station.latitude, station.longitude]} 
-                icon={stationIcon}
-              >
+              <Marker key={station.id} position={[station.latitude, station.longitude]} icon={stationIcon}>
                 <Popup>
-                  <div className="min-w-[200px]">
-                    <h3 className="font-bold">{station.name || 'Charging Station'}</h3>
-                    {station.address && <p className="text-sm mt-1">{station.address}</p>}
-                    {station.connectors && (
-                      <p className="text-xs text-gray-600 mt-1">{station.connectors} connector(s)</p>
-                    )}
+                  <div style={{ minWidth: '200px' }}>
+                    <h3 style={{ fontWeight: 'bold' }}>{station.name || 'Charging Station'}</h3>
+                    {station.address && <p style={{ fontSize: '14px', marginTop: '4px' }}>{station.address}</p>}
+                    {station.connectors && <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '4px' }}>{station.connectors} connector(s)</p>}
                   </div>
                 </Popup>
               </Marker>
