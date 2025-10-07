@@ -22,3 +22,20 @@ html, body {
   height: 100%;
   width: 100%;
 }
+
+/* Leaflet stability fixes */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
