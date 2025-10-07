@@ -187,7 +187,7 @@ export default function Model1HeatmapClient() {
                 <div style={{ minWidth: '200px' }}>
                   <h3 style={{ fontWeight: 'bold', marginBottom: '4px' }}>{station.name || 'Charging Station'}</h3>
                   {station.address && <p style={{ fontSize: '14px', margin: '4px 0' }}>{station.address}</p>}
-                  {station.connectors > 0 && <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>{station.connectors} connector(s)</p>}
+                  {station.connectors && station.connectors > 0 && <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>{station.connectors} connector(s)</p>}
                 </div>
               </Popup>
             </Marker>
