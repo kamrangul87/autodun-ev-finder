@@ -1,4 +1,11 @@
-{
+cd /workspaces/autodun-ev-finder
+
+# Confirm you're on main with latest code
+git checkout main
+git pull origin main
+
+# Check that the deployment worked
+git log --oneline -5{
   "type": "FeatureCollection",
   "features": [
     {
