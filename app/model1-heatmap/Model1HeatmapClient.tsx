@@ -1,190 +1,294 @@
-"use client";
-import { useEffect, useState } from 'react';
-import ClientMap from '../../components/Map/ClientMap';
-// TopBar UI inline (no external file)
-import Toast from '../../components/ui/Toast';
-import { useRef } from 'react';
-import { Station } from '../../lib/stations/types';
-import { ensureLeafletIconFix } from '../../lib/leafletIconFix';
+'use client';
 
-const COUNCIL_URL = '/api/councils';
-const STATIONS_URL = '/api/stations';
+import { useEffect, useState, useRef, FormEvent, useCallback } from 'react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { Icon, Map as LeafletMap, LatLngBounds } from 'leaflet';
+import dynamic from 'next/dynamic';
+
+const CouncilLayer = dynamic(() => import('@/components/Map/CouncilLayer'), { ssr: false });
+const HeatLayer = dynamic(() => import('@/components/Map/HeatmapLayer'), { ssr: false });
+
+interface Station {
+  id: string;
+  latitude: number;
+  longitude: number;
+  name?: string;
+  address?: string;
+  connectors?: number;
+}
+
+const stationIcon = new Icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x-blue.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
+});
+
+function MapInit({ onReady, onMoveEnd }: { onReady: (map: LeafletMap) => void; onMoveEnd: (bounds: LatLngBounds) => void }) {
+  const map = useMap();
+  const initializedRef = useRef(false);
+  
+  useEffect(() => {
+    onReady(map);
+    setTimeout(() => map.invalidateSize(), 100);
+    
+    // Fetch on initial load (only once)
+    if (!initializedRef.current) {
+      console.log('[MapInit] Initial fetch triggered');
+      onMoveEnd(map.getBounds());
+      initializedRef.current = true;
+    }
+    
+    // Fetch when map moves/zooms
+    const handleMoveEnd = () => {
+      console.log('[MapInit] Move end - fetching for new bounds');
+      onMoveEnd(map.getBounds());
+    };
+    
+    map.on('moveend', handleMoveEnd);
+    
+    return () => {
+      map.off('moveend', handleMoveEnd);
+    };
+  }, [map, onReady, onMoveEnd]);
+  
+  return null;
+}
 
 export default function Model1HeatmapClient() {
   const [stations, setStations] = useState<Station[]>([]);
-  const [councilGeoJson, setCouncilGeoJson] = useState<any>(null);
-  const [showCouncil, setShowCouncil] = useState(false); // OFF by default
-  const [heatOn, setHeatOn] = useState(true);
-  const [markersOn, setMarkersOn] = useState(true);
-  const [bounds, setBounds] = useState<[[number, number], [number, number]]>([[51.49, -0.15], [51.52, -0.07]]);
-  const [toast, setToast] = useState('');
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackMsg, setFeedbackMsg] = useState('');
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showMarkers, setShowMarkers] = useState(true);
+  const [showCouncil, setShowCouncil] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const fetchTimeoutRef = useRef<NodeJS.Timeout>();
+  const lastFetchRef = useRef<string>('');
 
-  useEffect(() => {
-    ensureLeafletIconFix();
-    // Set real viewport height for mobile
-    const setVh = () => {
-      document.documentElement.style.setProperty('--vh', `${window.innerHeight * 0.01}px`);
-    };
-    setVh();
-    window.addEventListener('resize', setVh);
-    window.addEventListener('orientationchange', setVh);
-    return () => {
-      window.removeEventListener('resize', setVh);
-      window.removeEventListener('orientationchange', setVh);
-    };
-  }, []);
+  useEffect(() => setMounted(true), []);
 
-  useEffect(() => {
-    fetch(STATIONS_URL)
-      .then(res => res.json())
-      .then(data => {
-        setStations(data.items || []);
-        if (data.items && data.items.length) {
-          const lats = data.items.map((s: Station) => s.lat);
-          const lngs = data.items.map((s: Station) => s.lng);
-          setBounds([[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]]);
-        }
-      });
-  }, []);
-
-  function handleZoomToData() {
-    if (stations.length) {
-      const lats = stations.map(s => s.lat);
-      const lngs = stations.map(s => s.lng);
-      setBounds([[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]]);
-      setToast('Zoomed to data');
+  const fetchStations = useCallback((bounds: LatLngBounds) => {
+    // Debounce fetching
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
     }
-  }
-
-  function handleToggleCouncil() {
-    setShowCouncil(v => !v);
-    if (!councilGeoJson) {
-      fetch(COUNCIL_URL).then(res => res.json()).then(setCouncilGeoJson);
-    }
-  }
-
-  // Search logic: call /api/geocode?q=...
-  const searchInputRef = useRef<HTMLInputElement>(null);
-  const [searchLoading, setSearchLoading] = useState(false);
-  async function handleSearchSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const q = searchInputRef.current?.value?.trim();
-    if (!q) return;
-    setSearchLoading(true);
-    try {
-      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      if (data.bbox) {
-        // bbox: [west, south, east, north]
-        setBounds([[data.bbox[1], data.bbox[0]], [data.bbox[3], data.bbox[2]]]);
-        setToast('Map centered to search bounds');
-      } else if (data.lat && data.lon) {
-        setBounds([[parseFloat(data.lat)-0.01, parseFloat(data.lon)-0.01],[parseFloat(data.lat)+0.01,parseFloat(data.lon)+0.01]]);
-        setToast('Map centered to search');
-      } else {
-        setToast('No result');
+    
+    fetchTimeoutRef.current = setTimeout(() => {
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+      
+      // Don't refetch if same bbox
+      if (bbox === lastFetchRef.current) {
+        console.log('[Fetch] Skipping - same bbox');
+        return;
       }
-    } catch {
-      setToast('Search failed');
+      
+      lastFetchRef.current = bbox;
+      setLoading(true);
+      setError(null);
+      console.log('[Fetch] Starting for bbox:', bbox);
+      
+      const url = `/api/stations?bbox=${bbox}`;
+      console.log('[Fetch] URL:', url);
+      
+      fetch(url)
+        .then(res => {
+          console.log('[Fetch] Response status:', res.status);
+          console.log('[Fetch] Response headers:', Object.fromEntries(res.headers.entries()));
+          if (!res.ok) {
+            return res.text().then(text => {
+              console.error('[Fetch] Error response body:', text);
+              throw new Error(`HTTP ${res.status}: ${text.substring(0, 100)}`);
+            });
+          }
+          return res.json();
+        })
+        .then(data => {
+          console.log('[Fetch] Data received:', data);
+          console.log('[Fetch] Data type:', typeof data, 'Is array:', Array.isArray(data));
+          
+          let items: any[] = [];
+          
+          if (Array.isArray(data)) {
+            items = data;
+          } else if (data.stations) {
+            items = data.stations;
+          } else if (data.items) {
+            items = data.items;
+          } else if (data.POIs) {
+            items = data.POIs;
+          } else if (data.data) {
+            items = data.data;
+          } else {
+            console.warn('[Fetch] Unexpected data structure:', Object.keys(data));
+          }
+          
+          console.log('[Fetch] Items extracted:', items.length);
+          
+          if (items.length > 0) {
+            console.log('[Fetch] Sample item:', items[0]);
+          }
+          
+          const transformed = items.map((s: any, idx: number) => ({
+            id: s.id || s.ID || s.uuid || `station-${idx}`,
+            latitude: s.latitude || s.lat || s.AddressInfo?.Latitude,
+            longitude: s.longitude || s.lng || s.lon || s.AddressInfo?.Longitude,
+            name: s.name || s.title || s.AddressInfo?.Title || 'Charging Station',
+            address: s.address || s.AddressInfo?.AddressLine1,
+            connectors: s.connectors || s.Connections?.length || s.NumberOfPoints || 0,
+          })).filter((s: Station) => 
+            s.latitude && s.longitude &&
+            !isNaN(s.latitude) && !isNaN(s.longitude) &&
+            s.latitude >= -90 && s.latitude <= 90 &&
+            s.longitude >= -180 && s.longitude <= 180
+          );
+          
+          console.log('[Fetch] Valid stations:', transformed.length);
+          if (transformed.length > 0) {
+            console.log('[Fetch] Sample transformed:', transformed[0]);
+          }
+          
+          setStations(transformed);
+          
+          if (transformed.length === 0 && items.length > 0) {
+            setError('API returned data but no valid coordinates found. Check console for details.');
+          }
+        })
+        .catch(err => {
+          console.error('[Fetch] Error:', err);
+          setError(`Failed to load stations: ${err.message}`);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }, 800);
+  }, []);
+
+  const handleSearch = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim() || searching || !mapRef.current) return;
+
+    setSearching(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?` +
+        `q=${encodeURIComponent(searchQuery)}&format=json&countrycodes=gb&limit=1`,
+        { headers: { 'User-Agent': 'autodun-ev-finder' } }
+      );
+
+      if (!response.ok) throw new Error('Search failed');
+      
+      const results = await response.json();
+      
+      if (results && results[0]) {
+        const { lat, lon } = results[0];
+        mapRef.current.flyTo([parseFloat(lat), parseFloat(lon)], 13, { duration: 1.5 });
+      } else {
+        alert('Location not found');
+      }
+    } catch (error) {
+      console.error('[Search] Error:', error);
+      alert('Search failed. Please try again.');
     } finally {
-      setSearchLoading(false);
+      setSearching(false);
     }
+  };
+
+  if (!mounted) {
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
   }
 
   return (
-    <div className="h-screen w-full flex flex-col">
-      {/* Sticky TopBar UI */}
-      <div className="sticky top-0 z-50 bg-white/90 shadow flex flex-col md:flex-row md:items-center gap-2 px-3 py-2 border-b">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-lg text-blue-900">autodun</span>
-        </div>
-        <form className="flex-1 flex items-center gap-2" onSubmit={handleSearchSubmit}>
-          <input
-            ref={searchInputRef}
-            type="text"
-            className="px-2 py-1 border rounded w-full max-w-md"
-            placeholder="Search city or postcode…"
-            disabled={searchLoading}
+    <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ background: 'white', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', zIndex: 50, position: 'relative' }}>
+        <form onSubmit={handleSearch} style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+          <a href="/" style={{ fontWeight: 'bold', fontSize: '18px', textDecoration: 'none', color: 'inherit' }}>⚡ autodun</a>
+          <input 
+            type="text" 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search city or postcode..." 
+            disabled={searching}
+            style={{ flex: '1 1 auto', maxWidth: '320px', padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: '4px', fontSize: '14px' }}
           />
-          <button type="submit" className="px-3 py-1 bg-blue-600 text-white rounded" disabled={searchLoading}>
-            {searchLoading ? <span className="animate-spin">⏳</span> : 'Search'}
+          <button 
+            type="submit"
+            disabled={searching || !searchQuery.trim()}
+            style={{ padding: '6px 12px', background: searching ? '#9ca3af' : '#2563eb', color: 'white', fontSize: '14px', borderRadius: '4px', border: 'none', cursor: searching ? 'not-allowed' : 'pointer' }}
+          >
+            {searching ? 'Searching...' : 'Go'}
           </button>
-          <button type="button" className="px-3 py-1 bg-green-600 text-white rounded" onClick={handleZoomToData}>Zoom to data</button>
         </form>
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" checked={heatOn} onChange={e => setHeatOn(e.target.checked)} />
-            <span className="text-sm">Heatmap</span>
+        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showHeatmap} onChange={() => setShowHeatmap(v => !v)} />
+            🔥 Heatmap
           </label>
-          <label className="flex items-center gap-1 cursor-pointer">
-            <input type="checkbox" checked={markersOn} onChange={e => setMarkersOn(e.target.checked)} />
-            <span className="text-sm">Markers</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input type="checkbox" checked={showMarkers} onChange={() => setShowMarkers(v => !v)} />
+            📍 Markers ({stations.length})
           </label>
-          <label className="flex items-center gap-1 cursor-pointer">
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
-            <span className="text-sm">Council</span>
+            🗺️ Council
           </label>
-          <button className="px-2 py-1 bg-amber-500 text-white rounded" onClick={() => setFeedbackOpen(true)}>Feedback</button>
+          {loading && <span style={{ color: '#2563eb', fontSize: '12px', fontWeight: '500' }}>⟳ Loading...</span>}
+          {error && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
         </div>
       </div>
-      <div className="flex-1 relative" style={{ minHeight: 'calc(var(--vh, 1vh) * 100 - 56px)' }}>
-        <ClientMap
-          bounds={bounds}
-          councilGeoJson={councilGeoJson}
-          showCouncil={showCouncil}
-          heatOn={heatOn}
-          markersOn={markersOn}
-          onZoomToData={handleZoomToData}
-        />
+
+      <div style={{ flex: '1 1 auto', position: 'relative', minHeight: 0 }}>
+        <MapContainer
+          center={[51.5074, -0.1278]}
+          zoom={11}
+          style={{ width: '100%', height: '100%' }}
+          zoomControl={true}
+          scrollWheelZoom={true}
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            maxZoom={19}
+          />
+          <MapInit 
+            onReady={m => { mapRef.current = m; }} 
+            onMoveEnd={fetchStations}
+          />
+          
+          {showCouncil && <CouncilLayer visible={true} />}
+          
+          {showHeatmap && stations.length > 0 && (
+            <HeatLayer stations={stations} visible={true} />
+          )}
+          
+          {showMarkers && stations.map(station => (
+            <Marker 
+              key={station.id} 
+              position={[station.latitude, station.longitude]} 
+              icon={stationIcon}
+            >
+              <Popup>
+                <div style={{ minWidth: '200px' }}>
+                  <h3 style={{ fontWeight: 'bold', marginBottom: '4px' }}>{station.name}</h3>
+                  {station.address && <p style={{ fontSize: '14px', margin: '4px 0' }}>{station.address}</p>}
+                  {station.connectors && station.connectors > 0 && (
+                    <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>
+                      {station.connectors} connector(s)
+                    </p>
+                  )}
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
       </div>
-      {feedbackOpen && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-            <h2 className="text-lg font-bold mb-2">Feedback</h2>
-            <textarea
-              className="w-full border rounded p-2 mb-3"
-              rows={3}
-              value={feedbackMsg}
-              onChange={e => setFeedbackMsg(e.target.value)}
-              placeholder="Your feedback..."
-              disabled={feedbackLoading}
-            />
-            <div className="flex gap-2 justify-end">
-              <button className="px-3 py-1 rounded bg-gray-200" onClick={() => setFeedbackOpen(false)} disabled={feedbackLoading}>Cancel</button>
-              <button
-                className="px-4 py-1 rounded bg-amber-500 text-white font-semibold"
-                disabled={feedbackLoading || !feedbackMsg.trim()}
-                onClick={async () => {
-                  setFeedbackLoading(true);
-                  try {
-                    const res = await fetch('/api/feedback', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ stationId: 'ui', vote: 'good', message: feedbackMsg }),
-                    });
-                    const data = await res.json();
-                    if (data.ok) {
-                      setToast('Feedback sent!');
-                      setFeedbackOpen(false);
-                      setFeedbackMsg('');
-                    } else {
-                      setToast('Error sending feedback');
-                    }
-                  } catch {
-                    setToast('Error sending feedback');
-                  } finally {
-                    setFeedbackLoading(false);
-                  }
-                }}
-              >Send</button>
-            </div>
-          </div>
-        </div>
-      )}
-      <Toast message={toast} show={!!toast} onClose={() => setToast('')} />
     </div>
   );
 }
