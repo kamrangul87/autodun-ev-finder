@@ -49,3 +49,12 @@ html, body {
 .leaflet-container img {
   max-width: none !important;
 }
+
+/* Leaflet container inherits parent height (flex-based) */
+.leaflet-container {
+  font-family: inherit;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+}
