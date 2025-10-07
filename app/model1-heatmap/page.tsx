@@ -6,7 +6,20 @@ const Model1HeatmapClient = dynamic(() => import('./Model1HeatmapClient'), {
   loading: () => (
     <div className="min-h-screen flex items-center justify-center">
       <p className="text-gray-600">Loading map...</p>
-    </div>
+    
+async function onGoClick() {
+  try {
+    const q = inputRef.current?.value?.trim() || "";
+    if (!q) return;
+    const r = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`, { cache: 'no-store' });
+    const j = await r.json();
+    if (j?.lat && j?.lng) {
+      window.dispatchEvent(new CustomEvent('autodun:flyto', { detail: { lat: j.lat, lng: j.lng } }));
+    }
+  } catch {}
+}
+
+</div>
   )
 });
 
