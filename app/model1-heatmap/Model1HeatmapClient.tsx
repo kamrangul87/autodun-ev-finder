@@ -64,7 +64,7 @@ export default function Model1HeatmapClient() {
         console.log('[API] Raw response:', data);
         
         // Try multiple possible data structures
-        let items = [];
+        let items: any[] = [];
         
         if (Array.isArray(data)) {
           items = data;
