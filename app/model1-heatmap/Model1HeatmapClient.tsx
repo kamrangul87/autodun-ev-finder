@@ -28,25 +28,29 @@ const stationIcon = new Icon({
 
 function MapInit({ onReady, onMoveEnd }: { onReady: (map: LeafletMap) => void; onMoveEnd: (bounds: LatLngBounds) => void }) {
   const map = useMap();
+  const initializedRef = useRef(false);
   
   useEffect(() => {
     onReady(map);
     setTimeout(() => map.invalidateSize(), 100);
     
-    // Fetch on initial load
-    onMoveEnd(map.getBounds());
+    // Fetch on initial load (only once)
+    if (!initializedRef.current) {
+      console.log('[MapInit] Initial fetch triggered');
+      onMoveEnd(map.getBounds());
+      initializedRef.current = true;
+    }
     
     // Fetch when map moves/zooms
     const handleMoveEnd = () => {
+      console.log('[MapInit] Move end - fetching for new bounds');
       onMoveEnd(map.getBounds());
     };
     
     map.on('moveend', handleMoveEnd);
-    map.on('zoomend', handleMoveEnd);
     
     return () => {
       map.off('moveend', handleMoveEnd);
-      map.off('zoomend', handleMoveEnd);
     };
   }, [map, onReady, onMoveEnd]);
   
@@ -62,8 +66,10 @@ export default function Model1HeatmapClient() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const mapRef = useRef<LeafletMap | null>(null);
   const fetchTimeoutRef = useRef<NodeJS.Timeout>();
+  const lastFetchRef = useRef<string>('');
 
   useEffect(() => setMounted(true), []);
 
@@ -78,17 +84,35 @@ export default function Model1HeatmapClient() {
       const ne = bounds.getNorthEast();
       const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
       
-      setLoading(true);
-      console.log('[API] Fetching for bbox:', bbox);
+      // Don't refetch if same bbox
+      if (bbox === lastFetchRef.current) {
+        console.log('[Fetch] Skipping - same bbox');
+        return;
+      }
       
-      fetch(`/api/stations?bbox=${bbox}`)
+      lastFetchRef.current = bbox;
+      setLoading(true);
+      setError(null);
+      console.log('[Fetch] Starting for bbox:', bbox);
+      
+      const url = `/api/stations?bbox=${bbox}`;
+      console.log('[Fetch] URL:', url);
+      
+      fetch(url)
         .then(res => {
-          console.log('[API] Response status:', res.status);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          console.log('[Fetch] Response status:', res.status);
+          console.log('[Fetch] Response headers:', Object.fromEntries(res.headers.entries()));
+          if (!res.ok) {
+            return res.text().then(text => {
+              console.error('[Fetch] Error response body:', text);
+              throw new Error(`HTTP ${res.status}: ${text.substring(0, 100)}`);
+            });
+          }
           return res.json();
         })
         .then(data => {
-          console.log('[API] Raw response:', data);
+          console.log('[Fetch] Data received:', data);
+          console.log('[Fetch] Data type:', typeof data, 'Is array:', Array.isArray(data));
           
           let items: any[] = [];
           
@@ -102,12 +126,18 @@ export default function Model1HeatmapClient() {
             items = data.POIs;
           } else if (data.data) {
             items = data.data;
+          } else {
+            console.warn('[Fetch] Unexpected data structure:', Object.keys(data));
           }
           
-          console.log('[API] Extracted items:', items.length);
+          console.log('[Fetch] Items extracted:', items.length);
+          
+          if (items.length > 0) {
+            console.log('[Fetch] Sample item:', items[0]);
+          }
           
           const transformed = items.map((s: any, idx: number) => ({
-            id: s.id || s.ID || s.uuid || String(idx),
+            id: s.id || s.ID || s.uuid || `station-${idx}`,
             latitude: s.latitude || s.lat || s.AddressInfo?.Latitude,
             longitude: s.longitude || s.lng || s.lon || s.AddressInfo?.Longitude,
             name: s.name || s.title || s.AddressInfo?.Title || 'Charging Station',
@@ -120,16 +150,25 @@ export default function Model1HeatmapClient() {
             s.longitude >= -180 && s.longitude <= 180
           );
           
-          console.log('[API] Valid transformed stations:', transformed.length);
+          console.log('[Fetch] Valid stations:', transformed.length);
+          if (transformed.length > 0) {
+            console.log('[Fetch] Sample transformed:', transformed[0]);
+          }
+          
           setStations(transformed);
+          
+          if (transformed.length === 0 && items.length > 0) {
+            setError('API returned data but no valid coordinates found. Check console for details.');
+          }
         })
         .catch(err => {
-          console.error('[API] Fetch error:', err);
+          console.error('[Fetch] Error:', err);
+          setError(`Failed to load stations: ${err.message}`);
         })
         .finally(() => {
           setLoading(false);
         });
-    }, 500); // Debounce 500ms
+    }, 800);
   }, []);
 
   const handleSearch = async (e: FormEvent) => {
@@ -187,7 +226,7 @@ export default function Model1HeatmapClient() {
             {searching ? 'Searching...' : 'Go'}
           </button>
         </form>
-        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px', alignItems: 'center' }}>
+        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={showHeatmap} onChange={() => setShowHeatmap(v => !v)} />
             🔥 Heatmap
@@ -200,7 +239,8 @@ export default function Model1HeatmapClient() {
             <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
             🗺️ Council
           </label>
-          {loading && <span style={{ color: '#6b7280', fontSize: '12px' }}>Loading stations...</span>}
+          {loading && <span style={{ color: '#2563eb', fontSize: '12px', fontWeight: '500' }}>⟳ Loading...</span>}
+          {error && <span style={{ color: '#dc2626', fontSize: '12px' }}>{error}</span>}
         </div>
       </div>
 
