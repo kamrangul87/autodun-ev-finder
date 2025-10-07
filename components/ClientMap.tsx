@@ -319,8 +319,9 @@ export default function ClientMap(props: Props) {
         scrollWheelZoom
         style={{ height: 'calc(100vh - 160px)', minHeight: 500 }}
         className="w-full"
+        ref={mapRef as any}
         // ✅ This replaces the old manual Leaflet init:
-        whenReady={(e) => { mapRef.current = (e.target as any); setReady(true); }}
+        whenReady={() => { setReady(true); }}
       >
         {/* ✅ Base tiles must be inside MapContainer or the map looks blank */}
         <TileLayer
