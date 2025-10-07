@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useRef, useState } from 'react';
 
-const Model1HeatmapClient = dynamic(() => import('./Model1HeatmapClient'), {
+const Model1HeatmapClient = dynamic<{ onStationsCount?: (n: number) => void }>(() => import('./Model1HeatmapClient'), {
   ssr: false,
   loading: () => (
     <div className="min-h-screen flex items-center justify-center">
