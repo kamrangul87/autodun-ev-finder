@@ -34,7 +34,7 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
       .map(s => [
         s.latitude,
         s.longitude,
-        Math.min((s.connectors || 1) * 0.5, 1)
+        (s.connectors || 1) * 0.3
       ]) as [number, number, number][];
 
     if (heatLayerRef.current) {
@@ -42,15 +42,18 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
     }
 
     heatLayerRef.current = (L as any).heatLayer(heatPoints, {
-      radius: 25,
-      blur: 15,
-      maxZoom: 17,
+      radius: 20,
+      blur: 25,
+      maxZoom: 25, // Don't disappear at high zoom
+      minOpacity: 0.3,
       max: 1.0,
       gradient: {
-        0.0: 'blue',
-        0.5: 'lime',
-        0.7: 'yellow',
-        1.0: 'red'
+        0.0: 'rgba(0,0,255,0)',
+        0.2: 'rgba(0,0,255,0.5)',
+        0.4: 'rgba(0,255,255,0.7)',
+        0.6: 'rgba(0,255,0,0.8)',
+        0.8: 'rgba(255,255,0,0.9)',
+        1.0: 'rgba(255,0,0,1)'
       }
     }).addTo(map);
 

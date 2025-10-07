@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState, useRef, FormEvent } from 'react';
+import { useEffect, useState, useRef, FormEvent, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import { Icon, Map as LeafletMap } from 'leaflet';
+import { Icon, Map as LeafletMap, LatLngBounds } from 'leaflet';
 import dynamic from 'next/dynamic';
 
 const CouncilLayer = dynamic(() => import('@/components/Map/CouncilLayer'), { ssr: false });
@@ -26,12 +26,30 @@ const stationIcon = new Icon({
   shadowSize: [41, 41],
 });
 
-function MapInit({ onReady }: { onReady: (map: LeafletMap) => void }) {
+function MapInit({ onReady, onMoveEnd }: { onReady: (map: LeafletMap) => void; onMoveEnd: (bounds: LatLngBounds) => void }) {
   const map = useMap();
+  
   useEffect(() => {
     onReady(map);
     setTimeout(() => map.invalidateSize(), 100);
-  }, [map, onReady]);
+    
+    // Fetch on initial load
+    onMoveEnd(map.getBounds());
+    
+    // Fetch when map moves/zooms
+    const handleMoveEnd = () => {
+      onMoveEnd(map.getBounds());
+    };
+    
+    map.on('moveend', handleMoveEnd);
+    map.on('zoomend', handleMoveEnd);
+    
+    return () => {
+      map.off('moveend', handleMoveEnd);
+      map.off('zoomend', handleMoveEnd);
+    };
+  }, [map, onReady, onMoveEnd]);
+  
   return null;
 }
 
@@ -43,82 +61,76 @@ export default function Model1HeatmapClient() {
   const [mounted, setMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const mapRef = useRef<LeafletMap | null>(null);
+  const fetchTimeoutRef = useRef<NodeJS.Timeout>();
 
   useEffect(() => setMounted(true), []);
 
-  useEffect(() => {
-    if (!mounted) return;
+  const fetchStations = useCallback((bounds: LatLngBounds) => {
+    // Debounce fetching
+    if (fetchTimeoutRef.current) {
+      clearTimeout(fetchTimeoutRef.current);
+    }
     
-    setLoading(true);
-    console.log('[API] Fetching from /api/stations...');
-    
-    fetch('/api/stations?bbox=-0.5,51.3,0.3,51.7')
-      .then(res => {
-        console.log('[API] Response status:', res.status);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        console.log('[API] Raw response:', data);
-        
-        // Try multiple possible data structures
-        let items: any[] = [];
-        
-        if (Array.isArray(data)) {
-          items = data;
-        } else if (data.stations) {
-          items = data.stations;
-        } else if (data.items) {
-          items = data.items;
-        } else if (data.POIs) {
-          items = data.POIs;
-        } else if (data.data) {
-          items = data.data;
-        }
-        
-        console.log('[API] Extracted items:', items.length);
-        
-        if (items.length === 0) {
-          console.warn('[API] No stations found in response');
-          return;
-        }
-        
-        // Transform to our format
-        const transformed = items.map((s: any, idx: number) => {
-          const station = {
+    fetchTimeoutRef.current = setTimeout(() => {
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+      
+      setLoading(true);
+      console.log('[API] Fetching for bbox:', bbox);
+      
+      fetch(`/api/stations?bbox=${bbox}`)
+        .then(res => {
+          console.log('[API] Response status:', res.status);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then(data => {
+          console.log('[API] Raw response:', data);
+          
+          let items: any[] = [];
+          
+          if (Array.isArray(data)) {
+            items = data;
+          } else if (data.stations) {
+            items = data.stations;
+          } else if (data.items) {
+            items = data.items;
+          } else if (data.POIs) {
+            items = data.POIs;
+          } else if (data.data) {
+            items = data.data;
+          }
+          
+          console.log('[API] Extracted items:', items.length);
+          
+          const transformed = items.map((s: any, idx: number) => ({
             id: s.id || s.ID || s.uuid || String(idx),
             latitude: s.latitude || s.lat || s.AddressInfo?.Latitude,
             longitude: s.longitude || s.lng || s.lon || s.AddressInfo?.Longitude,
             name: s.name || s.title || s.AddressInfo?.Title || 'Charging Station',
             address: s.address || s.AddressInfo?.AddressLine1,
             connectors: s.connectors || s.Connections?.length || s.NumberOfPoints || 0,
-          };
+          })).filter((s: Station) => 
+            s.latitude && s.longitude &&
+            !isNaN(s.latitude) && !isNaN(s.longitude) &&
+            s.latitude >= -90 && s.latitude <= 90 &&
+            s.longitude >= -180 && s.longitude <= 180
+          );
           
-          return station;
-        }).filter((s: Station) => 
-          s.latitude && s.longitude &&
-          !isNaN(s.latitude) && !isNaN(s.longitude) &&
-          s.latitude >= -90 && s.latitude <= 90 &&
-          s.longitude >= -180 && s.longitude <= 180
-        );
-        
-        console.log('[API] Valid transformed stations:', transformed.length);
-        
-        if (transformed.length > 0) {
-          console.log('[API] Sample station:', transformed[0]);
+          console.log('[API] Valid transformed stations:', transformed.length);
           setStations(transformed);
-        }
-      })
-      .catch(err => {
-        console.error('[API] Fetch error:', err);
-        alert(`Failed to load charging stations: ${err.message}. Check console for details.`);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [mounted]);
+        })
+        .catch(err => {
+          console.error('[API] Fetch error:', err);
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }, 500); // Debounce 500ms
+  }, []);
 
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
@@ -205,7 +217,10 @@ export default function Model1HeatmapClient() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             maxZoom={19}
           />
-          <MapInit onReady={m => { mapRef.current = m; }} />
+          <MapInit 
+            onReady={m => { mapRef.current = m; }} 
+            onMoveEnd={fetchStations}
+          />
           
           {showCouncil && <CouncilLayer visible={true} />}
           
@@ -234,15 +249,6 @@ export default function Model1HeatmapClient() {
           ))}
         </MapContainer>
       </div>
-
-      {stations.length === 0 && !loading && (
-        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 1000 }}>
-          <p style={{ margin: 0, fontWeight: 'bold' }}>No charging stations found</p>
-          <p style={{ margin: '8px 0 0', fontSize: '14px', color: '#6b7280' }}>
-            Check browser console for API response details
-          </p>
-        </div>
-      )}
     </div>
   );
 }
