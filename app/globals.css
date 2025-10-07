@@ -39,3 +39,13 @@ html, body {
   height: 100%;
   overflow: hidden;
 }
+
+/* Protect header z-index and map height */
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+}

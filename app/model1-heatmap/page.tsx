@@ -2,7 +2,7 @@ import dynamic from 'next/dynamic';
 
 const Model1HeatmapClient = dynamic(() => import('./Model1HeatmapClient'), { 
   ssr: false,
-  loading: () => <div className="h-screen flex items-center justify-center">Loading map...</div>
+  loading: () => <div className="h-screen flex items-center justify-center">Loading...</div>
 });
 
 export default function Page() {
