@@ -6,6 +6,7 @@ import { Icon, Map as LeafletMap } from 'leaflet';
 import dynamic from 'next/dynamic';
 
 const CouncilLayer = dynamic(() => import('@/components/Map/CouncilLayer'), { ssr: false });
+const HeatLayer = dynamic(() => import('@/components/Map/HeatmapLayer'), { ssr: false });
 
 interface Station {
   id: string;
@@ -17,8 +18,7 @@ interface Station {
 }
 
 const stationIcon = new Icon({
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x-blue.png',
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
   iconSize: [25, 41],
   iconAnchor: [12, 41],
@@ -43,6 +43,7 @@ export default function Model1HeatmapClient() {
   const [mounted, setMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
+  const [loading, setLoading] = useState(true);
   const mapRef = useRef<LeafletMap | null>(null);
 
   useEffect(() => setMounted(true), []);
@@ -50,34 +51,72 @@ export default function Model1HeatmapClient() {
   useEffect(() => {
     if (!mounted) return;
     
-    console.log('Fetching stations from /api/stations');
+    setLoading(true);
+    console.log('[API] Fetching from /api/stations...');
+    
     fetch('/api/stations?bbox=-0.5,51.3,0.3,51.7')
       .then(res => {
-        console.log('API response status:', res.status);
-        return res.ok ? res.json() : Promise.reject(`HTTP ${res.status}`);
+        console.log('[API] Response status:', res.status);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
       })
       .then(data => {
-        console.log('API data received:', data);
-        // Check both possible data structures
-        const items = data.stations || data.items || data.POIs || [];
-        console.log('Extracted stations:', items.length);
+        console.log('[API] Raw response:', data);
         
-        if (items.length) {
-          // Transform to expected format if needed
-          const transformed = items.map((s: any) => ({
-            id: s.id || s.ID || String(Math.random()),
-            latitude: s.latitude || s.AddressInfo?.Latitude,
-            longitude: s.longitude || s.AddressInfo?.Longitude,
-            name: s.name || s.AddressInfo?.Title,
+        // Try multiple possible data structures
+        let items = [];
+        
+        if (Array.isArray(data)) {
+          items = data;
+        } else if (data.stations) {
+          items = data.stations;
+        } else if (data.items) {
+          items = data.items;
+        } else if (data.POIs) {
+          items = data.POIs;
+        } else if (data.data) {
+          items = data.data;
+        }
+        
+        console.log('[API] Extracted items:', items.length);
+        
+        if (items.length === 0) {
+          console.warn('[API] No stations found in response');
+          return;
+        }
+        
+        // Transform to our format
+        const transformed = items.map((s: any, idx: number) => {
+          const station = {
+            id: s.id || s.ID || s.uuid || String(idx),
+            latitude: s.latitude || s.lat || s.AddressInfo?.Latitude,
+            longitude: s.longitude || s.lng || s.lon || s.AddressInfo?.Longitude,
+            name: s.name || s.title || s.AddressInfo?.Title || 'Charging Station',
             address: s.address || s.AddressInfo?.AddressLine1,
-            connectors: s.connectors || s.Connections?.length || 0,
-          }));
-          console.log('Transformed stations:', transformed.length);
+            connectors: s.connectors || s.Connections?.length || s.NumberOfPoints || 0,
+          };
+          
+          return station;
+        }).filter((s: Station) => 
+          s.latitude && s.longitude &&
+          !isNaN(s.latitude) && !isNaN(s.longitude) &&
+          s.latitude >= -90 && s.latitude <= 90 &&
+          s.longitude >= -180 && s.longitude <= 180
+        );
+        
+        console.log('[API] Valid transformed stations:', transformed.length);
+        
+        if (transformed.length > 0) {
+          console.log('[API] Sample station:', transformed[0]);
           setStations(transformed);
         }
       })
       .catch(err => {
-        console.error('Stations fetch failed:', err);
+        console.error('[API] Fetch error:', err);
+        alert(`Failed to load charging stations: ${err.message}. Check console for details.`);
+      })
+      .finally(() => {
+        setLoading(false);
       });
   }, [mounted]);
 
@@ -96,7 +135,6 @@ export default function Model1HeatmapClient() {
       if (!response.ok) throw new Error('Search failed');
       
       const results = await response.json();
-      console.log('Search results:', results);
       
       if (results && results[0]) {
         const { lat, lon } = results[0];
@@ -105,23 +143,16 @@ export default function Model1HeatmapClient() {
         alert('Location not found');
       }
     } catch (error) {
-      console.error('Search error:', error);
+      console.error('[Search] Error:', error);
       alert('Search failed. Please try again.');
     } finally {
       setSearching(false);
     }
   };
 
-  if (!mounted) return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
-
-  const validStations = stations.filter(s => 
-    s.latitude && s.longitude && 
-    !isNaN(s.latitude) && !isNaN(s.longitude) &&
-    s.latitude >= -90 && s.latitude <= 90 &&
-    s.longitude >= -180 && s.longitude <= 180
-  );
-
-  console.log('Valid stations to render:', validStations.length);
+  if (!mounted) {
+    return <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>;
+  }
 
   return (
     <div style={{ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -144,19 +175,20 @@ export default function Model1HeatmapClient() {
             {searching ? 'Searching...' : 'Go'}
           </button>
         </form>
-        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px' }}>
+        <div style={{ padding: '0 16px 8px', display: 'flex', gap: '16px', fontSize: '14px', alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={showHeatmap} onChange={() => setShowHeatmap(v => !v)} />
             🔥 Heatmap
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={showMarkers} onChange={() => setShowMarkers(v => !v)} />
-            📍 Markers ({validStations.length})
+            📍 Markers ({stations.length})
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input type="checkbox" checked={showCouncil} onChange={() => setShowCouncil(v => !v)} />
             🗺️ Council
           </label>
+          {loading && <span style={{ color: '#6b7280', fontSize: '12px' }}>Loading stations...</span>}
         </div>
       </div>
 
@@ -177,7 +209,11 @@ export default function Model1HeatmapClient() {
           
           {showCouncil && <CouncilLayer visible={true} />}
           
-          {showMarkers && validStations.map(station => (
+          {showHeatmap && stations.length > 0 && (
+            <HeatLayer stations={stations} visible={true} />
+          )}
+          
+          {showMarkers && stations.map(station => (
             <Marker 
               key={station.id} 
               position={[station.latitude, station.longitude]} 
@@ -185,15 +221,28 @@ export default function Model1HeatmapClient() {
             >
               <Popup>
                 <div style={{ minWidth: '200px' }}>
-                  <h3 style={{ fontWeight: 'bold', marginBottom: '4px' }}>{station.name || 'Charging Station'}</h3>
+                  <h3 style={{ fontWeight: 'bold', marginBottom: '4px' }}>{station.name}</h3>
                   {station.address && <p style={{ fontSize: '14px', margin: '4px 0' }}>{station.address}</p>}
-                  {station.connectors && station.connectors > 0 && <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>{station.connectors} connector(s)</p>}
+                  {station.connectors && station.connectors > 0 && (
+                    <p style={{ fontSize: '12px', color: '#6b7280', margin: '4px 0' }}>
+                      {station.connectors} connector(s)
+                    </p>
+                  )}
                 </div>
               </Popup>
             </Marker>
           ))}
         </MapContainer>
       </div>
+
+      {stations.length === 0 && !loading && (
+        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', zIndex: 1000 }}>
+          <p style={{ margin: 0, fontWeight: 'bold' }}>No charging stations found</p>
+          <p style={{ margin: '8px 0 0', fontSize: '14px', color: '#6b7280' }}>
+            Check browser console for API response details
+          </p>
+        </div>
+      )}
     </div>
   );
 }
