@@ -3,7 +3,7 @@ import dynamic from 'next/dynamic';
 // Guard SSR: entire map client-only
 const Model1HeatmapClient = dynamic(() => import('./Model1HeatmapClient'), { 
   ssr: false,
-  loading: () => (
+  loading: () => (<div className="min-h-screen flex items-center justify-center"><p className="text-gray-600">Loading map...</p></div>),
     <div className="min-h-screen flex items-center justify-center">
       <p className="text-gray-600">Loading map...</p>
     
