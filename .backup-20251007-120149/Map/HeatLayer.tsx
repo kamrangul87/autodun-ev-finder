@@ -9,7 +9,6 @@ interface Station {
   latitude: number;
   longitude: number;
   connectors?: number;
-  powerKW?: number;
 }
 
 interface HeatLayerProps {
@@ -17,12 +16,12 @@ interface HeatLayerProps {
   visible: boolean;
 }
 
-export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
+export default function HeatLayer({ stations, visible }: HeatLayerProps) {
   const map = useMap();
   const heatLayerRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!visible || !stations.length) {
+    if (!visible) {
       if (heatLayerRef.current) {
         map.removeLayer(heatLayerRef.current);
         heatLayerRef.current = null;
@@ -30,48 +29,36 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
       return;
     }
 
+    if (!stations.length) return;
+
     if (!map.getPane('heatmap')) {
       const pane = map.createPane('heatmap');
       pane.style.zIndex = '400';
     }
 
-    const heatPoints = stations
-      .filter(s => s.latitude && s.longitude)
-      .map(s => {
-        const connectors = s.connectors || 1;
-        const powerKW = s.powerKW || 7;
-        
-        const baseIntensity = Math.min(0.3 + (connectors * 0.08), 0.6);
-        const powerBonus = Math.min(powerKW / 200, 0.3);
-        const intensity = Math.min(baseIntensity + powerBonus, 0.9);
-        
-        return [s.latitude, s.longitude, intensity];
-      }) as [number, number, number][];
-
-    if (heatPoints.length === 0) {
-      console.warn('[Heatmap] No valid points');
-      return;
-    }
+    const heatPoints = stations.map(s => {
+      const intensity = Math.min(Math.max(s.connectors || 1, 1), 8);
+      return [s.latitude, s.longitude, intensity];
+    }) as [number, number, number][];
 
     if (heatLayerRef.current) {
       map.removeLayer(heatLayerRef.current);
     }
 
     heatLayerRef.current = (L as any).heatLayer(heatPoints, {
-      radius: 22,
-      blur: 18,
-      maxZoom: 17,
-      minOpacity: 0.2,
-      max: 1.0,
+      radius: 28,
+      blur: 22,
+      maxZoom: 18,
+      max: 8,
       pane: 'heatmap',
       gradient: {
-        0.0: 'rgba(0,0,255,0)',
-        0.2: 'rgba(0,150,255,0.4)',
-        0.4: 'rgba(0,255,200,0.5)',
-        0.6: 'rgba(50,255,0,0.6)',
-        0.8: 'rgba(255,200,0,0.7)',
-        1.0: 'rgba(255,0,0,0.8)'
-      }
+        0.0: 'rgba(0, 255, 0, 0)',
+        0.2: '#00ff00',
+        0.4: '#ffff00',
+        0.6: '#ff8000',
+        0.8: '#ff0000',
+        1.0: '#cc0000',
+      },
     }).addTo(map);
 
     return () => {

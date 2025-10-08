@@ -9,7 +9,6 @@ interface Station {
   latitude: number;
   longitude: number;
   connectors?: number;
-  powerKW?: number;
 }
 
 interface HeatLayerProps {
@@ -30,26 +29,16 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
       return;
     }
 
-    if (!map.getPane('heatmap')) {
-      const pane = map.createPane('heatmap');
-      pane.style.zIndex = '400';
-    }
-
     const heatPoints = stations
       .filter(s => s.latitude && s.longitude)
-      .map(s => {
-        const connectors = s.connectors || 1;
-        const powerKW = s.powerKW || 7;
-        
-        const baseIntensity = Math.min(0.3 + (connectors * 0.08), 0.6);
-        const powerBonus = Math.min(powerKW / 200, 0.3);
-        const intensity = Math.min(baseIntensity + powerBonus, 0.9);
-        
-        return [s.latitude, s.longitude, intensity];
-      }) as [number, number, number][];
+      .map(s => [
+        s.latitude,
+        s.longitude,
+        Math.min((s.connectors || 1) * 0.4, 1.0)
+      ]) as [number, number, number][];
 
     if (heatPoints.length === 0) {
-      console.warn('[Heatmap] No valid points');
+      console.warn('[Heatmap] No valid points to render');
       return;
     }
 
@@ -59,18 +48,17 @@ export default function HeatmapLayer({ stations, visible }: HeatLayerProps) {
 
     heatLayerRef.current = (L as any).heatLayer(heatPoints, {
       radius: 22,
-      blur: 18,
-      maxZoom: 17,
-      minOpacity: 0.2,
+      blur: 20,
+      maxZoom: 25,
+      minOpacity: 0.3,
       max: 1.0,
-      pane: 'heatmap',
       gradient: {
         0.0: 'rgba(0,0,255,0)',
-        0.2: 'rgba(0,150,255,0.4)',
-        0.4: 'rgba(0,255,200,0.5)',
-        0.6: 'rgba(50,255,0,0.6)',
-        0.8: 'rgba(255,200,0,0.7)',
-        1.0: 'rgba(255,0,0,0.8)'
+        0.2: 'rgba(0,0,255,0.6)',
+        0.4: 'rgba(0,255,255,0.7)',
+        0.6: 'rgba(0,255,0,0.8)',
+        0.8: 'rgba(255,255,0,0.9)',
+        1.0: 'rgba(255,0,0,1)'
       }
     }).addTo(map);
 

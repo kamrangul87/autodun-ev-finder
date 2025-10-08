@@ -1,134 +1,54 @@
+import { NextRequest, NextResponse } from 'next/server';
 
+const stations = [
+  // London
+  { id: 1, name: "ChargePoint London", lat: 51.5074, lng: -0.1278, address: "Oxford St, London", type: "Fast", power: "50kW" },
+  { id: 2, name: "Tesla Supercharger", lat: 51.5155, lng: -0.0922, address: "City Road, London", type: "Rapid", power: "150kW" },
+  
+  // Birmingham
+  { id: 3, name: "BP Pulse Birmingham", lat: 52.4862, lng: -1.8904, address: "High St, Birmingham", type: "Fast", power: "50kW" },
+  
+  // Manchester
+  { id: 4, name: "Shell Recharge Manchester", lat: 53.4808, lng: -2.2426, address: "Market St, Manchester", type: "Rapid", power: "100kW" },
+  
+  // Leeds
+  { id: 5, name: "Ionity Leeds", lat: 53.8008, lng: -1.5491, address: "Wellington St, Leeds", type: "Ultra-Rapid", power: "350kW" },
+  
+  // Liverpool
+  { id: 6, name: "Pod Point Liverpool", lat: 53.4084, lng: -2.9916, address: "Lime St, Liverpool", type: "Fast", power: "50kW" },
+  
+  // Bristol
+  { id: 7, name: "Gridserve Bristol", lat: 51.4545, lng: -2.5879, address: "Broad St, Bristol", type: "Rapid", power: "150kW" },
+  
+  // Edinburgh
+  { id: 8, name: "Osprey Edinburgh", lat: 55.9533, lng: -3.1883, address: "Princes St, Edinburgh", type: "Rapid", power: "120kW" },
+  
+  // Glasgow
+  { id: 9, name: "InstaVolt Glasgow", lat: 55.8642, lng: -4.2518, address: "Buchanan St, Glasgow", type: "Rapid", power: "125kW" },
+  
+  // Cardiff
+  { id: 10, name: "Ecotricity Cardiff", lat: 51.4816, lng: -3.1791, address: "Queen St, Cardiff", type: "Fast", power: "50kW" },
+  
+  // Newcastle
+  { id: 11, name: "ChargePlace Newcastle", lat: 54.9783, lng: -1.6178, address: "Northumberland St, Newcastle", type: "Fast", power: "50kW" },
+  
+  // Sheffield
+  { id: 12, name: "GeniePoint Sheffield", lat: 53.3811, lng: -1.4701, address: "Fargate, Sheffield", type: "Rapid", power: "100kW" },
+  
+  // Nottingham
+  { id: 13, name: "Mer Nottingham", lat: 52.9548, lng: -1.1581, address: "Market Square, Nottingham", type: "Fast", power: "50kW" },
+  
+  // Oxford
+  { id: 14, name: "Allego Oxford", lat: 51.7520, lng: -1.2577, address: "High St, Oxford", type: "Rapid", power: "150kW" },
+  
+  // Cambridge
+  { id: 15, name: "Fastned Cambridge", lat: 52.2053, lng: 0.1218, address: "Market Hill, Cambridge", type: "Rapid", power: "175kW" },
+];
 
-export const runtime = 'nodejs';
-export const revalidate = 0;
-
-import { NextResponse } from 'next/server';
-
-type Connector = { type: string; powerKW?: number; quantity?: number };
-type Station = {
-  id: number; name: string; lat: number; lng: number;
-  address?: string; postcode?: string; connectors: Connector[];
-};
-
-type OcmPoi = {
-  ID: number;
-  AddressInfo?: {
-    Title?: string;
-    Latitude?: number;
-    Longitude?: number;
-    AddressLine1?: string;
-    Postcode?: string;
-  };
-  Connections?: Array<{
-    ConnectionType?: { Title?: string } | null;
-    PowerKW?: number | null;
-    Quantity?: number | null;
-  }> | null;
-};
-
-const OCM_ENDPOINT = 'https://api.openchargemap.io/v3/poi/';
-
-function mapToStation(p: OcmPoi): Station | null {
-  const a = p.AddressInfo;
-  if (!a?.Latitude || !a?.Longitude) return null;
-  return {
-    id: p.ID,
-    name: a.Title ?? 'EV Charger',
-    lat: a.Latitude,
-    lng: a.Longitude,
-    address: a.AddressLine1 ?? undefined,
-    postcode: a.Postcode ?? undefined,
-    connectors: (p.Connections ?? []).map(c => ({
-      type: c?.ConnectionType?.Title ?? 'Unknown',
-      powerKW: c?.PowerKW ?? undefined,
-      quantity: c?.Quantity ?? undefined,
-    })),
-  };
-}
-
-function parseBBox(raw?: string): [number, number, number, number] | null {
-  if (!raw) return null;
-  const m = raw.match(/\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\),\s*\((-?\d+\.?\d*),\s*(-?\d+\.?\d*)\)/);
-  if (!m) return null;
-  const south = parseFloat(m[1]), west = parseFloat(m[2]), north = parseFloat(m[3]), east = parseFloat(m[4]);
-  if ([south, west, north, east].some(n => Number.isNaN(n))) return null;
-  return [south, west, north, east];
-}
-
-async function ocmFetch(url: URL, signal?: AbortSignal) {
-  const headers: Record<string,string> = { Accept: 'application/json' };
-  const key = process.env.OCM_KEY;
-  if (!key) {
-    return { data: [] as OcmPoi[], error: 'NO_OCM_KEY' };
-  }
-  headers['X-API-Key'] = key;           // header
-  url.searchParams.set('key', key);     // query
-  url.searchParams.set('client', process.env.OCM_CLIENT ?? 'autodun-ev-finder');
-  url.searchParams.set('compact', 'true');
-  url.searchParams.set('verbose', 'false');
-
-  const res = await fetch(url.toString(), { headers, signal, cache: 'no-store' });
-  const txt = await res.text();
-  if (!res.ok) return { data: [] as OcmPoi[], error: `OCM_${res.status}`, text: txt };
+export async function GET(request: NextRequest) {
   try {
-    return { data: JSON.parse(txt) as OcmPoi[] };
-  } catch {
-    return { data: [] as OcmPoi[], error: 'OCM_JSON_PARSE' };
-  }
-}
-
-async function byBBox(b: [number, number, number, number], max = 200) {
-  const [south, west, north, east] = b;
-  const url = new URL(OCM_ENDPOINT);
-  url.searchParams.set('maxresults', String(Math.min(max, 200)));
-  url.searchParams.set('boundingbox', `(${south},${west}),(${north},${east})`);
-  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 10000);
-  try {
-    const { data, error } = await ocmFetch(url, ac.signal);
-    const items = data.map(mapToStation).filter(Boolean) as Station[];
-    return { items, source: 'OCM_BBOX', debug: { url: url.toString(), received: data.length, error } };
-  } finally { clearTimeout(t); }
-}
-
-async function byRadius(lat: number, lng: number, km = 10, max = 200) {
-  const url = new URL(OCM_ENDPOINT);
-  url.searchParams.set('latitude', String(lat));
-  url.searchParams.set('longitude', String(lng));
-  url.searchParams.set('distance', String(km));
-  url.searchParams.set('distanceunit', 'KM');
-  url.searchParams.set('maxresults', String(Math.min(max, 200)));
-  const ac = new AbortController(); const t = setTimeout(() => ac.abort(), 10000);
-  try {
-    const { data, error } = await ocmFetch(url, ac.signal);
-    const items = data.map(mapToStation).filter(Boolean) as Station[];
-    return { items, source: 'OCM_RADIUS', debug: { url: url.toString(), received: data.length, error } };
-  } finally { clearTimeout(t); }
-}
-
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const bbox = parseBBox(searchParams.get('bbox') ?? undefined);
-  const lat = searchParams.get('lat'); const lng = searchParams.get('lng');
-  const radius = Number(searchParams.get('radius') ?? '10');
-  const max = Number(searchParams.get('max') ?? '200');
-
-  try {
-    let payload;
-    if (bbox) {
-      payload = await byBBox(bbox, max);
-      if (!payload.items.length) {
-        const cLat = (bbox[0] + bbox[2]) / 2, cLng = (bbox[1] + bbox[3]) / 2;
-        const fb = await byRadius(cLat, cLng, Math.max(radius, 8), max);
-        payload = { ...fb, source: `${payload.source}_FALLBACK` };
-      }
-    } else if (lat && lng) {
-      payload = await byRadius(Number(lat), Number(lng), radius, max);
-    } else {
-      payload = await byRadius(51.5074, -0.1278, 10, max);
-    }
-    return NextResponse.json(payload, { status: 200 });
-  } catch (e: any) {
-    return NextResponse.json({ items: [], source: 'ERROR', debug: { error: String(e?.message ?? e) } }, { status: 200 });
+    return NextResponse.json({ stations });
+  } catch (error) {
+    return NextResponse.json({ error: 'Failed to fetch stations' }, { status: 500 });
   }
 }
