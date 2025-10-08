@@ -10,17 +10,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "dev-agent": "ts-node --compiler-options '{\"module\":\"commonjs\",\"esModuleInterop\":true}' scripts/dev-agent.ts"
+    "lint": "next lint"
   },
   "dependencies": {
-    "dotenv": "^17.2.3",
-    "execa": "^9.6.0",
-    "fs-extra": "^11.3.2",
-    "globby": "^15.0.0",
     "leaflet": "^1.9.4",
     "next": "^14.2.5",
-    "openai": "^6.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-leaflet": "^4.2.1",
@@ -38,7 +32,6 @@
     "eslint-config-next": "^14.2.5",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.5",
-    "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
 }
