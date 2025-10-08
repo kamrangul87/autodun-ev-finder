@@ -1,10 +1,20 @@
-export async function POST(req: Request) {
+import { NextRequest, NextResponse } from 'next/server'
+import { feedbackSchema } from '@/lib/validation'
+
+export async function POST(request: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    // TODO: write to your store/webhook; for MVP just log
-    console.log('feedback', body);
-    return Response.json({ ok: true });
-  } catch {
-    return Response.json({ ok: false }, { status: 400 });
+    const body = await request.json()
+    const validation = feedbackSchema.safeParse(body)
+    
+    if (!validation.success) {
+      return NextResponse.json({ ok: true })
+    }
+    
+    const { stationId, vote } = validation.data
+    console.log('Feedback:', { stationId, vote, timestamp: new Date().toISOString() })
+    
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    return NextResponse.json({ ok: true })
   }
 }

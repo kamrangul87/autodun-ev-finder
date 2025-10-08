@@ -1,48 +1,47 @@
-import { NextResponse } from "next/server";
-import { readFile } from "fs/promises";
-import { join } from "path";
+import { NextResponse } from 'next/server'
+import { readFile } from 'fs/promises'
+import { join } from 'path'
 
-export const runtime = "nodejs";
+const EMPTY: any = { type: 'FeatureCollection', features: [] }
 
-async function fetchWithTimeout(url: string, ms: number) {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
+async function fetchWithTimeout(url: string, timeout: number) {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
   try {
-    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
-  } finally {
-    clearTimeout(t);
+    const response = await fetch(url, { signal: controller.signal })
+    clearTimeout(timeoutId)
+    return response
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
   }
 }
 
 export async function GET() {
-  const CACHE_HDR = { "cache-control": "public, s-maxage=300, stale-while-revalidate=600" };
-
-  // 1) Remote (if provided)
-  const councilDataUrl = process.env.COUNCIL_DATA_URL;
-  if (councilDataUrl) {
-    try {
-      const data = await fetchWithTimeout(councilDataUrl, 6000);
-      return NextResponse.json(data, { headers: CACHE_HDR });
-    } catch (e) {
-      console.warn("Councils remote fetch failed, falling back to local:", (e as Error).message);
-    }
-  }
-
-  // 2) Local static fallback
   try {
-    const filePath = join(process.cwd(), "public", "data", "councils-london.geo.json");
-    const fileContent = await readFile(filePath, "utf-8");
-    const data = JSON.parse(fileContent);
-    return NextResponse.json(data, { headers: CACHE_HDR });
-  } catch (e) {
-    console.warn("Councils local file missing/unreadable, falling back to empty:", (e as Error).message);
+    const remoteUrl = process.env.COUNCIL_DATA_URL
+    if (remoteUrl) {
+      try {
+        const response = await fetchWithTimeout(remoteUrl, 6000)
+        if (response.ok) {
+          const data = await response.json()
+          return NextResponse.json(data)
+        }
+      } catch (error) {
+        console.warn('Remote council data failed')
+      }
+    }
+    
+    try {
+      const filePath = join(process.cwd(), 'public', 'data', 'councils-london.geo.json')
+      const fileContent = await readFile(filePath, 'utf-8')
+      return NextResponse.json(JSON.parse(fileContent))
+    } catch (error) {
+      console.warn('Local council file not found')
+    }
+    
+    return NextResponse.json(EMPTY)
+  } catch (error) {
+    return NextResponse.json(EMPTY)
   }
-
-  // 3) Final safe fallback (keeps UI alive)
-  return NextResponse.json(
-    { type: "FeatureCollection", features: [] },
-    { headers: CACHE_HDR }
-  );
 }

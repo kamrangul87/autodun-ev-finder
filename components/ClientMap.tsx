@@ -1,337 +1,132 @@
-'use client';
+'use client'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { MapContainer, TileLayer, Marker, Popup, Circle, GeoJSON } from 'react-leaflet'
+import type { Station, StationsResponse, CouncilData } from '@/lib/types'
 
-import React, { useEffect, useRef, useState } from 'react';
-import { MapContainer, TileLayer } from 'react-leaflet';
-
-// Stable initial center/zoom for MapContainer
-const INITIAL_CENTER: [number, number] = [51.5074, -0.1278]; // London
-const INITIAL_ZOOM: number = 11;
-
-type LatLng = [number, number];
-
-export type Props = {
-  showHeatmap?: boolean;
-  showMarkers?: boolean;
-  showCouncil?: boolean;
-  heatOptions?: { intensity?: number; radius?: number; blur?: number };
-  onStationsCount?: (n: number) => void;
-};
-
-type Station = {
-  id?: string | number;
-  name?: string;
-  address?: string;
-  postcode?: string;
-  source?: string;
-  connectors?: number;
-  lat: number;
-  lng: number;
-};
-
-type CouncilGeoJSON = {
-  type: 'FeatureCollection';
-  features: Array<any>;
-};
-
-export default function ClientMap(props: Props) {
-  const {
-    showHeatmap = true,
-    showMarkers = true,
-    showCouncil = false,
-    heatOptions,
-    onStationsCount,
-  } = props;
-
-  // NOTE: we no longer manually create an <div ref={mapDivRef}> Leaflet map.
-  // MapContainer will create the Leaflet map; we capture it with whenCreated.
-  const mapRef = useRef<any>(null);
-  const heatLayerRef = useRef<any>(null);
-  const markersLayerRef = useRef<any>(null);
-  const councilLayerRef = useRef<any>(null);
-
-  // --- Programmatic/user move flags (kept as-is)
-  const isProgrammaticMove = useRef(false);
-  const hasDoneInitialFetch = useRef(false);
-  const userInteracted = useRef(false);
-  const fetchTimer = useRef<number | undefined>(undefined);
-
-  const [stations, setStations] = useState<Station[]>([]);
-  const [councils, setCouncils] = useState<CouncilGeoJSON | null>(null);
-  const [ready, setReady] = useState(false);
-
-  // Fetch data with safe fallbacks (unchanged)
+export default function ClientMap() {
+  const [stations, setStations] = useState<Station[]>([])
+  const [source, setSource] = useState('DEMO')
+  const [councils, setCouncils] = useState<CouncilData | null>(null)
+  const [search, setSearch] = useState('')
+  const [showHeat, setShowHeat] = useState(true)
+  const [showPins, setShowPins] = useState(true)
+  const [showCouncil, setShowCouncil] = useState(false)
+  const [toast, setToast] = useState('')
+  const mapRef = useRef<any>(null)
+  
   useEffect(() => {
-    let aborted = false;
-
-    (async () => {
-      try {
-        const res = await fetch('/api/stations', { cache: 'no-store' });
-        if (!res.ok) throw new Error('stations fetch failed');
-        const json = await res.json();
-        const items: Station[] = (json?.items ?? [])
-          .filter((s: any) => typeof s?.lat === 'number' && typeof s?.lng === 'number');
-        if (!aborted) {
-          setStations(items);
-          onStationsCount?.(items.length);
-        }
-      } catch {
-        if (!aborted) {
-          const fallback: Station[] = [
-            { id: 'fallback-1', lat: 51.509865, lng: -0.118092, name: 'Fallback London' },
-          ];
-          setStations(fallback);
-          onStationsCount?.(fallback.length);
+    fetch('/api/stations').then(r => r.json()).then((d: StationsResponse) => {
+      setStations(d.items || [])
+      setSource(d.source || 'DEMO')
+    }).catch(() => setStations([]))
+    
+    fetch('/api/councils').then(r => r.json()).then((d: CouncilData) => {
+      setCouncils(d)
+    }).catch(() => setCouncils({ type: 'FeatureCollection', features: [] }))
+  }, [])
+  
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+    setTimeout(() => setToast(''), 3000)
+  }, [])
+  
+  const handleSearch = useCallback(async () => {
+    if (!search.trim()) return
+    try {
+      const postcodeRes = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(search)}`)
+      if (postcodeRes.ok) {
+        const data = await postcodeRes.json()
+        if (data.result) {
+          mapRef.current?.setView([data.result.latitude, data.result.longitude], 13)
+          return
         }
       }
-    })();
-
-    if (showCouncil) {
-      (async () => {
-        try {
-          const res = await fetch('/api/councils', { cache: 'no-store' });
-          if (res.ok) {
-            const gj = await res.json();
-            if (!aborted) setCouncils(gj);
-          }
-        } catch {
-          // optional
+    } catch (e) {}
+    try {
+      const nominatimRes = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(search)}&format=json&limit=1&countrycodes=gb`)
+      if (nominatimRes.ok) {
+        const data = await nominatimRes.json()
+        if (data.length > 0) {
+          mapRef.current?.setView([parseFloat(data[0].lat), parseFloat(data[0].lon)], 10)
+          return
         }
-      })();
-    }
-
-    return () => {
-      aborted = true;
-    };
-  }, [showCouncil, onStationsCount]);
-
-  // Track real user interaction (unchanged)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const mark = () => { userInteracted.current = true; };
-    map.on('dragstart', mark);
-    map.on('zoomstart', mark);
-    map.on('movestart', mark);
-    return () => {
-      map.off('dragstart', mark);
-      map.off('zoomstart', mark);
-      map.off('movestart', mark);
-    };
-  }, [ready]);
-
-  // Do ONE initial bbox fetch after map is ready (unchanged)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || hasDoneInitialFetch.current) return;
-    hasDoneInitialFetch.current = true;
-    const b = map.getBounds();
-    const bbox = `(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})`;
-    fetch(`/api/stations?bbox=${encodeURIComponent(bbox)}&max=500`, { cache: 'no-store' })
-      .then(r => r.json())
-      .then(data => {
-        setStations(data.items ?? []);
+      }
+    } catch (e) {}
+    showToast('❌ Location not found')
+  }, [search, showToast])
+  
+  const zoomToData = useCallback(() => {
+    if (stations.length === 0 || !mapRef.current) return
+    const bounds = stations.map(s => [s.lat, s.lng] as [number, number])
+    mapRef.current.fitBounds(bounds, { padding: [50, 50] })
+  }, [stations])
+  
+  const handleFeedback = useCallback(async (stationId: string | number, vote: '+1' | '-1') => {
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stationId, vote })
       })
-      .catch(console.error);
-  }, [ready]);
-
-  // Debounced fetch on moveend (unchanged)
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const scheduleFetch = () => {
-      if (isProgrammaticMove.current) return;
-      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
-      fetchTimer.current = window.setTimeout(() => {
-        const b = map.getBounds();
-        const bbox = `(${b.getSouth()},${b.getWest()}),(${b.getNorth()},${b.getEast()})`;
-        fetch(`/api/stations?bbox=${encodeURIComponent(bbox)}&max=500`, { cache: 'no-store' })
-          .then(r => r.json())
-          .then(data => {
-            setStations(data.items ?? []);
-          })
-          .catch(console.error);
-      }, 450);
-    };
-    map.on('moveend', scheduleFetch);
-    return () => {
-      map.off('moveend', scheduleFetch);
-      if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
-    };
-  }, [ready]);
-
-  /**
-   * ✅ Minimal replacement for your previous manual Leaflet init:
-   * - We use MapContainer's `whenCreated` to get the Leaflet map instance.
-   * - After the map is created, we create reusable layer groups.
-   */
-  useEffect(() => {
-    if (!ready || !mapRef.current) return;
-    (async () => {
-      const L = (await import('leaflet')).default;
-      if (!markersLayerRef.current) {
-        markersLayerRef.current = L.layerGroup().addTo(mapRef.current);
-      }
-      if (!councilLayerRef.current) {
-        councilLayerRef.current = L.layerGroup().addTo(mapRef.current);
-      }
-      // heatLayerRef is created on-demand in the heatmap effect below
-    })();
-  }, [ready]);
-
-  // Render / update markers (unchanged)
-  useEffect(() => {
-    if (!ready || !mapRef.current || !markersLayerRef.current) return;
-
-    (async () => {
-      const L = (await import('leaflet')).default;
-
-      const group = markersLayerRef.current as any;
-      group.clearLayers();
-
-      if (showMarkers && stations.length) {
-        stations.forEach((s) => {
-          const marker = L.circleMarker([s.lat, s.lng], { radius: 4 });
-          const popupHtml = `
-            <div style="min-width:200px">
-              <strong>${s.name ?? 'Charging Point'}</strong><br/>
-              ${s.address ?? ''}<br/>
-              ${s.postcode ?? ''}<br/>
-              <button id="qb-${s.id}" style="margin-top:8px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;cursor:pointer;">
-                Quick Feedback
-              </button>
-            </div>
-          `;
-          marker.bindPopup(popupHtml);
-          marker.on('popupopen', () => {
-            const btn = document.getElementById(`qb-${s.id}`);
-            if (btn) {
-              btn.onclick = () => {
-                window.dispatchEvent(new CustomEvent('autodun:feedback', { detail: { stationId: s.id ?? null, name: s.name || 'Charging Point' } }));
-                marker.closePopup();
-              };
-            }
-          });
-          marker.addTo(group);
-        });
-
-        if (!mapRef.current.hasLayer(group)) {
-          group.addTo(mapRef.current);
-        }
-      } else {
-        if (mapRef.current.hasLayer(group)) {
-          mapRef.current.removeLayer(group);
-        }
-      }
-    })();
-  }, [ready, showMarkers, stations]);
-
-  // Zoom to data button handler (unchanged)
-  function handleZoomToData() {
-    const map = mapRef.current;
-    if (!map || !stations?.length) return;
-    (async () => {
-      const L = (await import('leaflet')).default;
-      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
-      isProgrammaticMove.current = true;
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 12, animate: false });
-      map.once('moveend', () => { isProgrammaticMove.current = false; });
-    })();
-  }
-
-  // Search action (unchanged)
-  function handleSearch(lat: number, lng: number) {
-    const map = mapRef.current;
-    userInteracted.current = false;
-    isProgrammaticMove.current = true;
-    map.setView([lat, lng], 12, { animate: false });
-    map.once('moveend', () => { isProgrammaticMove.current = false; });
-  }
-
-  // Render / update heatmap (unchanged)
-  useEffect(() => {
-    if (!ready || !mapRef.current) return;
-
-    (async () => {
-      const L = (await import('leaflet')).default;
-      await import('leaflet.heat');
-
-      if (heatLayerRef.current && mapRef.current.hasLayer(heatLayerRef.current)) {
-        mapRef.current.removeLayer(heatLayerRef.current);
-        heatLayerRef.current = null;
-      }
-
-      if (showHeatmap && stations.length) {
-        const points = stations.map((s) => [
-          s.lat,
-          s.lng,
-          Math.max(0.2, (heatOptions?.intensity ?? 0.6)),
-        ]) as any[];
-        const layer = (L as any).heatLayer(points, {
-          radius: heatOptions?.radius ?? 18,
-          blur: heatOptions?.blur ?? 15,
-          maxZoom: 17,
-        });
-        heatLayerRef.current = layer;
-        layer.addTo(mapRef.current);
-      }
-    })();
-  }, [ready, showHeatmap, stations, heatOptions?.intensity, heatOptions?.radius, heatOptions?.blur]);
-
-  // Render / update council polygons (unchanged)
-  useEffect(() => {
-    if (!ready || !mapRef.current || !councilLayerRef.current) return;
-
-    (async () => {
-      const L = (await import('leaflet')).default;
-      const group = councilLayerRef.current as any;
-      group.clearLayers();
-
-      if (showCouncil && councils?.features?.length) {
-        const layer = L.geoJSON(councils as any, {
-          pane: 'council',
-          onEachFeature: (_f:any, layer:any) => layer.bindTooltip(layer.feature?.properties?.name || 'Council', {sticky:true}),
-          style: () => ({
-            color: '#228be6',
-            weight: 1,
-            fillOpacity: 0.05,
-          }),
-        });
-        layer.addTo(group);
-        if (!mapRef.current.hasLayer(group)) mapRef.current.addLayer(group);
-      } else {
-        if (mapRef.current.hasLayer(group)) mapRef.current.removeLayer(group);
-      }
-    })();
-  }, [ready, showCouncil, councils]);
-
-  // Stable MapContainer (kept as you had it)
+      showToast('✅ Thanks for your feedback!')
+    } catch (e) {
+      showToast('✅ Thanks for your feedback!')
+    }
+  }, [showToast])
+  
+  const firstTwo = stations.slice(0, 2).map(s => `[${s.lat.toFixed(2)},${s.lng.toFixed(2)}]`).join(' ')
+  
   return (
-    <div className="w-full h-[calc(100vh-160px)]">
-      <MapContainer
-        center={INITIAL_CENTER}
-        zoom={INITIAL_ZOOM}
-        scrollWheelZoom
-        style={{ height: 'calc(100vh - 160px)', minHeight: 500 }}
-        className="w-full"
-        ref={mapRef as any}
-        // ✅ This replaces the old manual Leaflet init:
-        whenReady={() => { setReady(true); }}
-      >
-        {/* ✅ Base tiles must be inside MapContainer or the map looks blank */}
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          eventHandlers={{
-            tileerror: (e) => {
-              if (process.env.NODE_ENV !== 'production') {
-                // eslint-disable-next-line no-console
-                console.warn('tileerror', e);
-              }
-            },
-          }}
-        />
-        {/* Your overlay layers are managed imperatively via refs in effects above */}
-      </MapContainer>
+    <div style={{position:'relative',width:'100%',height:'100vh',fontFamily:'system-ui'}}>
+      <div style={{position:'absolute',top:0,left:0,right:0,zIndex:1000,background:'white',boxShadow:'0 4px 6px rgba(0,0,0,0.1)',padding:'16px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'16px'}}>
+          <h1 style={{fontSize:'28px',fontWeight:'bold',margin:0}}>🔌 autodun</h1>
+          <div style={{fontSize:'13px',color:'#6b7280',background:'#f3f4f6',padding:'8px 16px',borderRadius:'8px',fontFamily:'monospace'}}>
+            <span style={{fontWeight:'600',color:'#3b82f6'}}>{source}</span> • {stations.length} • {firstTwo}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:'8px',marginBottom:'16px'}}>
+          <input type="text" placeholder="Search UK postcode or city..." value={search} onChange={e => setSearch(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSearch()} style={{flex:1,padding:'12px 16px',border:'2px solid #e5e7eb',borderRadius:'8px',fontSize:'16px'}} />
+          <button onClick={handleSearch} style={{padding:'12px 32px',background:'#3b82f6',color:'white',borderRadius:'8px',border:'none',cursor:'pointer',fontWeight:'600'}}>Go</button>
+          <button onClick={zoomToData} disabled={stations.length === 0} style={{padding:'12px 24px',background:stations.length>0?'#10b981':'#d1d5db',color:'white',borderRadius:'8px',border:'none',cursor:stations.length>0?'pointer':'not-allowed',fontWeight:'600'}}>📍 Zoom to data</button>
+        </div>
+        <div style={{display:'flex',gap:'16px'}}>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',cursor:'pointer'}}><input type="checkbox" checked={showHeat} onChange={e => setShowHeat(e.target.checked)} style={{width:'18px',height:'18px'}} /><span>🔥 Heatmap</span></label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',cursor:'pointer'}}><input type="checkbox" checked={showPins} onChange={e => setShowPins(e.target.checked)} style={{width:'18px',height:'18px'}} /><span>📍 Markers ({stations.length})</span></label>
+          <label style={{display:'flex',alignItems:'center',gap:'8px',cursor:'pointer'}}><input type="checkbox" checked={showCouncil} onChange={e => setShowCouncil(e.target.checked)} style={{width:'18px',height:'18px'}} /><span>🗺️ Council</span></label>
+        </div>
+      </div>
+      <div style={{width:'100%',height:'100%',paddingTop:'170px'}}>
+        <MapContainer ref={mapRef} center={[51.5074,-0.1278]} zoom={11} scrollWheelZoom={true} style={{height:'100%',width:'100%'}}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxZoom={19} attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' />
+          {showHeat && stations.map(s => <Circle key={`h${s.id}`} center={[s.lat, s.lng]} radius={15000} pathOptions={{fillColor:'#ef4444',fillOpacity:0.06,stroke:false}} />)}
+          {showCouncil && councils && councils.features.length > 0 && <GeoJSON data={councils as any} style={{color:'#ff7800',weight:3,opacity:0.8,dashArray:'10, 10',fillOpacity:0.03}} onEachFeature={(feature, layer) => { if (feature.properties?.name) layer.bindTooltip(feature.properties.name) }} />}
+          {showPins && stations.map(s => (
+            <Marker key={s.id} position={[s.lat, s.lng]}>
+              <Popup maxWidth={340}>
+                <div style={{padding:'16px'}}>
+                  <h3 style={{fontWeight:'bold',fontSize:'20px',marginBottom:'12px'}}>{s.name || 'Charging Station'}</h3>
+                  <div style={{marginBottom:'16px',lineHeight:'1.6'}}>
+                    {s.address && <p style={{fontSize:'15px',marginBottom:'6px'}}>📍 {s.address}</p>}
+                    {s.postcode && <p style={{fontSize:'15px',marginBottom:'6px'}}>📮 {s.postcode}</p>}
+                    {s.type && <p style={{fontSize:'15px',marginBottom:'6px'}}>⚡ Type: <strong>{s.type}</strong></p>}
+                    {s.powerKw && <p style={{fontSize:'15px',marginBottom:'6px'}}>🔌 Power: <strong>{s.powerKw} kW</strong></p>}
+                    {s.connectors && <p style={{fontSize:'15px'}}>🔌 Connectors: <strong>{s.connectors}</strong></p>}
+                  </div>
+                  <div style={{display:'flex',gap:'10px',marginBottom:'10px'}}>
+                    <a href={`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`} target="_blank" rel="noopener noreferrer" style={{flex:1,padding:'10px',background:'#3b82f6',color:'white',textAlign:'center',borderRadius:'6px',textDecoration:'none',fontWeight:'600'}}>🧭 Directions</a>
+                  </div>
+                  <div style={{display:'flex',gap:'10px'}}>
+                    <button onClick={() => handleFeedback(s.id, '+1')} style={{flex:1,padding:'10px',background:'#10b981',color:'white',borderRadius:'6px',border:'none',cursor:'pointer',fontWeight:'600'}}>👍</button>
+                    <button onClick={() => handleFeedback(s.id, '-1')} style={{flex:1,padding:'10px',background:'#ef4444',color:'white',borderRadius:'6px',border:'none',cursor:'pointer',fontWeight:'600'}}>👎</button>
+                  </div>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
+      {toast && <div style={{position:'fixed',bottom:'24px',left:'50%',transform:'translateX(-50%)',background:'#1f2937',color:'white',padding:'12px 24px',borderRadius:'8px',zIndex:2000,fontWeight:'500'}}>{toast}</div>}
     </div>
-  );
+  )
 }
