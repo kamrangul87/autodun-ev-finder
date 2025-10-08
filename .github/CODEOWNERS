@@ -1,3 +1,2 @@
-/components/HeatmapWithScaling.tsx   @kamrangul87
-/components/ClientMap.tsx            @kamrangul87
-/app/model1-heatmap/**               @kamrangul87
+/app/api/**             @kamrangul87
+/lib/fetch*             @kamrangul87
