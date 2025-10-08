@@ -1,111 +1,134 @@
 import { NextResponse } from 'next/server'
-import type { StationsResponse, Station } from '@/lib/types'
-
-const DEMO_FALLBACK: Station[] = [
-  { id: 'demo1', name: "ChargePoint London", lat: 51.5074, lng: -0.1278, address: "Oxford St, London", type: "Fast", powerKw: 50 },
-  { id: 'demo2', name: "Tesla Supercharger", lat: 51.5155, lng: -0.0922, address: "City Road, London", type: "Rapid", powerKw: 150 },
-  { id: 'demo3', name: "BP Pulse Birmingham", lat: 52.4862, lng: -1.8904, address: "High St, Birmingham", type: "Fast", powerKw: 50 },
-  { id: 'demo4', name: "Shell Recharge Manchester", lat: 53.4808, lng: -2.2426, address: "Market St, Manchester", type: "Rapid", powerKw: 100 },
-  { id: 'demo5', name: "Ionity Leeds", lat: 53.8008, lng: -1.5491, address: "Wellington St, Leeds", type: "Ultra-Rapid", powerKw: 350 }
-]
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-export async function GET() {
+const DEMO_FALLBACK = [
+  { id: 'demo1', name: "ChargePoint London", lat: 51.5074, lng: -0.1278, address: "Oxford St, London", type: "Fast", powerKw: 50, source: 'DEMO' },
+  { id: 'demo2', name: "Tesla Supercharger", lat: 51.5155, lng: -0.0922, address: "City Road, London", type: "Rapid", powerKw: 150, source: 'DEMO' },
+  { id: 'demo3', name: "BP Pulse Birmingham", lat: 52.4862, lng: -1.8904, address: "High St, Birmingham", type: "Fast", powerKw: 50, source: 'DEMO' },
+  { id: 'demo4', name: "Shell Recharge Manchester", lat: 53.4808, lng: -2.2426, address: "Market St, Manchester", type: "Rapid", powerKw: 100, source: 'DEMO' },
+  { id: 'demo5', name: "Ionity Leeds", lat: 53.8008, lng: -1.5491, address: "Wellington St, Leeds", type: "Ultra-Rapid", powerKw: 350, source: 'DEMO' }
+]
+
+export async function GET(request: Request) {
   const source = process.env.STATIONS || 'OPENCHARGEMAP'
   
-  console.log(`[Stations API] Source: ${source}`)
+  console.log(`\n========================================`)
+  console.log(`[Stations API] Starting request`)
+  console.log(`[Stations API] Source setting: ${source}`)
+  console.log(`[Stations API] Time: ${new Date().toISOString()}`)
   
   if (source === 'OPENCHARGEMAP') {
     try {
-      // OpenChargeMap API endpoint for UK stations near London
-      const apiUrl = 'https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=100&latitude=51.5074&longitude=-0.1278&distance=50&distanceunit=Miles'
+      const apiUrl = 'https://api.openchargemap.io/v3/poi/?output=json&countrycode=GB&maxresults=100&compact=true&verbose=false&latitude=51.5074&longitude=-0.1278&distance=50&distanceunit=Miles'
       
-      console.log('[Stations API] Fetching from OpenChargeMap:', apiUrl)
+      console.log(`[Stations API] Fetching from: ${apiUrl}`)
       
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 8000)
+      const timeoutId = setTimeout(() => {
+        console.log('[Stations API] Request timeout after 8s')
+        controller.abort()
+      }, 8000)
       
-      const response = await fetch(apiUrl, { 
+      const startTime = Date.now()
+      const response = await fetch(apiUrl, {
         signal: controller.signal,
-        cache: 'no-store',
         headers: {
-          'User-Agent': 'Autodun-EV-Finder/1.0',
-          'Accept': 'application/json'
+          'User-Agent': 'Mozilla/5.0 (compatible; Autodun-EV-Finder/1.0)',
+          'Accept': 'application/json',
         }
       })
       
       clearTimeout(timeoutId)
+      const duration = Date.now() - startTime
       
-      console.log('[Stations API] Response status:', response.status)
+      console.log(`[Stations API] Response status: ${response.status} ${response.statusText}`)
+      console.log(`[Stations API] Response time: ${duration}ms`)
+      console.log(`[Stations API] Response headers:`, Object.fromEntries(response.headers.entries()))
       
       if (!response.ok) {
-        throw new Error(`OpenChargeMap API returned ${response.status}`)
+        const errorText = await response.text()
+        console.error(`[Stations API] Error response body:`, errorText.substring(0, 500))
+        throw new Error(`API returned ${response.status}: ${errorText.substring(0, 100)}`)
       }
       
       const data = await response.json()
-      console.log(`[Stations API] Received ${data.length} stations from OpenChargeMap`)
       
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new Error('No stations returned from API')
+      console.log(`[Stations API] Raw data type:`, typeof data)
+      console.log(`[Stations API] Is array:`, Array.isArray(data))
+      console.log(`[Stations API] Data length:`, data?.length)
+      console.log(`[Stations API] First item:`, JSON.stringify(data?.[0], null, 2).substring(0, 500))
+      
+      if (!Array.isArray(data)) {
+        throw new Error(`API returned non-array: ${typeof data}`)
       }
       
-      const items: Station[] = data
+      if (data.length === 0) {
+        throw new Error('API returned empty array')
+      }
+      
+      const items = data
         .filter((poi: any) => {
-          return poi?.AddressInfo?.Latitude && 
-                 poi?.AddressInfo?.Longitude &&
-                 poi?.AddressInfo?.Latitude >= -90 && 
-                 poi?.AddressInfo?.Latitude <= 90 &&
-                 poi?.AddressInfo?.Longitude >= -180 && 
-                 poi?.AddressInfo?.Longitude <= 180
+          const hasCoords = poi?.AddressInfo?.Latitude && poi?.AddressInfo?.Longitude
+          if (!hasCoords) {
+            console.log(`[Stations API] Skipping POI ${poi?.ID}: missing coordinates`)
+          }
+          return hasCoords
         })
         .slice(0, 50)
-        .map((poi: any, index: number) => {
+        .map((poi: any) => {
           const connections = poi.Connections || []
-          const firstConnection = connections[0] || {}
+          const firstConn = connections[0] || {}
           
           return {
-            id: `ocm-${poi.ID || index}`,
+            id: `ocm-${poi.ID}`,
             lat: parseFloat(poi.AddressInfo.Latitude),
             lng: parseFloat(poi.AddressInfo.Longitude),
-            name: poi.AddressInfo.Title || poi.OperatorInfo?.Title || 'Charging Station',
-            address: [
-              poi.AddressInfo.AddressLine1,
-              poi.AddressInfo.Town,
-              poi.AddressInfo.StateOrProvince
-            ].filter(Boolean).join(', '),
-            postcode: poi.AddressInfo.Postcode || '',
-            type: firstConnection.Level?.Title || firstConnection.ConnectionType?.Title || 'Standard',
-            powerKw: firstConnection.PowerKW || 0,
+            name: poi.AddressInfo?.Title || poi.OperatorInfo?.Title || 'Charging Station',
+            address: [poi.AddressInfo?.AddressLine1, poi.AddressInfo?.Town]
+              .filter(Boolean)
+              .join(', ') || 'Address not available',
+            postcode: poi.AddressInfo?.Postcode || '',
+            type: firstConn.Level?.Title || firstConn.ConnectionType?.Title || 'Standard',
+            powerKw: firstConn.PowerKW || 0,
             connectors: connections.length,
             source: 'OPENCHARGEMAP'
           }
         })
       
-      console.log(`[Stations API] Returning ${items.length} processed stations`)
+      console.log(`[Stations API] ✅ SUCCESS: Returning ${items.length} live stations`)
+      console.log(`[Stations API] Sample station:`, items[0])
+      console.log(`========================================\n`)
       
-      return NextResponse.json({ 
-        items, 
-        source: 'OPENCHARGEMAP' 
-      } as StationsResponse, {
+      return NextResponse.json({
+        items,
+        source: 'OPENCHARGEMAP'
+      }, {
         headers: {
-          'Cache-Control': 'no-store, must-revalidate',
-          'Content-Type': 'application/json'
+          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
       })
       
     } catch (error) {
-      console.error('[Stations API] OpenChargeMap fetch failed:', error)
-      console.error('[Stations API] Error details:', error instanceof Error ? error.message : String(error))
+      console.error(`[Stations API] ❌ ERROR:`, error)
+      console.error(`[Stations API] Error type:`, error instanceof Error ? error.constructor.name : typeof error)
+      console.error(`[Stations API] Error message:`, error instanceof Error ? error.message : String(error))
+      console.error(`[Stations API] Error stack:`, error instanceof Error ? error.stack : 'N/A')
+      console.log(`[Stations API] Falling back to DEMO data`)
+      console.log(`========================================\n`)
     }
   }
   
-  console.log('[Stations API] Using DEMO fallback')
-  return NextResponse.json({ 
-    items: DEMO_FALLBACK, 
-    source: 'DEMO' 
-  } as StationsResponse, {
+  console.log(`[Stations API] Returning DEMO fallback`)
+  console.log(`========================================\n`)
+  
+  return NextResponse.json({
+    items: DEMO_FALLBACK,
+    source: 'DEMO'
+  }, {
     headers: {
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json'
