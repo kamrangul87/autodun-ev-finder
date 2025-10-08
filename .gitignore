@@ -3,3 +3,5 @@ public/workbox-*.js
 public/fallback-*.js
 node_modules/
 .next
+.env
+.env*.local
