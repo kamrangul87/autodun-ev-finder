@@ -7,8 +7,18 @@ const Tiles = dynamic(() => import('react-leaflet').then(m => m.TileLayer), { ss
 const Pin = dynamic(() => import('react-leaflet').then(m => m.Marker), { ssr: false })
 const Info = dynamic(() => import('react-leaflet').then(m => m.Popup), { ssr: false })
 
+interface Station {
+  id: number
+  name: string
+  lat: number
+  lng: number
+  address: string
+  type: string
+  power: string
+}
+
 export default function Page() {
-  const [data, setData] = useState([])
+  const [data, setData] = useState<Station[]>([])
   const [ok, setOk] = useState(false)
   
   useEffect(() => {
