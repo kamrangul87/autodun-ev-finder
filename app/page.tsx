@@ -31,7 +31,9 @@ export default function Home() {
     s.address.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-xl">Loading map...</div>;
+  if (loading) {
+    return <div className="flex items-center justify-center h-screen text-xl">Loading map...</div>;
+  }
 
   return (
     <div className="relative w-full h-screen">
@@ -75,7 +77,7 @@ export default function Home() {
           scrollWheelZoom={true}
         >
           <TileLayer 
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            attribution='&copy; OpenStreetMap'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
           />
 
