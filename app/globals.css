@@ -8,12 +8,23 @@
   box-sizing: border-box;
 }
 
+html, body {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: system-ui, -apple-system, sans-serif;
 }
 
 .leaflet-container {
-  height: 100%;
-  width: 100%;
+  height: 100% !important;
+  width: 100% !important;
   z-index: 1;
+}
+
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+  display: block;
 }
