@@ -6,7 +6,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
   try {
-    const result = await fetchStations();
+    // Parse query parameters with defaults (London, 50km)
+    const lat = req.query.lat ? parseFloat(req.query.lat) : 51.5074;
+    const lng = req.query.lng ? parseFloat(req.query.lng) : -0.1278;
+    const distance = req.query.distance ? parseFloat(req.query.distance) : 50;
+    const src = req.query.src || null;
+
+    const result = await fetchStations(lat, lng, distance, src);
     res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=3600');
     res.status(200).json({
       items: result.items,
