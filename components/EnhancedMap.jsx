@@ -147,7 +147,7 @@ function CouncilMarker({ feature }) {
   );
 }
 
-function ViewportFetcher({ onFetchStations, searchResult, shouldZoomToData, stations }) {
+function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shouldZoomToData, stations }) {
   const map = useMap();
   const fetchTimeoutRef = useRef(null);
   const lastFetchRef = useRef(null);
@@ -163,22 +163,25 @@ function ViewportFetcher({ onFetchStations, searchResult, shouldZoomToData, stat
 
     const cached = getCached(cacheKey);
     if (cached) {
-      onFetchStations(cached);
+      onFetchStations?.(cached);
       return;
     }
 
     try {
+      onLoadingChange?.(true);
       const url = `/api/stations?lat=${center.lat}&lng=${center.lng}&radius=${radius}&max=1000`;
       const response = await fetch(url);
       const data = await response.json();
       if (response.ok) {
         setCache(cacheKey, data);
-        onFetchStations(data);
+        onFetchStations?.(data);
       }
     } catch (error) {
       console.error('Viewport fetch error:', error);
+    } finally {
+      onLoadingChange?.(false);
     }
-  }, [map, onFetchStations]);
+  }, [map, onFetchStations, onLoadingChange]);
 
   useMapEvents({
     moveend: () => {
@@ -216,6 +219,7 @@ export default function EnhancedMap({
   searchResult = null, 
   shouldZoomToData = false,
   onFetchStations,
+  onLoadingChange,
   isLoading = false
 }) {
   return (
@@ -239,7 +243,8 @@ export default function EnhancedMap({
           maxZoom={19}
         />
         <ViewportFetcher 
-          onFetchStations={onFetchStations} 
+          onFetchStations={onFetchStations}
+          onLoadingChange={onLoadingChange}
           searchResult={searchResult} 
           shouldZoomToData={shouldZoomToData}
           stations={stations}

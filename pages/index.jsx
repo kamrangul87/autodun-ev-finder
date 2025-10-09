@@ -1,11 +1,11 @@
 // pages/index.jsx - HOTFIX
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import { searchLocation } from '../lib/postcode-search';
 import { getInitialState, updateURL } from '../utils/url-state';
 
-const Map = dynamic(() => import('../components/Map'), {
+const EnhancedMap = dynamic(() => import('../components/EnhancedMap'), {
   ssr: false,
   loading: () => <div style={{ width: '100%', height: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f3f4f6' }}><p>Loading map...</p></div>
 });
@@ -24,24 +24,24 @@ export default function Home() {
 
   useEffect(() => { setState(getInitialState()); }, []);
 
-  const fetchStations = async (lat = null, lng = null, distance = 50) => {
-    setLoading(true);
+  const handleFetchStations = useCallback((data) => {
+    console.log('[handleFetchStations] Received data:', data?.count, 'stations from', data?.source);
+    setStations(data?.items || []);
+    setDataSource(data?.source || 'DEMO');
+    setFellBack(data?.fellBack || false);
     setError(null);
+  }, []);
+
+  const manualRefresh = async () => {
+    setLoading(true);
     try {
-      let url = '/api/stations';
-      if (lat !== null && lng !== null) {
-        url += `?lat=${lat}&lng=${lng}&distance=${distance}`;
-      }
-      const response = await fetch(url);
+      const response = await fetch('/api/stations');
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Failed to fetch stations');
-      setStations(data.items || []);
-      setDataSource(data.source || 'DEMO');
-      setFellBack(data.fellBack || false);
+      if (response.ok) {
+        handleFetchStations(data);
+      }
     } catch (err) {
-      console.error('Fetch error:', err);
       setError(err.message);
-      setStations([]);
     } finally {
       setLoading(false);
     }
@@ -56,7 +56,7 @@ export default function Home() {
     }
   };
 
-  useEffect(() => { fetchStations(); fetchCouncilData(); }, []);
+  useEffect(() => { fetchCouncilData(); }, []);
   useEffect(() => { updateURL(state, true); }, [state]);
 
   const toggleHeat = () => setState(s => ({ ...s, heat: !s.heat }));
@@ -70,8 +70,6 @@ export default function Home() {
     try {
       const result = await searchLocation(state.query);
       setSearchResult(result);
-      // Refetch stations near the searched location
-      await fetchStations(result.lat, result.lng, 50);
     } catch (err) {
       setError(`Search failed: ${err.message}`);
     } finally {
@@ -115,7 +113,7 @@ export default function Home() {
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button onClick={handleZoomToData} style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>Zoom to data</button>
-            <button onClick={fetchStations} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>{loading ? 'Loading...' : 'Refresh'}</button>
+            <button onClick={manualRefresh} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>{loading ? 'Loading...' : 'Refresh'}</button>
           </div>
         </div>
         <div style={{ padding: '0.5rem 1rem', background: '#e5e7eb', fontSize: '0.75rem', color: '#6b7280' }}>
@@ -125,7 +123,18 @@ export default function Home() {
           <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>⚠️ {error}</div>
         )}
         <div style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}>
-          {!loading && <Map stations={stations} showHeatmap={state.heat} showMarkers={state.markers} showCouncil={state.council} councilData={councilData} searchResult={searchResult} shouldZoomToData={shouldZoomToData} onFeedback={(id) => console.log('Feedback for:', id)} />}
+          <EnhancedMap 
+            stations={stations} 
+            showHeatmap={state.heat} 
+            showMarkers={state.markers} 
+            showCouncil={state.council} 
+            councilData={councilData} 
+            searchResult={searchResult} 
+            shouldZoomToData={shouldZoomToData}
+            onFetchStations={handleFetchStations}
+            onLoadingChange={setLoading}
+            isLoading={loading}
+          />
         </div>
       </div>
     </>
