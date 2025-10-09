@@ -93,7 +93,6 @@ export default function Home() {
       <Head>
         <title>Autodun EV Finder - Find Charging Stations</title>
         <meta name="description" content="Find electric vehicle charging stations in the UK" />
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossOrigin="" />
       </Head>
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
         <header style={{ padding: '1rem', background: '#1f2937', color: 'white', borderBottom: '2px solid #3b82f6' }}>
