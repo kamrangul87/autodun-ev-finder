@@ -10,9 +10,13 @@ export default async function handler(req, res) {
     const lat = req.query.lat ? parseFloat(req.query.lat) : 51.5074;
     const lng = req.query.lng ? parseFloat(req.query.lng) : -0.1278;
     const distance = req.query.distance ? parseFloat(req.query.distance) : 50;
+    const radius = req.query.radius ? parseFloat(req.query.radius) : distance; // Accept both distance and radius
+    const max = req.query.max ? parseInt(req.query.max) : 500;
     const src = req.query.src || null;
 
-    const result = await fetchStations(lat, lng, distance, src);
+    const result = await fetchStations(lat, lng, radius, src, max);
+    
+    // Cache for 30 minutes with stale-while-revalidate
     res.setHeader('Cache-Control', 's-maxage=1800, stale-while-revalidate=3600');
     res.status(200).json({
       items: result.items,
@@ -20,6 +24,8 @@ export default async function handler(req, res) {
       source: result.source,
       fellBack: result.fellBack || false,
       originalSource: result.originalSource,
+      center: { lat, lng },
+      radius,
       timestamp: new Date().toISOString()
     });
   } catch (error) {

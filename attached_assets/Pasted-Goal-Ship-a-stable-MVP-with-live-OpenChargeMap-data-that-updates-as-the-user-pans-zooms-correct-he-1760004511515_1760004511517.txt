@@ -1,0 +1,179 @@
+Goal: Ship a stable MVP with live OpenChargeMap data that updates as the user pans/zooms, correct heatmap & markers everywhere (not just central), clearer council display, and a proper feedback form inside the station popup. Keep everything in the existing stack (Next.js + Leaflet/React Leaflet). No breaking API keys or env handling.
+
+0) Baseline
+
+Keep current env keys working. Use server-side /api/stations only (no keys in client).
+
+Preserve existing toggles (Heatmap / Markers / Council), search (postcodes.io → Nominatim fallback), and URL-state.
+
+1) Dynamic live data (viewport-driven) from OpenChargeMap
+
+Right now we only fetch once (fixed lat/lng), so stations/heatmap get stuck over central London.
+
+Implement:
+
+On map moveend and on first load:
+
+Compute map center and radius (km) from current bounds.
+
+Call /api/stations?lat=<center>&lng=<center>&radius=<km>&max=1000.
+
+Server route should call OCM with:
+
+latitude, longitude, distance, distanceunit=KM, maxresults (paginate if necessary), compact=true, verbose=false.
+
+Use our existing normalization so the front-end doesn’t change.
+
+Debounce requests (e.g., 400–600 ms) and cache by rounded lat/lng+radius to avoid spamming OCM while panning.
+
+If OCM fails or returns empty, fall back to STATIC then DEMO (we already have fallback logic — just make sure it still works with query params).
+
+Acceptance:
+
+Panning the map to Manchester, Bristol, Glasgow, etc. repopulates markers & heatmap in those places within ~1–2s.
+
+The “Source:” badge shows OPENCHARGE when OCM returns data.
+
+No keys leak to client; all OCM calls stay server-side.
+
+2) Heatmap & Markers update correctly
+
+Implement:
+
+The heatmap/markers must be generated from the current stations state (i.e., what we just fetched for the visible viewport).
+
+When toggles change, layers add/remove without stale data or re-centering the map unexpectedly.
+
+Use clustering for markers (we already have the dependency path; ensure it’s properly wired for React Leaflet v3).
+
+Acceptance:
+
+With heatmap ON, its glow follows wherever I pan and fetches happen.
+
+With markers ON, I see clusters that expand when I zoom; no giant stack only in central London.
+
+3) Council display: switch to markers instead of polygon overlay
+
+Current dashed polygon overlay is visually noisy.
+
+Implement:
+
+Load public/data/london-councils.geojson as we do now.
+
+Compute a centroid for each council feature (simple average of coords is fine; or use a tiny helper function).
+
+Render a council marker (pin or small dot) with council name in a tooltip.
+
+Keep the Council toggle; when ON, show markers; when OFF, hide.
+
+(Optional polish) Slightly different icon color so they’re distinguishable from station markers.
+
+Acceptance:
+
+Toggling “Council” shows clean markers (not polygons) with council names on hover.
+
+4) Station popup → real feedback form
+
+We currently have quick feedback logging. Make it a small but real form.
+
+Implement:
+
+In the station popup:
+
+Keep Directions button.
+
+Add a Feedback section with:
+
+Select/segmented: 👍 Good / 👎 Bad
+
+Optional comment (textarea, max 280 chars)
+
+Submit button
+
+POST to /api/feedback (we already store in memory & console; keep that, but also:
+
+Include stationId, type (good/bad), comment, ISO timestamp, and user agent/IP as we already capture).
+
+After submit: toast “Thanks for your feedback!” and disable the button briefly.
+
+Acceptance:
+
+Submitting both “Good” and “Bad” with/without comment works and logs in the server console.
+
+No page reload; popup stays responsive.
+
+5) Search → pan & fetch
+
+Implement:
+
+After search success (postcodes.io or Nominatim), pan the map to the result and trigger the viewport-based fetch (so local stations appear).
+
+If the result is outside UK, show a friendly “No stations nearby yet” note.
+
+Acceptance:
+
+Typing “M1 2BN” or “Birmingham” jumps there and loads stations within the new viewport (markers + heatmap reflect that area).
+
+6) Performance & UX polish
+
+Implement:
+
+Debounce move events, destroy old layers before adding new ones to avoid stacking heat layers.
+
+Add a tiny “loading stations…” spinner at map top-right when a fetch is in-flight; hide on success/error.
+
+Make sure map does not auto-recenter when toggling layers or refreshing; only recenters on search or explicit “Zoom to data”.
+
+Acceptance:
+
+Smooth pan/zoom with no UI jank; spinner only shows briefly during fetch.
+
+7) Env & secrets
+
+Do not expose any secret in client bundle.
+
+Continue to read OCD_API_KEY/OCM_API_KEY or similar on the server.
+
+Respect STATIONS env (OPENCHARGE, STATIC, DEMO). When OPENCHARGE, the new viewport-enabled flow is active.
+
+8) Tests & build
+
+Keep scripts/test-mvp.sh passing.
+
+Ensure npm run build is green in Replit’s “Publishing”.
+
+No ESM/CJS or TS type errors.
+
+9) Acceptance checklist (demo I can click through)
+
+ Pan to Manchester → markers & heatmap appear there (OPENCHARGE).
+
+ Pan to Bristol, Glasgow → same.
+
+ Heatmap follows the viewport (no central-only blob).
+
+ Council toggle shows markers with council names on hover.
+
+ Popup feedback form works (good/bad + optional comment).
+
+ Search “EC1Y 2BJ” recenters and loads local stations.
+
+ No console errors; smooth interaction; spinner shows during fetch.
+
+Notes / Constraints
+
+Do not switch mapping lib; stay with Leaflet/React Leaflet.
+
+Keep bundle size reasonable (cluster & heat are fine).
+
+OCM rate limits: be polite (debounce + cache by lat/lng/radius). If we hit rate limit, show a non-blocking toast and keep last data visible.
+
+When done, reply with:
+
+A short summary of what changed.
+
+Files touched and why (bulleted).
+
+Anything you cached/debounced and the TTL/keys.
+
+One-liner how to test each acceptance item.
