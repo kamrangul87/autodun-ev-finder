@@ -1,11 +1,8 @@
 {
-  "crons": [
-    {
-      "path": "/api/refresh",
-      "schedule": "0 3 * * *"
-    }
-  ],
+  "version": 2,
+  "build": { "env": { "NODE_VERSION": "20" } },
   "env": {
-    "STATIONS": "STATIC"
+    "STATIONS": "STATIC",
+    "NEXT_PUBLIC_TILE_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
   }
 }

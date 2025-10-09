@@ -3,72 +3,78 @@ import { useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 
-// Fix default marker icons (Next bundling)
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
-  iconUrl:       'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
-  shadowUrl:     'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
 });
 
-// Ensure tiles render when container size changes
-function ResizeFix() {
+function MapInitializer() {
   const map = useMap();
   useEffect(() => {
-    setTimeout(() => map.invalidateSize(), 0);
+    setTimeout(() => map.invalidateSize(), 100);
   }, [map]);
   return null;
 }
 
-function HeatmapLayer({ stations }) {
+function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
-  const ref = useRef(null);
+  const heatLayerRef = useRef(null);
   useEffect(() => {
-    if (!map || !stations?.length) return;
+    if (!map || !stations || stations.length === 0) return;
     import('leaflet.heat').then(() => {
-      if (ref.current) map.removeLayer(ref.current);
-      const pts = stations.map(s => [s.lat, s.lng, Math.max(1, s.connectors || 1)]);
-      ref.current = L.heatLayer(pts, { radius: 25, blur: 15, maxZoom: 17 }).addTo(map);
+      if (heatLayerRef.current) map.removeLayer(heatLayerRef.current);
+      const heatData = stations.map(s => [s.lat, s.lng, (s.connectors || 1) * intensity]);
+      heatLayerRef.current = L.heatLayer(heatData, {
+        radius: 25, blur: 15, maxZoom: 17, max: 1.0,
+        gradient: { 0.0: 'blue', 0.5: 'lime', 0.7: 'yellow', 1.0: 'red' }
+      }).addTo(map);
     });
-    return () => { if (ref.current) map.removeLayer(ref.current); };
-  }, [map, stations]);
+    return () => { if (heatLayerRef.current) map.removeLayer(heatLayerRef.current); };
+  }, [map, stations, intensity]);
   return null;
 }
 
-function CouncilLayer({ geojson }) {
-  if (!geojson) return null;
-  const style = { color: '#ff6b35', weight: 2, opacity: 0.9, dashArray: '6 4', fillOpacity: 0.05 };
-  const each = (f, l) => {
-    const n = f?.properties?.name;
-    if (n) l.bindTooltip(n, { direction: 'center' });
+function StationMarker({ station, onFeedback }) {
+  const handleDirections = () => {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
-  return <GeoJSON data={geojson} style={style} onEachFeature={each} />;
-}
-
-function StationMarker({ s }) {
-  const directions = () =>
-    window.open(`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`, '_blank', 'noopener,noreferrer');
-  const feedback = async () => {
+  const handleQuickFeedback = async () => {
     try {
-      const r = await fetch('/api/feedback', {
+      onFeedback?.(station.id);
+      const response = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stationId: s.id, type: 'quick', timestamp: new Date().toISOString() })
+        body: JSON.stringify({ stationId: station.id, type: 'quick', timestamp: new Date().toISOString() })
       });
-      if (r.ok) alert('Thanks for your feedback!');
-    } catch {}
+      if (response.ok) alert('Thanks for your feedback!');
+    } catch (error) {
+      console.error('Feedback error:', error);
+    }
   };
   return (
-    <Marker position={[s.lat, s.lng]}>
-      <Popup>
-        <div style={{ minWidth: 180 }}>
-          <strong>{s.name || 'EV Station'}</strong>
-          {s.address && <div style={{ color:'#666' }}>{s.address}</div>}
-          {s.postcode && <div style={{ color:'#666' }}>{s.postcode}</div>}
-          {s.connectors != null && <div><b>Connectors:</b> {s.connectors}</div>}
-          <div style={{ display:'flex', gap:8, marginTop:8 }}>
-            <button onClick={feedback}  style={{ flex:1, padding:'6px 8px', background:'#10b981', color:'#fff', border:'none', borderRadius:4, cursor:'pointer' }}>👍 Feedback</button>
-            <button onClick={directions} style={{ flex:1, padding:'6px 8px', background:'#3b82f6', color:'#fff', border:'none', borderRadius:4, cursor:'pointer' }}>🧭 Directions</button>
+    <Marker position={[station.lat, station.lng]}>
+      <Popup maxWidth={250}>
+        <div style={{ padding: '8px' }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>
+            {station.name || 'EV Station'}
+          </h3>
+          {station.address && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.address}</p>}
+          {station.postcode && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.postcode}</p>}
+          {station.connectors && (
+            <p style={{ margin: '4px 0', fontSize: '12px', color: '#333' }}>
+              <strong>Connectors:</strong> {station.connectors}
+            </p>
+          )}
+          <div style={{ marginTop: '12px', display: 'flex', gap: '8px' }}>
+            <button onClick={handleQuickFeedback} style={{ flex: 1, padding: '6px 12px', fontSize: '12px', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+              👍 Feedback
+            </button>
+            <button onClick={handleDirections} style={{ flex: 1, padding: '6px 12px', fontSize: '12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+              🧭 Directions
+            </button>
           </div>
         </div>
       </Popup>
@@ -76,31 +82,48 @@ function StationMarker({ s }) {
   );
 }
 
-export default function Map({
-  stations = [],
-  showHeatmap = false,
-  showMarkers = true,
-  showCouncil = false,
-  councilData = null,
-}) {
-  const center = [51.5074, -0.1278]; // London
+function MapControl({ stations, searchResult, shouldZoomToData }) {
+  const map = useMap();
+  useEffect(() => {
+    if (searchResult) map.setView([searchResult.lat, searchResult.lng], 14);
+  }, [map, searchResult]);
+  useEffect(() => {
+    if (shouldZoomToData && stations && stations.length > 0) {
+      const bounds = L.latLngBounds(stations.map(s => [s.lat, s.lng]));
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+  }, [map, stations, shouldZoomToData]);
+  return null;
+}
+
+function CouncilLayer({ geojson }) {
+  const councilStyle = { color: '#ff6b35', weight: 2, opacity: 0.8, fillOpacity: 0.1, dashArray: '5, 5' };
+  const onEachFeature = (feature, layer) => {
+    if (feature.properties && feature.properties.name) {
+      layer.bindTooltip(feature.properties.name, { permanent: false, direction: 'center', className: 'council-tooltip' });
+    }
+  };
+  return geojson ? <GeoJSON data={geojson} style={councilStyle} onEachFeature={onEachFeature} /> : null;
+}
+
+export default function Map({ stations = [], showHeatmap = false, showMarkers = true, showCouncil = false, councilData = null, searchResult = null, shouldZoomToData = false, onFeedback }) {
+  const defaultCenter = [51.5074, -0.1278];
+  const defaultZoom = 10;
+  const tileUrl = process.env.NEXT_PUBLIC_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+  
   return (
-    <MapContainer
-      center={center}
-      zoom={10}
-      style={{ width: '100%', height: '75vh' }}
-      scrollWheelZoom
-    >
-      <ResizeFix />
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    <MapContainer center={defaultCenter} zoom={defaultZoom} style={{ height: '75vh', width: '100%' }} scrollWheelZoom={true}>
+      <MapInitializer />
+      <TileLayer 
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' 
+        url={tileUrl}
         referrerPolicy="no-referrer-when-downgrade"
         crossOrigin="anonymous"
       />
       {showHeatmap && <HeatmapLayer stations={stations} />}
-      {showMarkers && stations.map((s) => <StationMarker key={s.id} s={s} />)}
+      {showMarkers && stations.map(station => <StationMarker key={station.id} station={station} onFeedback={onFeedback} />)}
       {showCouncil && <CouncilLayer geojson={councilData} />}
+      <MapControl stations={stations} searchResult={searchResult} shouldZoomToData={shouldZoomToData} />
     </MapContainer>
   );
 }
