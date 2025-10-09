@@ -1,9 +1,7 @@
-// components/Map.jsx - HOTFIX
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 
-// Fix Leaflet default icons
 if (typeof window !== 'undefined') {
   delete L.Icon.Default.prototype._getIconUrl;
   L.Icon.Default.mergeOptions({
@@ -16,10 +14,10 @@ if (typeof window !== 'undefined') {
 function MapInitializer() {
   const map = useMap();
   useEffect(() => {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       map.invalidateSize();
-      console.log('Map initialized:', map.getSize());
     }, 100);
+    return () => clearTimeout(timer);
   }, [map]);
   return null;
 }
@@ -63,9 +61,7 @@ function StationMarker({ station, onFeedback }) {
     <Marker position={[station.lat, station.lng]}>
       <Popup maxWidth={250}>
         <div style={{ padding: '8px' }}>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>
-            {station.name || 'EV Station'}
-          </h3>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{station.name || 'EV Station'}</h3>
           {station.address && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.address}</p>}
           {station.postcode && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.postcode}</p>}
           {station.connectors && <p style={{ margin: '4px 0', fontSize: '12px', color: '#333' }}><strong>Connectors:</strong> {station.connectors}</p>}
@@ -104,29 +100,23 @@ function CouncilLayer({ geojson }) {
 }
 
 export default function Map({ stations = [], showHeatmap = false, showMarkers = true, showCouncil = false, councilData = null, searchResult = null, shouldZoomToData = false, onFeedback }) {
-  const [mapReady, setMapReady] = useState(false);
-  
   return (
-    <div style={{ width: '100%', height: '100%', minHeight: '500px', position: 'relative' }}>
-      <MapContainer 
-        center={[51.5074, -0.1278]} 
-        zoom={10} 
-        style={{ width: '100%', height: '100%', minHeight: '500px' }}
-        scrollWheelZoom={true}
-        whenCreated={() => setMapReady(true)}
-      >
-        <MapInitializer />
-        <TileLayer 
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' 
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
-          subdomains={['a', 'b', 'c']}
-        />
-        {showHeatmap && <HeatmapLayer stations={stations} />}
-        {showMarkers && stations.map(station => <StationMarker key={station.id} station={station} onFeedback={onFeedback} />)}
-        {showCouncil && <CouncilLayer geojson={councilData} />}
-        <MapControl stations={stations} searchResult={searchResult} shouldZoomToData={shouldZoomToData} />
-      </MapContainer>
-    </div>
+    <MapContainer 
+      center={[51.5074, -0.1278]} 
+      zoom={10} 
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
+      scrollWheelZoom={true}
+    >
+      <MapInitializer />
+      <TileLayer 
+        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' 
+        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        maxZoom={19}
+      />
+      {showHeatmap && <HeatmapLayer stations={stations} />}
+      {showMarkers && stations.map(station => <StationMarker key={station.id} station={station} onFeedback={onFeedback} />)}
+      {showCouncil && <CouncilLayer geojson={councilData} />}
+      <MapControl stations={stations} searchResult={searchResult} shouldZoomToData={shouldZoomToData} />
+    </MapContainer>
   );
 }
