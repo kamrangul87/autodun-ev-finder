@@ -4,20 +4,19 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
 
 ## Recent Changes
-**2025-10-09: Dynamic Viewport-Driven MVP with Enhanced UX**
-- ✅ Implemented **viewport-driven data fetching** - Map dynamically loads stations as you pan/zoom
-- ✅ Fetches up to 1000 stations based on current map bounds with intelligent caching (5min TTL)
-- ✅ Debounced move events (500ms) to prevent API spam while panning
-- ✅ Loading spinner shows during fetches with proper state management
-- ✅ **Council display as centroid markers** instead of polygon overlay (cleaner UI)
-- ✅ **Real feedback form** in station popups: Good/Bad + optional comment (280 chars)
-- ✅ Search triggers viewport fetch - pan to location and auto-load nearby stations
-- ✅ Heatmap & markers update dynamically with viewport data
-- ✅ MarkerClusterGroup for efficient rendering of 1000+ stations
-- ✅ Robust fallback system: OPENCHARGE → STATIC → DEMO
-- ✅ Fixed Leaflet stylesheet loading via _document.tsx
-- ✅ Map renders reliably with full viewport height
-- ✅ Accepts both "OPENCHARGE" and "OCM" as valid STATIONS values
+**2025-10-09: Production-Ready Viewport-Driven MVP ✅**
+- ✅ **Viewport-driven data fetching** - Map dynamically loads 1000 stations as you pan/zoom
+- ✅ Intelligent caching (5min TTL) with debounced move events (500ms) prevents API spam
+- ✅ Loading states with spinner, proper error handling, and retry logic
+- ✅ **Search-triggered fetch** - Searching postcodes now pans map AND loads nearby stations
+- ✅ **Failed requests don't block retries** - Smart cache key management prevents permanent blocks
+- ✅ **Council centroid markers** instead of polygon overlay for clean, performant UI
+- ✅ **Real feedback form** in station popups: Good/Bad selection + optional 280-char comment
+- ✅ Heatmap & clustered markers update dynamically with viewport data (MarkerClusterGroup)
+- ✅ Robust 3-tier fallback: OPENCHARGE (live) → STATIC (JSON) → DEMO (sample)
+- ✅ Production build passes ✅ - Ready for deployment
+- ✅ Deployed on Replit with autoscale configuration
+- ✅ All acceptance criteria verified and tested
 
 ## Project Architecture
 - **Framework**: Next.js 14 (Pages Router)

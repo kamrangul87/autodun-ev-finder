@@ -25,11 +25,7 @@ export default function Home() {
   useEffect(() => { setState(getInitialState()); }, []);
 
   const handleFetchStations = useCallback((data) => {
-    if (!data) {
-      console.error('[handleFetchStations] No data received');
-      return;
-    }
-    console.log('[handleFetchStations] Updating state:', data.count, 'stations from', data.source);
+    if (!data) return;
     setStations(data.items || []);
     setDataSource(data.source || 'DEMO');
     setFellBack(data.fellBack || false);
