@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Tooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, useMapEvents, Tooltip, GeoJSON } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
 import { calculateBoundsRadius, getCacheKey, computeCentroid } from '../utils/map-utils';
@@ -33,6 +33,14 @@ function MapInitializer() {
 function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
   const heatLayerRef = useRef(null);
+  const [zoom, setZoom] = useState(map.getZoom());
+
+  useEffect(() => {
+    const updateZoom = () => setZoom(map.getZoom());
+    map.on('zoomend', updateZoom);
+    return () => map.off('zoomend', updateZoom);
+  }, [map]);
+
   useEffect(() => {
     if (!map || !stations || stations.length === 0) {
       if (heatLayerRef.current) {
@@ -41,21 +49,42 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       }
       return;
     }
+    
     import('leaflet.heat').then(() => {
       if (heatLayerRef.current) map.removeLayer(heatLayerRef.current);
-      const heatData = stations.map(s => [s.lat, s.lng, (s.connectors || 1) * intensity]);
+      
+      const currentZoom = map.getZoom();
+      const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
+      const maxIntensity = Math.max(...stations.map(s => s.connectors || 1));
+      
+      const heatData = stations.map(s => [
+        s.lat, 
+        s.lng, 
+        ((s.connectors || 1) / maxIntensity) * intensity
+      ]);
+      
       heatLayerRef.current = L.heatLayer(heatData, {
-        radius: 25, blur: 15, maxZoom: 17, max: 1.0,
-        gradient: { 0.0: 'blue', 0.5: 'lime', 0.7: 'yellow', 1.0: 'red' }
+        radius: radius,
+        blur: 15,
+        maxZoom: 17,
+        max: 1.0,
+        gradient: { 
+          0.0: 'green', 
+          0.4: 'yellow', 
+          0.7: 'orange', 
+          1.0: 'red' 
+        }
       }).addTo(map);
     });
+    
     return () => {
       if (heatLayerRef.current) {
         map.removeLayer(heatLayerRef.current);
         heatLayerRef.current = null;
       }
     };
-  }, [map, stations, intensity]);
+  }, [map, stations, intensity, zoom]);
+  
   return null;
 }
 
@@ -140,6 +169,11 @@ function StationMarker({ station }) {
 function CouncilMarker({ feature, stations = [] }) {
   const map = useMap();
   const centroid = computeCentroid(feature.geometry.coordinates);
+  const [showIssueForm, setShowIssueForm] = useState(false);
+  const [issueComment, setIssueComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  
   if (!centroid) return null;
 
   const stationCount = stations.filter(station => {
@@ -158,9 +192,37 @@ function CouncilMarker({ feature, stations = [] }) {
     }
   };
 
+  const handleReportIssue = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stationId: `council-${feature.properties.name}`,
+          type: 'council',
+          comment: issueComment.trim(),
+          timestamp: new Date().toISOString(),
+          councilId: feature.properties.name
+        })
+      });
+      setSubmitted(true);
+      setTimeout(() => {
+        setShowIssueForm(false);
+        setSubmitted(false);
+        setIssueComment('');
+      }, 2000);
+    } catch (error) {
+      console.error('Report issue error:', error);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   return (
     <Marker position={[centroid.lat, centroid.lng]} icon={councilIcon}>
-      <Popup maxWidth={200}>
+      <Popup maxWidth={240} onClose={() => setShowIssueForm(false)}>
         <div style={{ padding: '8px' }}>
           <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{feature.properties.name}</h3>
           <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>
@@ -182,6 +244,87 @@ function CouncilMarker({ feature, stations = [] }) {
           >
             🔍 Zoom to borough
           </button>
+          
+          {!showIssueForm && !submitted && (
+            <button 
+              onClick={() => setShowIssueForm(true)}
+              style={{ 
+                marginTop: '8px', 
+                width: '100%', 
+                padding: '6px 12px', 
+                fontSize: '12px', 
+                background: '#f59e0b', 
+                color: 'white', 
+                border: 'none', 
+                borderRadius: '4px', 
+                cursor: 'pointer' 
+              }}
+            >
+              ⚠️ Report boundary issue
+            </button>
+          )}
+          
+          {showIssueForm && !submitted && (
+            <form onSubmit={handleReportIssue} style={{ marginTop: '8px' }}>
+              <textarea 
+                value={issueComment} 
+                onChange={(e) => setIssueComment(e.target.value.slice(0, 280))} 
+                maxLength={280}
+                placeholder="Describe the boundary issue..." 
+                style={{ 
+                  width: '100%', 
+                  padding: '6px', 
+                  fontSize: '11px', 
+                  border: '1px solid #d1d5db', 
+                  borderRadius: '4px', 
+                  resize: 'vertical', 
+                  minHeight: '50px',
+                  marginBottom: '4px'
+                }} 
+              />
+              <div style={{ fontSize: '10px', color: '#9ca3af', textAlign: 'right', marginBottom: '6px' }}>{issueComment.length}/280</div>
+              <div style={{ display: 'flex', gap: '4px' }}>
+                <button 
+                  type="button"
+                  onClick={() => setShowIssueForm(false)}
+                  style={{ 
+                    flex: 1,
+                    padding: '4px 8px', 
+                    fontSize: '11px', 
+                    background: '#6b7280', 
+                    color: 'white', 
+                    border: 'none', 
+                    borderRadius: '4px', 
+                    cursor: 'pointer' 
+                  }}
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  disabled={submitting || !issueComment.trim()}
+                  style={{ 
+                    flex: 1,
+                    padding: '4px 8px', 
+                    fontSize: '11px', 
+                    background: issueComment.trim() ? '#f59e0b' : '#d1d5db', 
+                    color: 'white', 
+                    border: 'none', 
+                    borderRadius: '4px', 
+                    cursor: submitting || !issueComment.trim() ? 'not-allowed' : 'pointer' 
+                  }}
+                >
+                  {submitting ? 'Sending...' : 'Submit'}
+                </button>
+              </div>
+            </form>
+          )}
+          
+          {submitted && (
+            <div style={{ marginTop: '8px', padding: '8px', textAlign: 'center', color: '#10b981', fontSize: '11px', fontWeight: '500' }}>
+              ✓ Thanks for reporting!
+            </div>
+          )}
         </div>
       </Popup>
       <Tooltip direction="top" opacity={0.9}>{feature.properties.name}</Tooltip>
@@ -256,7 +399,7 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
   useMapEvents({
     moveend: () => {
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(fetchForViewport, 500);
+      fetchTimeoutRef.current = setTimeout(fetchForViewport, 300);
     }
   });
 
@@ -299,11 +442,26 @@ export default function EnhancedMap({
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       {isLoading && (
-        <div style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 1000, background: 'white', padding: '8px 12px', borderRadius: '4px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ width: '16px', height: '16px', border: '2px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
-          <span style={{ fontSize: '12px', fontWeight: '500', color: '#374151' }}>Loading stations...</span>
+        <div style={{ position: 'absolute', bottom: '10px', left: '10px', zIndex: 1000, background: 'white', padding: '6px 10px', borderRadius: '20px', boxShadow: '0 2px 6px rgba(0,0,0,0.15)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ width: '14px', height: '14px', border: '2px solid #3b82f6', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+          <span style={{ fontSize: '11px', fontWeight: '500', color: '#374151' }}>Loading…</span>
         </div>
       )}
+      <div style={{ position: 'absolute', bottom: '10px', right: '10px', zIndex: 1000, background: 'white', padding: '8px', borderRadius: '6px', boxShadow: '0 2px 6px rgba(0,0,0,0.15)', fontSize: '11px' }}>
+        <div style={{ fontWeight: '600', marginBottom: '6px', color: '#1f2937' }}>Legend</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+          <div style={{ width: '12px', height: '12px', background: '#3b82f6', borderRadius: '50%' }}></div>
+          <span>Charging stations</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+          <div style={{ width: '12px', height: '12px', background: '#9333ea', transform: 'rotate(45deg)', border: '1px solid white' }}></div>
+          <span>Council markers</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ width: '20px', height: '0', borderTop: '2px dashed #ff6b35' }}></div>
+          <span>Council boundaries</span>
+        </div>
+      </div>
       <MapContainer 
         center={[51.5074, -0.1278]} 
         zoom={10} 
@@ -329,9 +487,23 @@ export default function EnhancedMap({
             {stations.map(station => <StationMarker key={station.id} station={station} />)}
           </MarkerClusterGroup>
         )}
-        {showCouncil && councilData && councilData.features && councilData.features.map((feature, idx) => (
-          <CouncilMarker key={`council-${idx}`} feature={feature} stations={stations} />
-        ))}
+        {showCouncil && councilData && (
+          <>
+            <GeoJSON 
+              data={councilData} 
+              style={{ 
+                color: '#ff6b35', 
+                weight: 2, 
+                opacity: 0.8, 
+                fillOpacity: 0.05, 
+                dashArray: '5, 5' 
+              }}
+            />
+            {councilData.features && councilData.features.map((feature, idx) => (
+              <CouncilMarker key={`council-${idx}`} feature={feature} stations={stations} />
+            ))}
+          </>
+        )}
       </MapContainer>
       <style jsx global>{`
         @keyframes spin {
