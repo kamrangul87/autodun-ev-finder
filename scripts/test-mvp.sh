@@ -1,0 +1,26 @@
+#!/bin/bash
+set -e
+echo "🧪 Autodun EV MVP Test"
+echo "======================"
+fail() { echo "❌ $1"; exit 1; }
+pass() { echo "✅ $1"; }
+node -v | grep -q "v20" || fail "Node 20.x required"
+pass "Node OK"
+[ -f "lib/data-sources.js" ] || fail "data-sources.js missing"
+[ -f "lib/postcode-search.js" ] || fail "postcode-search.js missing"
+[ -f "utils/url-state.js" ] || fail "url-state.js missing"
+[ -f "pages/api/stations.js" ] || fail "stations.js missing"
+[ -f "pages/api/feedback.js" ] || fail "feedback.js missing"
+[ -f "components/Map.jsx" ] || fail "Map.jsx missing"
+[ -f "pages/index.jsx" ] || fail "index.jsx missing"
+[ -f "public/data/static-stations.json" ] || fail "static-stations.json missing"
+[ -f "public/data/london-councils.geojson" ] || fail "councils.geojson missing"
+pass "All files present"
+echo ""
+echo "🎯 API Test Commands:"
+echo "  curl http://localhost:3000/api/stations | jq"
+echo "  curl -X POST http://localhost:3000/api/feedback -H 'Content-Type: application/json' -d '{\"stationId\":\"demo1\",\"type\":\"quick\"}'"
+echo ""
+echo "Next steps:"
+echo "  npm run dev"
+echo "  Open http://localhost:3000"

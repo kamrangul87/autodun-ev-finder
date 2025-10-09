@@ -43,3 +43,7 @@ html, body { height: 100%; background: #fff; color: #111; }
     box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.08);
   }
 }
+
+/* --- Autodun Leaflet defaults --- */
+html, body, #__next { height: 100%; }
+.leaflet-container { height: 100%; min-height: 70vh !important; }
