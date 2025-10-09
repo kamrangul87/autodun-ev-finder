@@ -1,0 +1,24 @@
+{
+  "items": [
+    {"id":"static01","lat":51.5074,"lng":-0.1278,"name":"ChargePoint London Central","address":"Oxford Street","postcode":"W1D 1BS","connectors":4,"source":"STATIC"},
+    {"id":"static02","lat":51.5155,"lng":-0.0922,"name":"Tesla Supercharger City Road","address":"City Road","postcode":"EC1Y 2BJ","connectors":12,"source":"STATIC"},
+    {"id":"static03","lat":51.4975,"lng":-0.1357,"name":"BP Pulse Westminster","address":"Victoria Street","postcode":"SW1E 5ND","connectors":6,"source":"STATIC"},
+    {"id":"static04","lat":51.5246,"lng":-0.1340,"name":"Shell Recharge King's Cross","address":"King's Cross","postcode":"N1C 4AG","connectors":8,"source":"STATIC"},
+    {"id":"static05","lat":51.5194,"lng":-0.1270,"name":"Ionity Bloomsbury","address":"Russell Square","postcode":"WC1B 5EH","connectors":6,"source":"STATIC"},
+    {"id":"static06","lat":51.5033,"lng":-0.1195,"name":"Pod Point Waterloo","address":"Waterloo Road","postcode":"SE1 8SW","connectors":4,"source":"STATIC"},
+    {"id":"static07","lat":51.4545,"lng":-2.5879,"name":"Ionity Bristol Temple Meads","address":"Temple Way","postcode":"BS1 6QS","connectors":8,"source":"STATIC"},
+    {"id":"static08","lat":52.4862,"lng":-1.8904,"name":"BP Pulse Birmingham New Street","address":"Navigation Street","postcode":"B2 4NT","connectors":10,"source":"STATIC"},
+    {"id":"static09","lat":53.4808,"lng":-2.2426,"name":"Shell Recharge Manchester Piccadilly","address":"Piccadilly","postcode":"M1 2BN","connectors":8,"source":"STATIC"},
+    {"id":"static10","lat":53.3811,"lng":-1.4701,"name":"ChargePoint Sheffield Station","address":"Sheaf Street","postcode":"S1 2BP","connectors":6,"source":"STATIC"},
+    {"id":"static11","lat":54.9783,"lng":-1.6178,"name":"Tesla Supercharger Newcastle","address":"Neville Street","postcode":"NE1 5DH","connectors":16,"source":"STATIC"},
+    {"id":"static12","lat":55.9533,"lng":-3.1883,"name":"ChargePlace Scotland Edinburgh","address":"Princes Street","postcode":"EH2 4BJ","connectors":12,"source":"STATIC"},
+    {"id":"static13","lat":51.4816,"lng":-3.1791,"name":"Pod Point Cardiff Central","address":"Central Square","postcode":"CF10 1EP","connectors":8,"source":"STATIC"},
+    {"id":"static14","lat":53.4084,"lng":-2.9916,"name":"Shell Recharge Liverpool Lime Street","address":"Lime Street","postcode":"L1 1JD","connectors":10,"source":"STATIC"},
+    {"id":"static15","lat":51.5310,"lng":-0.1238,"name":"Source London Camden","address":"Camden High Street","postcode":"NW1 0NE","connectors":4,"source":"STATIC"},
+    {"id":"static16","lat":51.4893,"lng":-0.1441,"name":"Ubitricity Pimlico","address":"Lupus Street","postcode":"SW1V 3AT","connectors":2,"source":"STATIC"},
+    {"id":"static17","lat":51.5074,"lng":-0.0901,"name":"Gridserve Aldgate","address":"Aldgate High Street","postcode":"EC3N 1AH","connectors":6,"source":"STATIC"},
+    {"id":"static18","lat":51.5392,"lng":-0.1426,"name":"Electric Highway Euston","address":"Euston Road","postcode":"NW1 2RT","connectors":8,"source":"STATIC"},
+    {"id":"static19","lat":51.4677,"lng":-0.3637,"name":"Fastned Heathrow","address":"Bath Road","postcode":"TW6 2AQ","connectors":12,"source":"STATIC"},
+    {"id":"static20","lat":51.5359,"lng":-0.1027,"name":"GeniePoint Islington","address":"Upper Street","postcode":"N1 0NY","connectors":4,"source":"STATIC"}
+  ]
+}
