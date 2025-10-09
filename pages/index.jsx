@@ -1,4 +1,4 @@
-// pages/index.jsx
+// pages/index.jsx - HOTFIX
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
@@ -7,7 +7,7 @@ import { getInitialState, updateURL } from '../utils/url-state';
 
 const Map = dynamic(() => import('../components/Map'), {
   ssr: false,
-  loading: () => <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}><p>Loading map...</p></div>
+  loading: () => <div style={{ width: '100%', height: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f3f4f6' }}><p>Loading map...</p></div>
 });
 
 export default function Home() {
@@ -99,62 +99,27 @@ export default function Home() {
         )}
         <div style={{ padding: '1rem', background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: '0.5rem', flex: '1 1 300px' }}>
-            <input
-              type="text"
-              placeholder="Enter UK postcode (e.g., SW1A 1AA)"
-              value={state.query}
-              onChange={(e) => setState(s => ({ ...s, query: e.target.value }))}
-              onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
-              style={{ flex: 1, padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem', fontSize: '0.875rem' }}
-            />
-            <button onClick={handleSearch} disabled={searching} style={{ padding: '0.5rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: searching ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>
-              {searching ? 'Searching...' : 'Go'}
-            </button>
+            <input type="text" placeholder="Enter UK postcode (e.g., SW1A 1AA)" value={state.query} onChange={(e) => setState(s => ({ ...s, query: e.target.value }))} onKeyPress={(e) => e.key === 'Enter' && handleSearch()} style={{ flex: 1, padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem', fontSize: '0.875rem' }} />
+            <button onClick={handleSearch} disabled={searching} style={{ padding: '0.5rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: searching ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>{searching ? 'Searching...' : 'Go'}</button>
           </div>
           <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={state.heat} onChange={toggleHeat} />
-              <span>Heatmap ({heatCount})</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={state.markers} onChange={toggleMarkers} />
-              <span>Markers ({markerCount})</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
-              <input type="checkbox" checked={state.council} onChange={toggleCouncil} />
-              <span>Council ({councilCount})</span>
-            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={state.heat} onChange={toggleHeat} /><span>Heatmap ({heatCount})</span></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={state.markers} onChange={toggleMarkers} /><span>Markers ({markerCount})</span></label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}><input type="checkbox" checked={state.council} onChange={toggleCouncil} /><span>Council ({councilCount})</span></label>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button onClick={handleZoomToData} style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>
-              Zoom to data
-            </button>
-            <button onClick={fetchStations} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>
-              {loading ? 'Loading...' : 'Refresh'}
-            </button>
+            <button onClick={handleZoomToData} style={{ padding: '0.5rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>Zoom to data</button>
+            <button onClick={fetchStations} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>{loading ? 'Loading...' : 'Refresh'}</button>
           </div>
         </div>
         <div style={{ padding: '0.5rem 1rem', background: '#e5e7eb', fontSize: '0.75rem', color: '#6b7280' }}>
           <strong>Source:</strong> {dataSource} • <strong>Stations:</strong> {stations.length} • <strong>Center:</strong> London
         </div>
         {error && (
-          <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>
-            ⚠️ {error}
-          </div>
+          <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>⚠️ {error}</div>
         )}
-        <div style={{ flex: 1, position: 'relative' }}>
-          {!loading && (
-            <Map
-              stations={stations}
-              showHeatmap={state.heat}
-              showMarkers={state.markers}
-              showCouncil={state.council}
-              councilData={councilData}
-              searchResult={searchResult}
-              shouldZoomToData={shouldZoomToData}
-              onFeedback={(id) => console.log('Feedback for:', id)}
-            />
-          )}
+        <div style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}>
+          {!loading && <Map stations={stations} showHeatmap={state.heat} showMarkers={state.markers} showCouncil={state.council} councilData={councilData} searchResult={searchResult} shouldZoomToData={shouldZoomToData} onFeedback={(id) => console.log('Feedback for:', id)} />}
         </div>
       </div>
     </>

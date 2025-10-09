@@ -1,49 +1,30 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* ===== Base ===== */
-html, body { height: 100%; background: #fff; color: #111; }
-
-/* ===== Design tokens (measured at runtime by TopControls) ===== */
-:root {
-  --controls-h: 64px;   /* updated via ResizeObserver */
-  --controls-gap: 12px; /* vertical gap under the bar */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Oxygen, Ubuntu, Cantarell, Fira Sans, Droid Sans, Helvetica Neue, sans-serif;
 }
 
-/* ===== Layout helpers ===== */
-.container { @apply mx-auto px-4; max-width: 1200px; }
-.card { @apply rounded-2xl shadow-soft bg-white p-6; }
-.badge { @apply inline-flex items-center gap-2 rounded-full bg-autodun-green/10 text-autodun-green px-3 py-1 text-sm font-medium; }
-.btn { @apply px-5 py-3 rounded-2xl font-semibold shadow-soft; }
-
-/* Map root wrapper so absolute elements (controls/panel) anchor correctly */
-.map-root { position: relative; }
-
-/* mobile full-height helper */
-@supports (height: 100dvh) {
-  .h-100dvh { height: 100dvh; }
+#__next {
+  height: 100%;
 }
 
-/* Touch/scroll polish for Leaflet on mobile */
-.leaflet-container { touch-action: pan-x pan-y; }
-.leaflet-overlay-pane, .leaflet-marker-pane { will-change: transform; } /* smoother on mobile */
-
-/* Ensure the Leaflet map has predictable height; adjust footer/header allowance if needed */
-.leaflet-map {
-  height: calc(100vh - 120px);
+* {
+  box-sizing: border-box;
 }
 
-/* Make sure Leaflet popups are below our React UI (controls/panel use z>=1199) */
-.leaflet-pane.leaflet-popup-pane { z-index: 400; }
-
-/* Optional: a gentle reusable shadow if not already defined in Tailwind config */
-@layer utilities {
-  .shadow-soft {
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px rgb(0 0 0 / 0.08);
-  }
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+  z-index: 1;
 }
 
-/* --- Autodun Leaflet defaults --- */
-html, body, #__next { height: 100%; }
-.leaflet-container { height: 100%; min-height: 70vh !important; }
+.council-tooltip {
+  background: rgba(255, 107, 53, 0.9);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
