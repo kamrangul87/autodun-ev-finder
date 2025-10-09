@@ -86,16 +86,24 @@
 [FEEDBACK] Station 12345 - good: "Fast charging, easy access" from 123.45.67.89
 ```
 
-### 6. Council Boundary Display ✅
-- [x] Shows councils as centroid markers
-- [x] Tooltip with council name on hover
-- [x] Clean UI (no polygon overlay)
-- [x] 5 councils pre-loaded
+### 6. Council Boundary Display ✅ (Enhanced)
+- [x] Shows councils as purple diamond centroid markers (distinct from station pins)
+- [x] Orange polygon overlay (low opacity, weight 2)
+- [x] Popup with borough name + station count + "Zoom to borough" button
+- [x] Station counts update dynamically with viewport changes
+- [x] 5 councils pre-loaded (London boroughs)
 
 **Test Steps:**
 1. Enable "Council (5)" toggle
-2. See 5 markers appear (different icon from stations)
-3. Hover over marker - tooltip shows council name
+2. See 5 purple diamond markers appear (distinct from blue station pins)
+3. See orange polygon boundaries overlay
+4. Click a council marker → popup shows:
+   - Borough name
+   - "X charging stations in view"
+   - "🔍 Zoom to borough" button
+5. Click "Zoom to borough" → map fits bounds to that borough
+6. Pan map → station count in popup updates automatically
+7. Hover over marker → tooltip shows council name
 
 ### 7. Performance & UX ✅
 - [x] Debounced move events (500ms)

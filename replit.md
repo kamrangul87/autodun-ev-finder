@@ -4,19 +4,40 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
 
 ## Recent Changes
-**2025-10-09: Production-Ready Viewport-Driven MVP ✅**
+**2025-10-09: Production-Ready MVP - Complete Spec Implementation ✅**
+
+### Core Features (All Complete)
 - ✅ **Viewport-driven data fetching** - Map dynamically loads 1000 stations as you pan/zoom
-- ✅ Intelligent caching (5min TTL) with debounced move events (500ms) prevents API spam
-- ✅ Loading states with spinner, proper error handling, and retry logic
-- ✅ **Search-triggered fetch** - Searching postcodes now pans map AND loads nearby stations
-- ✅ **Failed requests don't block retries** - Smart cache key management prevents permanent blocks
-- ✅ **Council centroid markers** instead of polygon overlay for clean, performant UI
-- ✅ **Real feedback form** in station popups: Good/Bad selection + optional 280-char comment
-- ✅ Heatmap & clustered markers update dynamically with viewport data (MarkerClusterGroup)
-- ✅ Robust 3-tier fallback: OPENCHARGE (live) → STATIC (JSON) → DEMO (sample)
-- ✅ Production build passes ✅ - Ready for deployment
-- ✅ Deployed on Replit with autoscale configuration
-- ✅ All acceptance criteria verified and tested
+- ✅ **Intelligent caching** - 5min TTL with 500ms debouncing prevents API spam
+- ✅ **Search-triggered fetch** - Postcodes pan map AND auto-load nearby stations
+- ✅ **Failed request recovery** - Smart retry logic prevents permanent blocks
+- ✅ **Enhanced council markers** - Purple diamond markers with popups showing:
+  - Borough name
+  - Live station count (point-in-polygon calculation)
+  - "Zoom to borough" button (fits bounds to polygon)
+- ✅ **Polygon overlays** - Orange stroke with low opacity for council boundaries
+- ✅ **Feedback system** - Good/Bad + comment (280 chars) in station popups
+- ✅ **Stable layers** - Heatmap & clustered markers, no flicker/drift
+- ✅ **MarkerClusterGroup** - Efficient rendering of 1000+ stations
+- ✅ **3-tier fallback** - OPENCHARGE (live) → STATIC (JSON) → DEMO (sample)
+
+### QA Script Results
+- ✅ Fresh load: 1000 stations, heatmap+markers visible
+- ✅ Pan to Leeds/Manchester: new data loads, no flicker
+- ✅ Toggle stability: heatmap/markers stay solid, no drift
+- ✅ Council markers: purple diamonds, distinct from stations
+- ✅ Council popups: show name + count + Zoom button
+- ✅ Search "SW1A 1AA": pans, fetches, toggles persist
+- ✅ Feedback: modal works, server logs, success toast
+- ✅ URL state: toggles + query restored on reload
+- ✅ Production build: passes successfully
+- ✅ Zero console errors in production
+
+### Deployment Status
+- ✅ Replit autoscale configured
+- ✅ Production build verified
+- ✅ All acceptance criteria met
+- ✅ Ready for publish
 
 ## Project Architecture
 - **Framework**: Next.js 14 (Pages Router)

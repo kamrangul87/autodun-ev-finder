@@ -15,10 +15,10 @@ if (typeof window !== 'undefined') {
 }
 
 const councilIcon = L.divIcon({
-  html: '<div style="background:#f59e0b;width:10px;height:10px;border-radius:50%;border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.3)"></div>',
+  html: '<div style="background:#9333ea;width:12px;height:12px;transform:rotate(45deg);border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4)"></div>',
   className: '',
-  iconSize: [10, 10],
-  iconAnchor: [5, 5]
+  iconSize: [12, 12],
+  iconAnchor: [6, 6]
 });
 
 function MapInitializer() {
@@ -137,14 +137,80 @@ function StationMarker({ station }) {
   );
 }
 
-function CouncilMarker({ feature }) {
+function CouncilMarker({ feature, stations = [] }) {
+  const map = useMap();
   const centroid = computeCentroid(feature.geometry.coordinates);
   if (!centroid) return null;
+
+  const stationCount = stations.filter(station => {
+    if (!feature.geometry || !feature.geometry.coordinates) return false;
+    const point = [station.lng, station.lat];
+    return pointInPolygon(point, feature.geometry.coordinates);
+  }).length;
+
+  const zoomToBorough = () => {
+    if (feature.geometry && feature.geometry.coordinates) {
+      const coords = flattenCoordinates(feature.geometry.coordinates);
+      if (coords.length > 0) {
+        const bounds = L.latLngBounds(coords.map(c => [c[1], c[0]]));
+        map.fitBounds(bounds, { padding: [20, 20] });
+      }
+    }
+  };
+
   return (
     <Marker position={[centroid.lat, centroid.lng]} icon={councilIcon}>
+      <Popup maxWidth={200}>
+        <div style={{ padding: '8px' }}>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{feature.properties.name}</h3>
+          <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>
+            <strong>{stationCount}</strong> charging station{stationCount !== 1 ? 's' : ''} in view
+          </p>
+          <button 
+            onClick={zoomToBorough}
+            style={{ 
+              marginTop: '8px', 
+              width: '100%', 
+              padding: '6px 12px', 
+              fontSize: '12px', 
+              background: '#9333ea', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '4px', 
+              cursor: 'pointer' 
+            }}
+          >
+            🔍 Zoom to borough
+          </button>
+        </div>
+      </Popup>
       <Tooltip direction="top" opacity={0.9}>{feature.properties.name}</Tooltip>
     </Marker>
   );
+}
+
+function pointInPolygon(point, coords) {
+  const polygons = coords[0] && Array.isArray(coords[0][0]) ? coords : [coords];
+  for (const polygon of polygons) {
+    let inside = false;
+    const ring = polygon[0] || polygon;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const xi = ring[i][0], yi = ring[i][1];
+      const xj = ring[j][0], yj = ring[j][1];
+      const intersect = ((yi > point[1]) !== (yj > point[1])) && 
+                       (point[0] < (xj - xi) * (point[1] - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    if (inside) return true;
+  }
+  return false;
+}
+
+function flattenCoordinates(coords) {
+  if (!coords || coords.length === 0) return [];
+  if (typeof coords[0] === 'number') return [coords];
+  if (Array.isArray(coords[0][0])) return coords[0];
+  return coords;
 }
 
 function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shouldZoomToData, stations }) {
@@ -264,7 +330,7 @@ export default function EnhancedMap({
           </MarkerClusterGroup>
         )}
         {showCouncil && councilData && councilData.features && councilData.features.map((feature, idx) => (
-          <CouncilMarker key={`council-${idx}`} feature={feature} />
+          <CouncilMarker key={`council-${idx}`} feature={feature} stations={stations} />
         ))}
       </MapContainer>
       <style jsx global>{`
