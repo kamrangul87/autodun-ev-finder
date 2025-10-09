@@ -25,10 +25,14 @@ export default function Home() {
   useEffect(() => { setState(getInitialState()); }, []);
 
   const handleFetchStations = useCallback((data) => {
-    console.log('[handleFetchStations] Received data:', data?.count, 'stations from', data?.source);
-    setStations(data?.items || []);
-    setDataSource(data?.source || 'DEMO');
-    setFellBack(data?.fellBack || false);
+    if (!data) {
+      console.error('[handleFetchStations] No data received');
+      return;
+    }
+    console.log('[handleFetchStations] Updating state:', data.count, 'stations from', data.source);
+    setStations(data.items || []);
+    setDataSource(data.source || 'DEMO');
+    setFellBack(data.fellBack || false);
     setError(null);
   }, []);
 

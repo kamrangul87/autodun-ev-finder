@@ -159,10 +159,10 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
     const cacheKey = getCacheKey(center.lat, center.lng, radius);
 
     if (lastFetchRef.current === cacheKey) return;
-    lastFetchRef.current = cacheKey;
 
     const cached = getCached(cacheKey);
     if (cached) {
+      lastFetchRef.current = cacheKey;
       onFetchStations?.(cached);
       return;
     }
@@ -174,10 +174,14 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
       const data = await response.json();
       if (response.ok) {
         setCache(cacheKey, data);
+        lastFetchRef.current = cacheKey;
         onFetchStations?.(data);
+      } else {
+        console.error('API error:', data.error || 'Failed to fetch stations');
       }
     } catch (error) {
       console.error('Viewport fetch error:', error);
+      lastFetchRef.current = null;
     } finally {
       onLoadingChange?.(false);
     }
@@ -197,8 +201,12 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
   useEffect(() => {
     if (searchResult) {
       map.setView([searchResult.lat, searchResult.lng], 13);
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = setTimeout(() => {
+        fetchForViewport();
+      }, 500);
     }
-  }, [map, searchResult]);
+  }, [map, searchResult, fetchForViewport]);
 
   useEffect(() => {
     if (shouldZoomToData && stations && stations.length > 0) {
