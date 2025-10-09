@@ -6,37 +6,42 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 ## Recent Changes
 **2025-10-09: Production-Ready MVP - Complete Spec Implementation ✅**
 
-### Core Features (All Complete)
-- ✅ **Viewport-driven data fetching** - Map dynamically loads 1000 stations as you pan/zoom
-- ✅ **Intelligent caching** - 5min TTL with 500ms debouncing prevents API spam
-- ✅ **Search-triggered fetch** - Postcodes pan map AND auto-load nearby stations
+### Core Features (All Complete Per Comprehensive Spec)
+- ✅ **Zoom-aware heatmap** - Radius scales 35→12px (z=10→z=16), green→yellow→orange→red gradient, normalized intensity
+- ✅ **Cluster styling** - Blue outline with white count text, distributed clusters on initial load
+- ✅ **Viewport-driven data fetching** - Map dynamically loads 1000 stations as you pan/zoom (300ms debounce)
+- ✅ **Intelligent caching** - 5min TTL prevents API spam, merge strategy for viewport tiles
+- ✅ **Search-triggered fetch** - Postcodes.io → Nominatim fallback, pan & auto-load stations
 - ✅ **Failed request recovery** - Smart retry logic prevents permanent blocks
 - ✅ **Enhanced council markers** - Purple diamond markers with popups showing:
   - Borough name
   - Live station count (point-in-polygon calculation)
   - "Zoom to borough" button (fits bounds to polygon)
-- ✅ **Polygon overlays** - Orange stroke with low opacity for council boundaries
-- ✅ **Feedback system** - Good/Bad + comment (280 chars) in station popups
-- ✅ **Stable layers** - Heatmap & clustered markers, no flicker/drift
-- ✅ **MarkerClusterGroup** - Efficient rendering of 1000+ stations
+  - "⚠️ Report boundary issue" form (POST to /api/feedback with type=council)
+- ✅ **Dashed council boundaries** - Orange dashed lines (dashArray: '5, 5'), render below markers
+- ✅ **Legend** - Bottom-right with visual samples (blue circle, purple diamond, orange dashes)
+- ✅ **Loading skeleton** - Bottom-left pill with spinner during non-blocking fetches
+- ✅ **Feedback system** - Good/Bad + comment (280 chars) in station popups, server-side logging
+- ✅ **Stable layers** - Heatmap & clustered markers, no flicker/drift, same point set
+- ✅ **MarkerClusterGroup** - Efficient rendering of 1000+ stations with custom blue styling
 - ✅ **3-tier fallback** - OPENCHARGE (live) → STATIC (JSON) → DEMO (sample)
 
-### QA Script Results
-- ✅ Fresh load: 1000 stations, heatmap+markers visible
-- ✅ Pan to Leeds/Manchester: new data loads, no flicker
-- ✅ Toggle stability: heatmap/markers stay solid, no drift
-- ✅ Council markers: purple diamonds, distinct from stations
-- ✅ Council popups: show name + count + Zoom button
-- ✅ Search "SW1A 1AA": pans, fetches, toggles persist
-- ✅ Feedback: modal works, server logs, success toast
-- ✅ URL state: toggles + query restored on reload
-- ✅ Production build: passes successfully
-- ✅ Zero console errors in production
+### Spec Acceptance Tests ✅
+1. **Initial map load** - Multiple cluster bubbles spread across Greater London ✅
+2. **Distributed heatmap** - Multi-hotspot view, no single red disc ✅
+3. **Zoom behavior** - Clusters merge/split correctly, heatmap adapts ✅
+4. **Viewport loading** - Pan to Oxford/Reading loads within ~1s, cache works ✅
+5. **Visual identity** - Blue stations, orange dashed councils, no color confusion ✅
+6. **Station popup** - Feedback form with Good/Bad + comment, toast on success ✅
+7. **Council popup** - Distinct purple icon, "Report boundary issue" form ✅
+8. **Controls** - Zoom to data, Refresh, Loading skeleton all functional ✅
+9. **Performance** - No layout shift, clean build, no console errors ✅
 
 ### Deployment Status
 - ✅ Replit autoscale configured
-- ✅ Production build verified
-- ✅ All acceptance criteria met
+- ✅ Production build verified (npm run build passes)
+- ✅ All spec acceptance criteria met
+- ✅ Documentation complete (README.md, TESTING.md, ACCEPTANCE_TESTS.md)
 - ✅ Ready for publish
 
 ## Project Architecture
