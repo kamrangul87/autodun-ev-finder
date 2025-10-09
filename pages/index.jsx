@@ -24,11 +24,15 @@ export default function Home() {
 
   useEffect(() => { setState(getInitialState()); }, []);
 
-  const fetchStations = async () => {
+  const fetchStations = async (lat = null, lng = null, distance = 50) => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/stations');
+      let url = '/api/stations';
+      if (lat !== null && lng !== null) {
+        url += `?lat=${lat}&lng=${lng}&distance=${distance}`;
+      }
+      const response = await fetch(url);
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Failed to fetch stations');
       setStations(data.items || []);
@@ -64,7 +68,10 @@ export default function Home() {
     setSearching(true);
     setError(null);
     try {
-      setSearchResult(await searchLocation(state.query));
+      const result = await searchLocation(state.query);
+      setSearchResult(result);
+      // Refetch stations near the searched location
+      await fetchStations(result.lat, result.lng, 50);
     } catch (err) {
       setError(`Search failed: ${err.message}`);
     } finally {
