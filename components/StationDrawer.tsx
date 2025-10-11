@@ -31,6 +31,12 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
   const openTimeRef = useRef<number>(Date.now());
   const drawerRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (station) {
+      console.log('[StationDrawer] Opened with station:', station.name || station.id);
+    }
+  }, [station]);
+
   // Track drawer open time for telemetry
   useEffect(() => {
     if (station) {
@@ -171,7 +177,8 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
     <>
       {/* Backdrop - mobile only */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+        className="fixed inset-0 bg-black bg-opacity-50 lg:hidden"
+        style={{ zIndex: 9998 }}
         onClick={handleClose}
         aria-hidden="true"
       />
@@ -184,10 +191,12 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
         aria-labelledby="drawer-title"
         style={{
           position: 'fixed',
-          zIndex: 50,
+          zIndex: 9999,
+          bottom: 0,
+          left: 0,
+          right: 0,
         }}
-        className="bg-white shadow-2xl flex flex-col
-                   bottom-0 left-0 right-0 max-h-[70vh] rounded-t-2xl
+        className="bg-white shadow-2xl flex flex-col max-h-[70vh] rounded-t-2xl
                    lg:top-0 lg:right-0 lg:bottom-0 lg:left-auto lg:h-screen lg:w-[380px] lg:max-h-none lg:rounded-none lg:border-l lg:border-gray-200"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
