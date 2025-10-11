@@ -360,31 +360,41 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
   const map = useMap();
   const fetchTimeoutRef = useRef(null);
   const lastFetchRef = useRef(null);
+  const isFirstFetchRef = useRef(true);
 
-  const fetchForViewport = useCallback(async () => {
+  const fetchForViewport = useCallback(async (isFirstLoad = false) => {
     const bounds = map.getBounds();
-    const center = bounds.getCenter();
-    const radius = calculateBoundsRadius(bounds);
-    const cacheKey = getCacheKey(center.lat, center.lng, radius);
+    const sw = bounds.getSouthWest();
+    const ne = bounds.getNorthEast();
+    const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+    
+    if (lastFetchRef.current === bboxStr) return;
 
-    if (lastFetchRef.current === cacheKey) return;
-
+    const cacheKey = `bbox_${bboxStr}`;
     const cached = getCached(cacheKey);
     if (cached) {
-      lastFetchRef.current = cacheKey;
+      lastFetchRef.current = bboxStr;
       onFetchStations?.(cached);
       return;
     }
 
     try {
       onLoadingChange?.(true);
-      const url = `/api/stations?lat=${center.lat}&lng=${center.lng}&radius=${radius}&max=1000`;
-      const response = await fetch(url);
+      const tiles = isFirstLoad ? 4 : 2;
+      const limitPerTile = isFirstLoad ? 500 : 750;
+      const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
+      const response = await fetch(url, { cache: 'no-store' });
       const data = await response.json();
       if (response.ok) {
-        setCache(cacheKey, data);
-        lastFetchRef.current = cacheKey;
-        onFetchStations?.(data);
+        const normalizedData = {
+          items: data.features ? data.features.map(f => f.properties) : [],
+          count: data.count,
+          source: data.source,
+          bbox: data.bbox
+        };
+        setCache(cacheKey, normalizedData);
+        lastFetchRef.current = bboxStr;
+        onFetchStations?.(normalizedData);
       } else {
         console.error('API error:', data.error || 'Failed to fetch stations');
       }
@@ -399,20 +409,27 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
   useMapEvents({
     moveend: () => {
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(fetchForViewport, 300);
+      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 400);
     }
   });
 
   useEffect(() => {
-    fetchForViewport();
-  }, []);
+    if (isFirstFetchRef.current) {
+      const ukBounds = [[-8.649, 49.823], [1.763, 60.845]];
+      map.fitBounds(ukBounds, { padding: [20, 20] });
+      setTimeout(() => {
+        fetchForViewport(true);
+        isFirstFetchRef.current = false;
+      }, 100);
+    }
+  }, [fetchForViewport, map]);
 
   useEffect(() => {
     if (searchResult) {
       map.setView([searchResult.lat, searchResult.lng], 13);
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
       fetchTimeoutRef.current = setTimeout(() => {
-        fetchForViewport();
+        fetchForViewport(false);
       }, 500);
     }
   }, [map, searchResult, fetchForViewport]);

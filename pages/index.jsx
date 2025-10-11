@@ -96,11 +96,6 @@ export default function Home() {
         <header style={{ padding: '1rem', background: '#1f2937', color: 'white', borderBottom: '2px solid #3b82f6' }}>
           <h1 style={{ margin: 0, fontSize: '1.5rem' }}>⚡ Autodun EV Finder</h1>
         </header>
-        {(dataSource === 'DEMO' || fellBack) && (
-          <div style={{ padding: '0.75rem 1rem', background: '#dc2626', color: 'white', textAlign: 'center', fontSize: '0.875rem', fontWeight: 'bold' }}>
-            Using DEMO data ({stations.length} stations)
-          </div>
-        )}
         <div style={{ padding: '1rem', background: '#f3f4f6', borderBottom: '1px solid #e5e7eb', display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
           <div style={{ display: 'flex', gap: '0.5rem', flex: '1 1 300px' }}>
             <input type="text" placeholder="Enter UK postcode (e.g., SW1A 1AA)" value={state.query} onChange={(e) => setState(s => ({ ...s, query: e.target.value }))} onKeyPress={(e) => e.key === 'Enter' && handleSearch()} style={{ flex: 1, padding: '0.5rem', border: '1px solid #d1d5db', borderRadius: '0.375rem', fontSize: '0.875rem' }} />
@@ -116,8 +111,8 @@ export default function Home() {
             <button onClick={manualRefresh} disabled={loading} style={{ padding: '0.5rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500' }}>{loading ? 'Loading...' : 'Refresh'}</button>
           </div>
         </div>
-        <div style={{ padding: '0.5rem 1rem', background: '#e5e7eb', fontSize: '0.75rem', color: '#6b7280' }}>
-          <strong>Source:</strong> {dataSource} • <strong>Stations:</strong> {stations.length} • <strong>Center:</strong> London
+        <div style={{ padding: '0.5rem 1rem', background: '#e5e7eb', fontSize: '0.75rem', color: '#374151' }}>
+          <strong>Source:</strong> {dataSource === 'OPENCHARGE' ? 'OPENCHARGE (live)' : dataSource} • <strong>Stations:</strong> {stations.length} • <strong>Bounds:</strong> United Kingdom
         </div>
         {error && (
           <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>⚠️ {error}</div>
