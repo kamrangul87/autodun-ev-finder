@@ -9,7 +9,7 @@ export interface TelemetryEvent {
   timestamp: number;
 }
 
-const TELEMETRY_ENABLED = typeof window !== 'undefined' && process.env.NODE_ENV === 'development';
+const TELEMETRY_ENABLED = typeof window !== 'undefined' && process.env.NEXT_PUBLIC_TELEMETRY_DISABLED !== 'true';
 
 /**
  * Hash a string for anonymization (simple non-cryptographic hash)

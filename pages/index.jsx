@@ -1,5 +1,5 @@
 // pages/index.jsx - HOTFIX
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
 import { searchLocation } from '../lib/postcode-search';
@@ -23,6 +23,7 @@ export default function Home() {
   const [toast, setToast] = useState(null);
   const [regionName, setRegionName] = useState('United Kingdom');
   const [initialDataReady, setInitialDataReady] = useState(false);
+  const hasLoadedRef = useRef(false);
 
   useEffect(() => { setState(getInitialState()); }, []);
 
@@ -35,6 +36,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (hasLoadedRef.current) return;
+    
     const fetchInitialUKData = async () => {
       try {
         setLoading(true);
@@ -42,6 +45,7 @@ export default function Home() {
         const url = `/api/stations?bbox=${bboxStr}&tiles=4&limitPerTile=500`;
         const response = await fetch(url, { cache: 'no-store' });
         const data = await response.json();
+        
         if (response.ok) {
           const normalizedData = {
             items: data.features ? data.features.map(f => f.properties) : [],
@@ -49,9 +53,14 @@ export default function Home() {
             source: data.source,
             bbox: data.bbox
           };
-          handleFetchStations(normalizedData);
+          setStations(normalizedData.items || []);
+          setDataSource(normalizedData.source || 'DEMO');
+          setFellBack(normalizedData.fellBack || false);
+          setError(null);
+          
           if (normalizedData.items.length > 0) {
             setInitialDataReady(true);
+            hasLoadedRef.current = true;
           }
         }
       } catch (error) {
@@ -60,8 +69,10 @@ export default function Home() {
         setLoading(false);
       }
     };
+    
     fetchInitialUKData();
-  }, [handleFetchStations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const manualRefresh = async () => {
     setLoading(true);

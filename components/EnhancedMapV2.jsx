@@ -281,12 +281,12 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
   });
 
   useEffect(() => {
-    if (isFirstFetchRef.current) {
+    if (isFirstFetchRef.current && stations && stations.length > 0) {
       const bboxStr = `-8.649,49.823,1.763,60.845`;
       lastFetchRef.current = bboxStr;
       isFirstFetchRef.current = false;
     }
-  }, [map]);
+  }, [map, stations]);
 
   useEffect(() => {
     if (searchResult) {
