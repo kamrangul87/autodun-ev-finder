@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useGeolocation } from '../hooks/useGeolocation';
 
 interface LocateMeButtonProps {
@@ -9,14 +10,18 @@ export function LocateMeButton({ onLocationFound, onError }: LocateMeButtonProps
   const { latitude, longitude, accuracy, error, isLoading, getCurrentLocation } = useGeolocation();
 
   // Notify parent when location is found
-  if (latitude !== null && longitude !== null && accuracy !== null) {
-    onLocationFound(latitude, longitude, accuracy);
-  }
+  useEffect(() => {
+    if (latitude !== null && longitude !== null && accuracy !== null) {
+      onLocationFound(latitude, longitude, accuracy);
+    }
+  }, [latitude, longitude, accuracy, onLocationFound]);
 
   // Notify parent on error
-  if (error && onError) {
-    onError(error);
-  }
+  useEffect(() => {
+    if (error && onError) {
+      onError(error);
+    }
+  }, [error, onError]);
 
   return (
     <button

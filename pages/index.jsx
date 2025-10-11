@@ -5,14 +5,13 @@ import Head from 'next/head';
 import { searchLocation } from '../lib/postcode-search';
 import { getInitialState, updateURL } from '../utils/url-state';
 
-const EnhancedMap = dynamic(() => import('../components/EnhancedMap'), {
+const EnhancedMap = dynamic(() => import('../components/EnhancedMapV2'), {
   ssr: false,
   loading: () => <div style={{ width: '100%', height: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f3f4f6' }}><p>Loading map...</p></div>
 });
 
 export default function Home() {
   const [stations, setStations] = useState([]);
-  const [councilData, setCouncilData] = useState(null);
   const [dataSource, setDataSource] = useState('DEMO');
   const [fellBack, setFellBack] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -26,6 +25,14 @@ export default function Home() {
   const [initialDataReady, setInitialDataReady] = useState(false);
 
   useEffect(() => { setState(getInitialState()); }, []);
+
+  const handleFetchStations = useCallback((data) => {
+    if (!data) return;
+    setStations(data.items || []);
+    setDataSource(data.source || 'DEMO');
+    setFellBack(data.fellBack || false);
+    setError(null);
+  }, []);
 
   useEffect(() => {
     const fetchInitialUKData = async () => {
@@ -43,24 +50,18 @@ export default function Home() {
             bbox: data.bbox
           };
           handleFetchStations(normalizedData);
+          if (normalizedData.items.length > 0) {
+            setInitialDataReady(true);
+          }
         }
       } catch (error) {
         console.error('Initial UK data fetch error:', error);
       } finally {
         setLoading(false);
-        setInitialDataReady(true);
       }
     };
     fetchInitialUKData();
-  }, []);
-
-  const handleFetchStations = useCallback((data) => {
-    if (!data) return;
-    setStations(data.items || []);
-    setDataSource(data.source || 'DEMO');
-    setFellBack(data.fellBack || false);
-    setError(null);
-  }, []);
+  }, [handleFetchStations]);
 
   const manualRefresh = async () => {
     setLoading(true);
@@ -77,24 +78,16 @@ export default function Home() {
     }
   };
 
-  const fetchCouncilData = async () => {
-    try {
-      const response = await fetch('/data/london-councils.geojson');
-      if (response.ok) setCouncilData(await response.json());
-    } catch (err) {
-      console.error('Council data error:', err);
-    }
-  };
-
-  useEffect(() => { fetchCouncilData(); }, []);
   useEffect(() => { updateURL(state, true); }, [state]);
 
   const toggleHeat = () => setState(s => ({ ...s, heat: !s.heat }));
   const toggleMarkers = () => setState(s => ({ ...s, markers: !s.markers }));
   const toggleCouncil = () => setState(s => ({ ...s, council: !s.council }));
 
-  const showToast = (message) => {
-    setToast(message);
+  const showToast = (toast) => {
+    const message = typeof toast === 'string' ? toast : toast.message;
+    const type = typeof toast === 'object' ? toast.type : 'info';
+    setToast({ message, type });
     setTimeout(() => setToast(null), 4000);
   };
 
@@ -121,7 +114,7 @@ export default function Home() {
 
   const heatCount = state.heat ? stations.length : 0;
   const markerCount = state.markers ? stations.length : 0;
-  const councilCount = councilData?.features?.length || 0;
+  const councilCount = state.council ? '∞' : 0;
 
   return (
     <>
@@ -173,8 +166,20 @@ export default function Home() {
           <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>⚠️ {error}</div>
         )}
         {toast && (
-          <div style={{ position: 'fixed', top: '6rem', left: '50%', transform: 'translateX(-50%)', background: '#1f2937', color: 'white', padding: '0.75rem 1.5rem', borderRadius: '0.5rem', fontSize: '0.875rem', zIndex: 10000, boxShadow: '0 10px 25px rgba(0,0,0,0.3)' }}>
-            {toast}
+          <div style={{ 
+            position: 'fixed', 
+            top: '6rem', 
+            left: '50%', 
+            transform: 'translateX(-50%)', 
+            background: toast.type === 'error' ? '#dc2626' : toast.type === 'success' ? '#10b981' : '#1f2937', 
+            color: 'white', 
+            padding: '0.75rem 1.5rem', 
+            borderRadius: '0.5rem', 
+            fontSize: '0.875rem', 
+            zIndex: 10001, 
+            boxShadow: '0 10px 25px rgba(0,0,0,0.3)' 
+          }}>
+            {toast.message}
           </div>
         )}
         <div style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}>
@@ -184,11 +189,11 @@ export default function Home() {
               showHeatmap={state.heat} 
               showMarkers={state.markers} 
               showCouncil={state.council} 
-              councilData={councilData} 
               searchResult={searchResult} 
               shouldZoomToData={shouldZoomToData}
               onFetchStations={handleFetchStations}
               onLoadingChange={setLoading}
+              onToast={showToast}
               isLoading={loading}
             />
           ) : (
