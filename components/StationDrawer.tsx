@@ -163,7 +163,9 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
 
   if (!station) return null;
 
-  const totalConnectors = station.connectors?.reduce((sum, conn) => sum + conn.count, 0) || 0;
+  const totalConnectors = Array.isArray(station.connectors) 
+    ? station.connectors.reduce((sum, conn) => sum + conn.count, 0) 
+    : 0;
 
   const drawer = (
     <>
