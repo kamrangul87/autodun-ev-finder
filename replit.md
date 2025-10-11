@@ -64,8 +64,16 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 - ✅ Replit autoscale configured
 - ✅ Production build verified (npm run build passes)
 - ✅ All spec acceptance criteria met
-- ✅ Documentation complete (README.md, TESTING.md, ACCEPTANCE_TESTS.md)
+- ✅ GitHub CI/CD configured (.github/workflows/ci.yml, CODEOWNERS, scripts/push.sh)
+- ✅ Documentation complete (README.md, TESTING.md, ACCEPTANCE_TESTS.md, IMPLEMENTATION_STATUS.md)
 - ✅ Ready for publish
+
+### CI/CD Workflow (GitHub Auto-Lock)
+- **Branch Strategy**: Replit pushes to `develop` → PR to `main` → CI passes → Vercel deploys
+- **CI Pipeline**: `.github/workflows/ci.yml` runs lint, build, test on all pushes/PRs
+- **Code Review**: `.github/CODEOWNERS` requires @kamrangul87 approval on all changes
+- **Helper Script**: `./scripts/push.sh [branch]` - pushes to develop (default) with commit message
+- **Manual Setup Required**: Configure GitHub branch protection on `main` (requires PR, code owner review, CI checks)
 
 ## Project Architecture
 - **Framework**: Next.js 14 (Pages Router)
