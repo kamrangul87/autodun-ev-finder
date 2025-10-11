@@ -171,7 +171,7 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
     <>
       {/* Backdrop - mobile only */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+        className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
         onClick={handleClose}
         aria-hidden="true"
       />
@@ -182,15 +182,15 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
-        className="fixed bg-white shadow-2xl z-50 flex flex-col border-l border-gray-200
-                   lg:top-0 lg:right-0 lg:h-dvh lg:w-[380px]
-                   max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[70vh] max-lg:rounded-t-2xl"
+        className="fixed bg-white shadow-2xl z-50 flex flex-col
+                   left-0 right-0 bottom-0 max-h-[70vh] rounded-t-2xl
+                   md:left-auto md:right-0 md:top-0 md:bottom-auto md:h-full md:w-[380px] md:rounded-none md:border-l md:border-gray-200"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
         {/* Mobile drag grabber */}
-        <div className="lg:hidden flex justify-center pt-3 pb-2 flex-shrink-0">
+        <div className="md:hidden flex justify-center pt-3 pb-2 flex-shrink-0">
           <div className="w-12 h-1.5 bg-gray-300 rounded-full" aria-label="Drag to close" />
         </div>
 

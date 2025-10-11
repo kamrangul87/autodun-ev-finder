@@ -4,10 +4,16 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
 
 ## Recent Changes
+**2025-10-11: Responsive Drawer Fix ✅**
+- Fixed drawer positioning using explicit Tailwind classes: `md:` breakpoint (768px) for desktop/mobile split
+- Desktop (≥768px): Right-side panel (380px width, full height, `md:left-auto md:right-0 md:top-0`)
+- Mobile (<768px): Bottom sheet (70vh max-height, rounded top, swipe-to-close)
+- Verified proper rendering with mobile-first approach
+
 **2025-10-11: Drawer UI + Geolocation + Telemetry Refactor ✅**
 
 ### Major Architectural Upgrade - Production Ready
-- ✅ **Drawer UI System** - Replaced popups with StationDrawer (desktop: right-side panel, mobile: bottom sheet)
+- ✅ **Drawer UI System** - Replaced popups with StationDrawer (desktop: right-side panel at 380px, mobile: bottom sheet at 70vh)
 - ✅ **Council Markers API** - /api/council-stations endpoint with bbox-based server-side aggregation, purple diamond markers
 - ✅ **Geolocation System** - useGeolocation hook + LocateMeButton (top-right), blue dot marker + accuracy circle, auto-pan to location
 - ✅ **Routing Integration** - "Get Directions" buttons in drawer (Google Maps on Android/Desktop, Apple Maps on iOS)
