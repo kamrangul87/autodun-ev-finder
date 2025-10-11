@@ -164,20 +164,20 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
-        className="fixed bg-white shadow-2xl z-50 overflow-y-auto
+        className="fixed bg-white shadow-2xl z-50 flex flex-col
                    md:right-0 md:top-0 md:h-full md:w-96
-                   max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:rounded-t-2xl max-md:max-h-[85vh]"
+                   max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:rounded-t-2xl max-md:h-[75vh]"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
         {/* Mobile swipe indicator */}
-        <div className="md:hidden flex justify-center pt-3 pb-2">
+        <div className="md:hidden flex justify-center pt-3 pb-2 flex-shrink-0">
           <div className="w-12 h-1 bg-gray-300 rounded-full" />
         </div>
 
         {/* Header */}
-        <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-start justify-between">
+        <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-start justify-between flex-shrink-0">
           <div className="flex-1 pr-4">
             <h2 id="drawer-title" className="text-lg font-semibold text-gray-900 break-words">
               {station.name}
@@ -199,8 +199,8 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
           </button>
         </div>
 
-        {/* Body */}
-        <div className="p-4 space-y-4">
+        {/* Body - Scrollable */}
+        <div className="p-4 space-y-4 overflow-y-auto flex-1">
           {/* Address */}
           {station.address && (
             <div>

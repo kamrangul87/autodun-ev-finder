@@ -1,0 +1,274 @@
+✅ Replit task (do only what’s below)
+
+Goal: Don’t change any data/API or map layers. Only:
+
+Tidy the station feedback drawer (height + alignment).
+
+Add a Locate me button beside “Zoom to data”.
+
+1) Feedback drawer polish (height + alignment only)
+
+Files likely involved:
+components/StationDrawer.tsx (or wherever the station popup/drawer is rendered),
+styles/globals.css (or a module CSS used by that drawer).
+
+Requirements:
+
+Keep the drawer permanently open when a station is selected.
+
+Fixed, comfortable height and internal scroll (so it never pushes the map off-screen).
+
+Clean alignment of elements; equal width “Good / Bad” buttons; visible “Close” (X).
+
+Mobile first: taller drawer (bottom sheet). Desktop: right drawer.
+
+Implementation (example React/TSX):
+
+// components/StationDrawer.tsx
+import { X } from 'lucide-react'; // or any icon you’re using
+import React from 'react';
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  station?: {
+    title: string;
+    address?: string;
+    connectors?: number;
+  };
+  onFeedback: (value: 'good'|'bad', comment: string) => void;
+};
+
+export default function StationDrawer({ open, onClose, station, onFeedback }: Props) {
+  if (!open || !station) return null;
+
+  return (
+    <aside className="drawer">
+      <header className="drawer__header">
+        <div className="drawer__title">{station.title}</div>
+        <button className="drawer__close" aria-label="Close" onClick={onClose}>
+          <X size={18}/>
+        </button>
+      </header>
+
+      <div className="drawer__meta">
+        {station.address && <div className="drawer__row"><span>Address:</span> {station.address}</div>}
+        {typeof station.connectors === 'number' && (
+          <div className="drawer__row"><span>Connectors:</span> {station.connectors}</div>
+        )}
+      </div>
+
+      <div className="drawer__body">
+        <label className="drawer__label">How was this station?</label>
+        <div className="drawer__feedback">
+          <button className="btn btn--good" onClick={() => onFeedback('good','')}>
+            👍 Good
+          </button>
+          <button className="btn btn--bad" onClick={() => onFeedback('bad','')}>
+            👎 Bad
+          </button>
+        </div>
+
+        <label className="drawer__label">Comment (optional)</label>
+        <textarea className="drawer__textarea" placeholder="Any details..." rows={4} />
+
+        <div className="drawer__actions">
+          <button className="btn btn--primary">Submit feedback</button>
+          <a className="btn btn--ghost" target="_blank" rel="noreferrer" href="#">
+            Get directions
+          </a>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+
+Minimal CSS (put in styles/globals.css or the drawer’s module CSS):
+
+/* Drawer container: right panel on desktop, bottom sheet on mobile */
+.drawer {
+  position: fixed;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: min(380px, 92vw);
+  background: #fff;
+  box-shadow: -8px 0 24px rgba(0,0,0,.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 5000;
+}
+
+@media (max-width: 768px) {
+  .drawer {
+    right: 0;
+    left: 0;
+    bottom: 0;
+    top: auto;
+    height: min(65vh, 80vh);    /* taller on mobile */
+    width: 100%;
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    box-shadow: 0 -8px 24px rgba(0,0,0,.12);
+  }
+}
+
+/* Header */
+.drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eee;
+}
+.drawer__title {
+  font-weight: 600;
+  font-size: 16px;
+}
+.drawer__close {
+  border: 0;
+  background: transparent;
+  padding: 6px;
+  cursor: pointer;
+}
+
+/* Meta rows */
+.drawer__meta {
+  padding: 10px 14px 0 14px;
+}
+.drawer__row {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 8px;
+  margin: 4px 0;
+  color: #333;
+}
+.drawer__row span {
+  color: #666;
+}
+
+/* Scrollable body */
+.drawer__body {
+  padding: 12px 14px 14px;
+  overflow-y: auto;     /* key: internal scroll */
+  max-height: 40vh;     /* desktop height for the body area */
+}
+@media (max-width: 768px) {
+  .drawer__body { max-height: 48vh; }  /* mobile height for the body */
+}
+
+.drawer__label {
+  font-size: 13px;
+  color: #444;
+  margin: 10px 0 6px;
+  display: block;
+}
+
+.drawer__feedback {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* Buttons */
+.btn {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+}
+.btn--good { border-color: #c8e6c9; background: #eaf7eb; }
+.btn--bad  { border-color: #ffcdd2; background: #ffefef; }
+.btn--primary { background: #1769ff; border-color: #1769ff; color: #fff; }
+.btn--ghost { background: #fff; color: #1769ff; border-color: #d8e2ff; }
+
+.drawer__textarea {
+  width: 100%;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.drawer__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+
+This only changes layout/height/scroll and alignment. No fetch logic, no layer logic, no API calls changed.
+
+2) Add a Locate me button (no other behavior changes)
+
+Where: put it inline with the existing controls (next to “Zoom to data” and “Refresh”).
+Behavior: ask for geolocation, center map, drop a small radius circle; do not toggle layers or affect data limits.
+
+Component (example):
+
+// components/LocateButton.tsx
+import { useMap } from 'react-leaflet';
+import L from 'leaflet';
+
+export default function LocateButton() {
+  const map = useMap();
+
+  const handleLocate = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation not supported on this device.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        const latlng = L.latLng(latitude, longitude);
+        map.setView(latlng, Math.max(map.getZoom(), 14)); // gentle zoom-in
+        // Optional soft marker/circle
+        L.circle(latlng, { radius: 120, color: '#1769ff', weight: 1, fillOpacity: 0.12 }).addTo(map);
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+        alert('Could not get your location.');
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  };
+
+  return (
+    <button className="btn" onClick={handleLocate} aria-label="Locate me">
+      📍 Locate me
+    </button>
+  );
+}
+
+
+Mount it next to your existing controls, e.g. in components/FloatingControls.tsx or the top toolbar:
+
+import LocateButton from './LocateButton';
+
+// inside the controls row:
+<div className="controls-row">
+  {/* existing buttons: Heatmap / Markers / Council / Zoom to data / Refresh */}
+  <LocateButton />
+</div>
+
+
+No other map behavior is changed.
+
+3) QA checklist (do this before shipping)
+
+Drawer opens and stays visible on station click.
+
+Drawer has close (X); height is fixed; inner body scrolls; nothing overlaps the map.
+
+On mobile, bottom sheet uses the taller height and still scrolls inside.
+
+“Good / Bad” are equal width and aligned; the submit and directions buttons are visible without scrolling much.
+
+Locate me recenters smoothly; if permission denied, shows a friendly alert; does not toggle any layers or limits.
+
+That’s it — no API/data/layer changes, just layout for the feedback UI and a safe locate button.

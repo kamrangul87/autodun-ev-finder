@@ -123,6 +123,26 @@ export default function Home() {
     setTimeout(() => setShouldZoomToData(false), 500);
   };
 
+  const handleLocateMe = () => {
+    if (!navigator.geolocation) {
+      showToast('Geolocation not supported on this device.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude } = pos.coords;
+        // Trigger location found which will center the map
+        setState(s => ({ ...s, userLocation: { lat: latitude, lng: longitude } }));
+        showToast('Location found!');
+      },
+      (err) => {
+        console.warn('Geolocation error:', err);
+        showToast('Could not get your location. Please check permissions.');
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+    );
+  };
+
   const heatCount = state.heat ? stations.length : 0;
   const markerCount = state.markers ? stations.length : 0;
   const councilCount = state.council ? '∞' : 0;
@@ -149,6 +169,7 @@ export default function Home() {
           </div>
           <div className="action-buttons" style={{ display: 'flex', gap: '0.5rem' }}>
             <button onClick={handleZoomToData} style={{ padding: '0.75rem 1rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500', minHeight: '40px' }}>Zoom to data</button>
+            <button onClick={handleLocateMe} style={{ padding: '0.75rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: '500', minHeight: '40px' }}>📍 Locate me</button>
             <button onClick={manualRefresh} disabled={loading} style={{ padding: '0.75rem 1rem', background: '#8b5cf6', color: 'white', border: 'none', borderRadius: '0.375rem', cursor: loading ? 'wait' : 'pointer', fontSize: '0.875rem', fontWeight: '500', minHeight: '40px' }}>{loading ? 'Loading...' : 'Refresh'}</button>
           </div>
           <style jsx>{`
@@ -202,6 +223,7 @@ export default function Home() {
               showCouncil={state.council} 
               searchResult={searchResult} 
               shouldZoomToData={shouldZoomToData}
+              userLocation={state.userLocation}
               onFetchStations={handleFetchStations}
               onLoadingChange={setLoading}
               onToast={showToast}

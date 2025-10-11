@@ -332,6 +332,7 @@ export default function EnhancedMap({
   showCouncil = false, 
   searchResult = null, 
   shouldZoomToData = false,
+  userLocation: externalUserLocation,
   onFetchStations,
   onLoadingChange,
   onToast,
@@ -341,6 +342,14 @@ export default function EnhancedMap({
   const [userLocation, setUserLocation] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
+
+  // Handle external location updates from controls
+  useEffect(() => {
+    if (externalUserLocation && mapRef.current) {
+      setUserLocation(externalUserLocation);
+      mapRef.current.setView([externalUserLocation.lat, externalUserLocation.lng], Math.max(mapRef.current.getZoom(), 14));
+    }
+  }, [externalUserLocation]);
 
   const handleStationClick = useCallback((station) => {
     setActiveStation(station);
