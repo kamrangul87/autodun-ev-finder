@@ -26,6 +26,7 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
   const [vote, setVote] = useState<'good' | 'bad' | null>(null);
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [touchStart, setTouchStart] = useState<number | null>(null);
   const openTimeRef = useRef<number>(Date.now());
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -68,13 +69,22 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
     }
     setVote(null);
     setComment('');
+    setSubmitStatus('idle');
     onClose();
   }, [station, onClose]);
+
+  const handleCancel = useCallback(() => {
+    setVote(null);
+    setComment('');
+    setSubmitStatus('idle');
+    handleClose();
+  }, [handleClose]);
 
   const handleSubmitFeedback = async () => {
     if (!station || !vote) return;
 
     setIsSubmitting(true);
+    setSubmitStatus('idle');
     telemetry.feedbackSubmit(station.id, vote, comment.length > 0);
 
     try {
@@ -91,16 +101,22 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
       });
 
       if (response.ok) {
+        setSubmitStatus('success');
         if (onFeedbackSubmit) {
           onFeedbackSubmit(station.id, vote, comment);
         }
-        // Reset form
-        setVote(null);
-        setComment('');
-        // Show success (parent will handle toast)
+        // Reset form after brief success message
+        setTimeout(() => {
+          setVote(null);
+          setComment('');
+          setSubmitStatus('idle');
+        }, 2000);
+      } else {
+        setSubmitStatus('error');
       }
     } catch (error) {
       console.error('[StationDrawer] Feedback error:', error);
+      setSubmitStatus('error');
     } finally {
       setIsSubmitting(false);
     }
@@ -147,185 +163,155 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
 
   if (!station) return null;
 
-  const distance = userLocation ? haversineDistance(userLocation, { lat: station.lat, lng: station.lng }) : null;
+  const totalConnectors = station.connectors?.reduce((sum, conn) => sum + conn.count, 0) || 0;
 
   const drawer = (
     <>
-      {/* Backdrop */}
+      {/* Backdrop - mobile only */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+        className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
         onClick={handleClose}
         aria-hidden="true"
       />
 
-      {/* Drawer */}
+      {/* Feedback Panel */}
       <div
         ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
-        className="fixed bg-white shadow-2xl z-50 flex flex-col
-                   md:right-0 md:top-0 md:h-full md:w-96
-                   max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:rounded-t-2xl max-md:h-[75vh]"
+        className="fixed bg-white shadow-2xl z-50 flex flex-col border-l border-gray-200
+                   lg:top-0 lg:right-0 lg:h-dvh lg:w-[380px]
+                   max-lg:inset-x-0 max-lg:bottom-0 max-lg:max-h-[70vh] max-lg:rounded-t-2xl"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
-        {/* Mobile swipe indicator */}
-        <div className="md:hidden flex justify-center pt-3 pb-2 flex-shrink-0">
-          <div className="w-12 h-1 bg-gray-300 rounded-full" />
+        {/* Mobile drag grabber */}
+        <div className="lg:hidden flex justify-center pt-3 pb-2 flex-shrink-0">
+          <div className="w-12 h-1.5 bg-gray-300 rounded-full" aria-label="Drag to close" />
         </div>
 
-        {/* Header */}
-        <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-start justify-between flex-shrink-0">
-          <div className="flex-1 pr-4">
-            <h2 id="drawer-title" className="text-lg font-semibold text-gray-900 break-words">
-              {station.name}
-            </h2>
-            {station.isCouncil && (
-              <span className="inline-block mt-1 px-2 py-0.5 bg-purple-100 text-purple-800 text-xs font-medium rounded">
-                Council
-              </span>
-            )}
-          </div>
+        {/* Header Row */}
+        <div className="flex items-start justify-between gap-3 px-6 py-4 border-b border-gray-200 flex-shrink-0">
+          <h2 id="drawer-title" className="text-lg font-semibold leading-tight text-gray-900 flex-1">
+            {station.name}
+          </h2>
           <button
             onClick={handleClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
-            aria-label="Close drawer"
+            className="p-2 -m-2 hover:bg-gray-100 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
+            aria-label="Close panel"
           >
-            <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
 
-        {/* Body - Scrollable */}
-        <div className="p-4 space-y-4 overflow-y-auto flex-1">
-          {/* Address */}
-          {station.address && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-1">Address</h3>
-              <p className="text-sm text-gray-600">{station.address}</p>
-            </div>
-          )}
-
-          {/* Distance */}
-          {distance !== null && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-1">Distance</h3>
-              <p className="text-sm text-gray-600">{formatDistance(distance)} away</p>
-            </div>
-          )}
-
-          {/* Connectors */}
-          {station.connectors && station.connectors.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-2">Connectors</h3>
-              <div className="space-y-1">
-                {station.connectors.map((conn, idx) => (
-                  <div key={idx} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">{conn.type}</span>
-                    <span className="font-medium text-gray-900">{conn.count}×</span>
-                  </div>
-                ))}
+        {/* Scrollable Content */}
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {/* Meta (small, muted) */}
+          <div className="text-sm text-gray-500 space-y-1">
+            {station.address && (
+              <div className="truncate" title={station.address}>
+                {station.address}
               </div>
-            </div>
-          )}
+            )}
+            {totalConnectors > 0 && (
+              <div>
+                Connectors: {totalConnectors}
+              </div>
+            )}
+          </div>
 
-          {/* Opening Hours */}
-          {station.openingHours && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-1">Hours</h3>
-              <p className="text-sm text-gray-600">{station.openingHours}</p>
-            </div>
-          )}
-
-          {/* Provider */}
-          {station.provider && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-700 mb-1">Provider</h3>
-              <p className="text-sm text-gray-600">{station.provider}</p>
-            </div>
-          )}
-
-          {/* Feedback Section */}
-          <div className="border-t border-gray-200 pt-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-3">How was this station?</h3>
+          {/* Feedback Controls */}
+          <div className="mt-3 space-y-3">
+            <label className="block text-sm font-medium text-gray-700">
+              How was this station?
+            </label>
             
-            {/* Vote Buttons */}
-            <div className="flex gap-3 mb-3">
+            {/* Good / Bad Buttons */}
+            <div className="flex gap-3">
               <button
                 onClick={() => setVote('good')}
-                className={`flex-1 min-h-[44px] px-4 py-2 rounded-lg font-medium transition-all ${
+                className={`inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border transition-colors flex-1 ${
                   vote === 'good'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-blue-50 border-blue-500 text-blue-700'
+                    : 'border-gray-300 hover:bg-gray-50 text-gray-700'
                 }`}
-                aria-pressed={vote === 'good'}
+                aria-selected={vote === 'good'}
+                aria-label="Good experience"
               >
                 👍 Good
               </button>
               <button
                 onClick={() => setVote('bad')}
-                className={`flex-1 min-h-[44px] px-4 py-2 rounded-lg font-medium transition-all ${
+                className={`inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border transition-colors flex-1 ${
                   vote === 'bad'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-blue-50 border-blue-500 text-blue-700'
+                    : 'border-gray-300 hover:bg-gray-50 text-gray-700'
                 }`}
-                aria-pressed={vote === 'bad'}
+                aria-selected={vote === 'bad'}
+                aria-label="Bad experience"
               >
                 👎 Bad
               </button>
             </div>
 
-            {/* Comment */}
+            {/* Comment Textarea */}
             {vote && (
-              <div className="mb-3">
-                <textarea
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value.slice(0, 280))}
-                  placeholder="Optional comment (max 280 characters)"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  rows={3}
-                  maxLength={280}
-                />
-                <div className="text-xs text-gray-500 mt-1 text-right">
-                  {comment.length}/280
-                </div>
-              </div>
+              <textarea
+                value={comment}
+                onChange={(e) => setComment(e.target.value.slice(0, 280))}
+                placeholder="Any details? e.g., broken connector, blocked bay, pricing issue."
+                className="w-full rounded-md border border-gray-300 p-2 text-sm resize-vertical focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                rows={4}
+                maxLength={280}
+                aria-label="Feedback comment"
+              />
             )}
 
-            {/* Submit */}
-            {vote && (
-              <button
-                onClick={handleSubmitFeedback}
-                disabled={isSubmitting}
-                className="w-full min-h-[44px] px-4 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isSubmitting ? 'Submitting...' : 'Submit Feedback'}
-              </button>
+            {/* Status Messages */}
+            {submitStatus === 'success' && (
+              <div className="text-sm text-green-600 bg-green-50 border border-green-200 rounded-md p-3">
+                ✓ Thanks for your feedback!
+              </div>
+            )}
+            {submitStatus === 'error' && (
+              <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+                Couldn't submit. Please try again.
+              </div>
             )}
           </div>
 
           {/* Actions */}
-          <div className="border-t border-gray-200 pt-4 space-y-2">
-            <h3 className="text-sm font-medium text-gray-700 mb-2">Actions</h3>
-            
-            {userLocation ? (
-              <button
-                onClick={() => handleRoute('google')}
-                className="w-full min-h-[44px] px-4 py-2 bg-emerald-600 text-white font-medium rounded-lg hover:bg-emerald-700 transition-colors"
-              >
-                🗺️ Route from my location
-              </button>
-            ) : (
-              <button
-                onClick={() => handleRoute('google')}
-                className="w-full min-h-[44px] px-4 py-2 bg-gray-600 text-white font-medium rounded-lg hover:bg-gray-700 transition-colors"
-              >
-                🗺️ Get Directions
-              </button>
-            )}
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={handleSubmitFeedback}
+              disabled={!vote || isSubmitting}
+              className="px-4 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              aria-label="Submit feedback"
+            >
+              {isSubmitting ? 'Submitting...' : 'Submit feedback'}
+            </button>
+            <button
+              onClick={handleCancel}
+              className="px-4 py-2 rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
+              aria-label="Cancel"
+            >
+              Cancel
+            </button>
+          </div>
+
+          {/* Get Directions Link */}
+          <div className="pt-2">
+            <button
+              onClick={() => handleRoute('google')}
+              className="text-blue-600 hover:text-blue-700 text-sm font-medium underline"
+              aria-label="Get directions"
+            >
+              Get directions →
+            </button>
           </div>
         </div>
       </div>
