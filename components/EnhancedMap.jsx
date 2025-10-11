@@ -55,9 +55,16 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       
       const currentZoom = map.getZoom();
       const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
-      const maxIntensity = Math.max(...stations.map(s => s.connectors || 1));
       
-      const heatData = stations.map(s => [
+      let processedStations = stations;
+      if (stations.length > 25000) {
+        processedStations = stations.filter((_, idx) => idx % 3 === 0);
+        console.log(`[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`);
+      }
+      
+      const maxIntensity = Math.max(...processedStations.map(s => s.connectors || 1));
+      
+      const heatData = processedStations.map(s => [
         s.lat, 
         s.lng, 
         ((s.connectors || 1) / maxIntensity) * intensity
@@ -103,12 +110,12 @@ function FeedbackForm({ station, onClose }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           stationId: station.id,
-          type,
-          comment: comment.trim(),
+          vote: type,
+          text: comment.trim(),
           timestamp: new Date().toISOString()
         })
       });
-      if (response.ok) {
+      if (response.ok || response.status === 204) {
         setSubmitted(true);
         setTimeout(() => onClose?.(), 2000);
       }
@@ -124,20 +131,38 @@ function FeedbackForm({ station, onClose }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ marginTop: '12px' }}>
-      <div style={{ marginBottom: '8px' }}>
-        <label style={{ fontSize: '12px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>How was this station?</label>
+    <form onSubmit={handleSubmit} className="feedback-form" style={{ marginTop: '12px', padding: '12px', background: '#f9fafb', borderRadius: '6px' }}>
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ fontSize: '13px', fontWeight: '600', display: 'block', marginBottom: '6px' }}>How was this station?</label>
         <div style={{ display: 'flex', gap: '8px' }}>
-          <button type="button" onClick={() => setType('good')} style={{ flex: 1, padding: '6px', fontSize: '12px', background: type === 'good' ? '#10b981' : '#e5e7eb', color: type === 'good' ? 'white' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>👍 Good</button>
-          <button type="button" onClick={() => setType('bad')} style={{ flex: 1, padding: '6px', fontSize: '12px', background: type === 'bad' ? '#ef4444' : '#e5e7eb', color: type === 'bad' ? 'white' : '#6b7280', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>👎 Bad</button>
+          <button type="button" onClick={() => setType('good')} style={{ flex: 1, padding: '10px', fontSize: '14px', background: type === 'good' ? '#10b981' : '#e5e7eb', color: type === 'good' ? 'white' : '#6b7280', border: 'none', borderRadius: '6px', cursor: 'pointer', minHeight: '40px' }}>👍 Good</button>
+          <button type="button" onClick={() => setType('bad')} style={{ flex: 1, padding: '10px', fontSize: '14px', background: type === 'bad' ? '#ef4444' : '#e5e7eb', color: type === 'bad' ? 'white' : '#6b7280', border: 'none', borderRadius: '6px', cursor: 'pointer', minHeight: '40px' }}>👎 Bad</button>
         </div>
       </div>
-      <div style={{ marginBottom: '8px' }}>
-        <label style={{ fontSize: '12px', fontWeight: '600', display: 'block', marginBottom: '4px' }}>Comment (optional)</label>
-        <textarea value={comment} onChange={(e) => setComment(e.target.value.slice(0, 280))} maxLength={280} placeholder="Any additional details..." style={{ width: '100%', padding: '6px', fontSize: '12px', border: '1px solid #d1d5db', borderRadius: '4px', resize: 'vertical', minHeight: '60px' }} />
-        <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'right' }}>{comment.length}/280</div>
+      <div style={{ marginBottom: '12px' }}>
+        <label style={{ fontSize: '13px', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Comment (optional)</label>
+        <textarea value={comment} onChange={(e) => setComment(e.target.value.slice(0, 280))} maxLength={280} placeholder="Any additional details..." style={{ width: '100%', padding: '10px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '6px', resize: 'vertical', minHeight: '80px', wordBreak: 'break-word' }} />
+        <div style={{ fontSize: '12px', color: '#9ca3af', textAlign: 'right', marginTop: '4px' }}>{comment.length}/280</div>
       </div>
-      <button type="submit" disabled={submitting} style={{ width: '100%', padding: '8px', fontSize: '12px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: submitting ? 'wait' : 'pointer', fontWeight: '500' }}>{submitting ? 'Submitting...' : 'Submit Feedback'}</button>
+      <button type="submit" disabled={submitting} style={{ width: '100%', padding: '12px', fontSize: '14px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', cursor: submitting ? 'wait' : 'pointer', fontWeight: '500', minHeight: '40px' }}>{submitting ? 'Submitting...' : 'Submit Feedback'}</button>
+      <style jsx>{`
+        @media (max-width: 768px) {
+          .feedback-form {
+            position: fixed !important;
+            bottom: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            margin: 0 !important;
+            padding: 20px !important;
+            background: white !important;
+            border-radius: 16px 16px 0 0 !important;
+            box-shadow: 0 -4px 12px rgba(0,0,0,0.2) !important;
+            z-index: 10000 !important;
+            max-height: 80vh;
+            overflow-y: auto;
+          }
+        }
+      `}</style>
     </form>
   );
 }
@@ -417,12 +442,34 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
     if (isFirstFetchRef.current) {
       const ukBounds = [[-8.649, 49.823], [1.763, 60.845]];
       map.fitBounds(ukBounds, { padding: [20, 20] });
-      setTimeout(() => {
-        fetchForViewport(true);
-        isFirstFetchRef.current = false;
-      }, 100);
+      setTimeout(async () => {
+        try {
+          onLoadingChange?.(true);
+          const bboxStr = `-8.649,49.823,1.763,60.845`;
+          const url = `/api/stations?bbox=${bboxStr}&tiles=4&limitPerTile=500`;
+          const response = await fetch(url, { cache: 'no-store' });
+          const data = await response.json();
+          if (response.ok) {
+            const normalizedData = {
+              items: data.features ? data.features.map(f => f.properties) : [],
+              count: data.count,
+              source: data.source,
+              bbox: data.bbox
+            };
+            const cacheKey = `bbox_${bboxStr}`;
+            setCache(cacheKey, normalizedData);
+            lastFetchRef.current = bboxStr;
+            onFetchStations?.(normalizedData);
+          }
+        } catch (error) {
+          console.error('First load fetch error:', error);
+        } finally {
+          onLoadingChange?.(false);
+          isFirstFetchRef.current = false;
+        }
+      }, 200);
     }
-  }, [fetchForViewport, map]);
+  }, [map, onFetchStations, onLoadingChange]);
 
   useEffect(() => {
     if (searchResult) {
@@ -480,10 +527,11 @@ export default function EnhancedMap({
         </div>
       </div>
       <MapContainer 
-        center={[51.5074, -0.1278]} 
-        zoom={10} 
+        center={[54.5, -4]} 
+        zoom={6} 
         style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, width: '100%', height: '100%' }}
         scrollWheelZoom={true}
+        bounds={[[-8.649, 49.823], [1.763, 60.845]]}
       >
         <MapInitializer />
         <TileLayer 
