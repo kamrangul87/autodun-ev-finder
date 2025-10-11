@@ -96,10 +96,26 @@ function HeatmapLayer({ stations, intensity = 1 }) {
 }
 
 function FeedbackForm({ station, onClose }) {
+  const map = useMap();
   const [type, setType] = useState('good');
   const [comment, setComment] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => {
+    if (map) {
+      map.dragging.disable();
+      map.scrollWheelZoom.disable();
+      if (map.boxZoom) map.boxZoom.disable();
+    }
+    return () => {
+      if (map) {
+        map.dragging.enable();
+        map.scrollWheelZoom.enable();
+        if (map.boxZoom) map.boxZoom.enable();
+      }
+    };
+  }, [map]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -146,7 +162,21 @@ function FeedbackForm({ station, onClose }) {
       </div>
       <button type="submit" disabled={submitting} style={{ width: '100%', padding: '12px', fontSize: '14px', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '6px', cursor: submitting ? 'wait' : 'pointer', fontWeight: '500', minHeight: '40px' }}>{submitting ? 'Submitting...' : 'Submit Feedback'}</button>
       <style jsx>{`
+        .feedback-form {
+          pointer-events: auto;
+        }
         @media (max-width: 768px) {
+          .feedback-form::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 9999;
+            pointer-events: auto;
+          }
           .feedback-form {
             position: fixed !important;
             bottom: 0 !important;
@@ -160,6 +190,7 @@ function FeedbackForm({ station, onClose }) {
             z-index: 10000 !important;
             max-height: 80vh;
             overflow-y: auto;
+            pointer-events: auto;
           }
         }
       `}</style>
@@ -174,8 +205,8 @@ function StationMarker({ station }) {
   };
   return (
     <Marker position={[station.lat, station.lng]}>
-      <Popup maxWidth={280} onClose={() => setShowFeedback(false)}>
-        <div style={{ padding: '8px' }}>
+      <Popup maxWidth={280} closeOnClick={false} autoClose={false} onClose={() => setShowFeedback(false)}>
+        <div style={{ padding: '8px' }} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
           <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{station.name}</h3>
           {station.address && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.address}</p>}
           {station.postcode && <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>{station.postcode}</p>}
@@ -201,11 +232,19 @@ function CouncilMarker({ feature, stations = [] }) {
   
   if (!centroid) return null;
 
-  const stationCount = stations.filter(station => {
+  const stationsToCheck = stations.length > 10000 
+    ? stations.filter((_, idx) => idx % Math.ceil(stations.length / 5000) === 0).slice(0, 5000)
+    : stations;
+  
+  const stationCount = stationsToCheck.filter(station => {
     if (!feature.geometry || !feature.geometry.coordinates) return false;
     const point = [station.lng, station.lat];
     return pointInPolygon(point, feature.geometry.coordinates);
   }).length;
+  
+  const actualCount = stations.length > 10000 
+    ? Math.round((stationCount / stationsToCheck.length) * stations.length)
+    : stationCount;
 
   const zoomToBorough = () => {
     if (feature.geometry && feature.geometry.coordinates) {
@@ -247,11 +286,11 @@ function CouncilMarker({ feature, stations = [] }) {
 
   return (
     <Marker position={[centroid.lat, centroid.lng]} icon={councilIcon}>
-      <Popup maxWidth={240} onClose={() => setShowIssueForm(false)}>
-        <div style={{ padding: '8px' }}>
+      <Popup maxWidth={240} closeOnClick={false} autoClose={false} onClose={() => setShowIssueForm(false)}>
+        <div style={{ padding: '8px' }} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} onTouchStart={(e) => e.stopPropagation()}>
           <h3 style={{ margin: '0 0 8px 0', fontSize: '14px', fontWeight: 'bold' }}>{feature.properties.name}</h3>
           <p style={{ margin: '4px 0', fontSize: '12px', color: '#666' }}>
-            <strong>{stationCount}</strong> charging station{stationCount !== 1 ? 's' : ''} in view
+            <strong>Stations in boundary: {actualCount}</strong>
           </p>
           <button 
             onClick={zoomToBorough}
@@ -440,8 +479,6 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
 
   useEffect(() => {
     if (isFirstFetchRef.current) {
-      const ukBounds = [[-8.649, 49.823], [1.763, 60.845]];
-      map.fitBounds(ukBounds, { padding: [20, 20] });
       const bboxStr = `-8.649,49.823,1.763,60.845`;
       lastFetchRef.current = bboxStr;
       isFirstFetchRef.current = false;
