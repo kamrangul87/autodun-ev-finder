@@ -4,19 +4,20 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
 
 ## Recent Changes
-**2025-10-11: MVP Complete - Bbox/Tiled API + Mobile Polish ✅**
+**2025-10-11: UX Polish Complete - UK Search Lock + Popup Stability ✅**
 
-### Production-Ready Implementation
+### Final Production-Ready Implementation
+- ✅ **UK-biased geocoding** - All searches locked to UK (countrycodes=gb, bounded=1, viewbox), toast for non-UK places
+- ✅ **Dynamic status banner** - Shows UK|Region|City based on search results (extractRegionName)
+- ✅ **First render fix** - Map gates on initialDataReady, shows 4,377 stations immediately (no "2 stations" glitch)
+- ✅ **Popup stability** - closeOnClick:false, autoClose:false, event propagation stopped, map locked when feedback open
+- ✅ **Mobile scrim overlay** - Semi-transparent ::before pseudo-element blocks map interaction on feedback
+- ✅ **Council optimization** - Point-in-polygon samples to 5k if >10k stations, extrapolates count, shows "Stations in boundary: N"
+- ✅ **Map interaction control** - FeedbackForm disables dragging/scrollWheelZoom/boxZoom on mount, restores on unmount
 - ✅ **Bbox/tiled API fetching** - Splits UK bounds into 4×4 tiles (500/tile) on first load, 2×2 tiles (750/tile) on pan/zoom
-- ✅ **UK-wide first load** - Map fetches 4,377 stations across entire UK, distributed clusters (not center blob)
 - ✅ **LRU cache** - Server-side cache with 200 entries, tile-based keys prevent redundant API calls
-- ✅ **Viewport-driven refetch** - 400ms debounce, bbox calculated from current map bounds
-- ✅ **Neutral status ribbon** - "Source: OPENCHARGE (live) • Stations: X • Bounds: United Kingdom"
-- ✅ **Feedback webhook** - POST to /api/feedback forwards to FEEDBACK_WEBHOOK_URL (optional)
-- ✅ **Mobile optimizations** - Bottom sheet modal, responsive controls (≤375px), 40px tap targets
-- ✅ **Performance** - Heatmap downsampling >25k points, no blocking operations
 - ✅ **Acceptance tests** - All 15 MVP criteria verified (see MVP_ACCEPTANCE_TESTS.md)
-- ✅ **Architect review** - Approved with no blocking defects
+- ✅ **Final architect review** - Approved with no blocking defects, production-ready
 
 **2025-10-09: Initial Production MVP ✅**
 
