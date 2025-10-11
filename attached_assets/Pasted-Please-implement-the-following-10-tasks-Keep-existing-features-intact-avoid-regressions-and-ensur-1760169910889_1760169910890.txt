@@ -1,0 +1,157 @@
+Please implement the following 10 tasks. Keep existing features intact, avoid regressions, and ensure no console errors in dev/prod. Mobile-first, A11y-friendly, and fast.
+
+1) Station side-drawer (persistent feedback UI)
+
+Goal: When a station marker/cluster item is clicked, open a right-side drawer (desktop & mobile) instead of an in-map popup.
+Details
+
+Component: StationDrawer (portal to document.body).
+
+Header: station name + close (Esc closes).
+
+Body: address, connector count/types, opening hours (if present), provider, actions:
+
+Buttons: Good / Bad (radio-style), optional comment textarea (max 280 chars), Submit Feedback, Directions (external Google/Apple Maps).
+
+Keep drawer open across pan/zoom; rehydrate on marker re-click.
+
+Keyboard: Tab order, Enter/Space activates, focus trapped inside drawer.
+Acceptance: Drawer never auto-closes on map interactions; feedback submit shows success toast and resets; no duplicate scrollbars.
+
+2) Council data as real markers (no heat/area effects)
+
+Goal: Replace the “council boundary effect” with real council POIs.
+Details
+
+Create /api/council-stations?borough=NAME&bbox=... that returns stations within a borough using:
+
+Our existing station source filtered by borough name OR
+
+Fallback by polygon (inside-point test) if the station source doesn’t include borough.
+
+Display purple diamond markers for council POIs (distinct from blue station clusters).
+
+Council toggle = show/hide these diamond markers; clicking a diamond opens the same StationDrawer (with “Council” tag).
+Acceptance: Council toggle shows actual station points across the UK; counts in drawer match visible markers.
+
+3) Predictable loading & clustering
+
+Goal: Never show “only a few” or “0” on first paint; avoid flicker.
+Details
+
+Initial fetch uses full UK bounds (or UK meta-tiles) with server-side pagination/tiling; keep a local cache keyed by tile/bounds.
+
+Use Leaflet marker clustering with stable keys to prevent re-instantiation when zooming.
+
+Display a small non-blocking loading skeleton (bottom-left legend area) while fetch is in-flight.
+Acceptance: On first open, clusters appear everywhere (not just center); zooming never drops markers to 0 unless truly no data.
+
+4) Heatmap improvements
+
+Goal: Heatmap looks professional at all zoom levels.
+Details
+
+Use zoom-aware kernel radius; green→yellow→orange→red gradient; weight by connector count.
+
+Combine clustered points into heat intensities without double-counting visible markers.
+Acceptance: Heatmap remains stable when toggling markers; intensities consistent with station counts.
+
+5) Mobile-first polish
+
+Goal: Great UX on phones.
+Details
+
+Drawer becomes full-height sheet on mobile, swipe-down to close; map locked behind sheet when open.
+
+Large tap targets (min 44px), sticky top search bar, buttons in a single column.
+
+Floating filter row: Heatmap / Markers / Council / Zoom to data / Refresh.
+Acceptance: No overlaps or cut-offs on small screens; smooth transitions.
+
+6) Performance & robustness
+
+Goal: Sub-second interactions, minimal network.
+Details
+
+Cache station tiles in memory; debounce fetch on moveend (150–250ms).
+
+Cache-Control: no-store, no-cache on API responses to avoid stale CDN, but keep in-app cache.
+
+Lazy-load heavy libs only when drawer opens (if needed).
+
+No blocking long tasks on main thread (>50ms).
+Acceptance: Lighthouse performance ≥ 85 on mobile; memory stable while panning.
+
+7) Telemetry & ML hooks (non-PII)
+
+Goal: Capture minimal events for later ML without personal data.
+Details
+
+Log: search query (hashed), borough/council selected, feedback vote (good/bad), station id, drawer open/close, “route clicked”.
+
+Use a thin logEvent(name, payload) util that no-ops if no endpoint; keep payload anonymized.
+Acceptance: No PII stored; events visible in dev console mock.
+
+8) QA checklist (block PR if failing)
+
+Checks
+
+No console errors/warnings.
+
+Toggling any layer never clears other layers.
+
+Drawer keyboard nav works; Esc closes.
+
+Station counts stable across zoom in/out.
+
+Council markers distinct; clicking opens drawer with “Council” tag.
+
+Heatmap + markers consistent.
+Done when: All pass in both Replit preview and Vercel prod.
+
+9) Deployment & config (Replit→GitHub→Vercel)
+
+Goal: Replit is the editor; GitHub stores code; Vercel deploys prod.
+Details
+
+Keep single source of truth: branch feat/mvp-final.
+
+Ensure env vars are set on Vercel (Preview & Prod):
+OCM_API_KEY, OCM_CLIENT, STATIONS_SOURCE=OPENCHARGE, NEXT_PUBLIC_APP_URL, NEXT_TELEMETRY_DISABLED=1.
+
+Vercel function logs must show: [fetchStations] Success: ~N stations from OPENCHARGE.
+Acceptance: Vercel build shows live data equal to Replit preview; domain ev.autodun.com points to latest prod.
+
+10) “Locate me” + routes (new)
+
+Goal: Let users jump to their location and route to a station.
+Details
+
+Add “Locate me” floating button (crosshair) by zoom controls (desktop & mobile).
+
+Use navigator.geolocation.getCurrentPosition (highAccuracy, 10s timeout).
+
+Center to user location (zoom ~14), show blue dot + accuracy circle; keep in state.
+
+In StationDrawer (when currentLocation exists) show “Route from my location”:
+
+Google: https://www.google.com/maps/dir/?api=1&origin={lat},{lng}&destination={lat},{lng}&travelmode=driving}
+
+Apple (iOS): http://maps.apple.com/?saddr={lat},{lng}&daddr={lat},{lng}&dirflg=d
+
+Optional: Nearest station quick action (haversine).
+
+Errors: graceful toast if denied/unsupported; never store PII.
+Acceptance: Works on desktop & mobile; no errors; keyboard accessible; blue dot persists during pan/zoom.
+
+Implementation tips
+
+Keep everything in TypeScript, strict mode.
+
+Names to add: components/StationDrawer.tsx, hooks/useGeolocation.ts, utils/haversine.ts, api/council-stations.ts.
+
+Styling consistent with current app (Tailwind classes OK).
+
+Unit tests for haversine and council filter; smoke test for drawer open/close.
+
+Deliverables: PR to feat/mvp-final with all items ✅, short CHANGELOG, and two screenshots (desktop & mobile) demonstrating: full UK markers on first load, council markers visible, drawer open with feedback controls, “Locate me” visible.
