@@ -4,20 +4,28 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
 
 ## Recent Changes
-**2025-10-11: UX Polish Complete - UK Search Lock + Popup Stability ✅**
+**2025-10-11: Drawer UI + Geolocation + Telemetry Refactor ✅**
 
-### Final Production-Ready Implementation
-- ✅ **UK-biased geocoding** - All searches locked to UK (countrycodes=gb, bounded=1, viewbox), toast for non-UK places
-- ✅ **Dynamic status banner** - Shows UK|Region|City based on search results (extractRegionName)
-- ✅ **First render fix** - Map gates on initialDataReady, shows 4,377 stations immediately (no "2 stations" glitch)
-- ✅ **Popup stability** - closeOnClick:false, autoClose:false, event propagation stopped, map locked when feedback open
-- ✅ **Mobile scrim overlay** - Semi-transparent ::before pseudo-element blocks map interaction on feedback
-- ✅ **Council optimization** - Point-in-polygon samples to 5k if >10k stations, extrapolates count, shows "Stations in boundary: N"
-- ✅ **Map interaction control** - FeedbackForm disables dragging/scrollWheelZoom/boxZoom on mount, restores on unmount
-- ✅ **Bbox/tiled API fetching** - Splits UK bounds into 4×4 tiles (500/tile) on first load, 2×2 tiles (750/tile) on pan/zoom
-- ✅ **LRU cache** - Server-side cache with 200 entries, tile-based keys prevent redundant API calls
-- ✅ **Acceptance tests** - All 15 MVP criteria verified (see MVP_ACCEPTANCE_TESTS.md)
-- ✅ **Final architect review** - Approved with no blocking defects, production-ready
+### Major Architectural Upgrade - Production Ready
+- ✅ **Drawer UI System** - Replaced popups with StationDrawer (desktop: right-side panel, mobile: bottom sheet)
+- ✅ **Council Markers API** - /api/council-stations endpoint with bbox-based server-side aggregation, purple diamond markers
+- ✅ **Geolocation System** - useGeolocation hook + LocateMeButton (top-right), blue dot marker + accuracy circle, auto-pan to location
+- ✅ **Routing Integration** - "Get Directions" buttons in drawer (Google Maps on Android/Desktop, Apple Maps on iOS)
+- ✅ **Production Telemetry** - logEvent utility with anonymized events (drawer_open, locate_me_clicked, council_selected, etc.), enabled in production
+- ✅ **Fast Refresh Fix** - hasLoadedRef prevents duplicate fetches during hot reload, stable initial data load
+- ✅ **Viewport Fetch Guard** - Enhanced ViewportFetcher only blocks initial bbox after stations loaded
+- ✅ **Telemetry Events**:
+  - drawer_open/close (stationId, isCouncil, durationMs)
+  - feedback_submit (stationId, vote, hasComment)
+  - route_clicked (stationId, provider)
+  - council_selected (boroughHash, stationCount)
+  - locate_me_clicked (granted)
+  - toggle_layer (layer, visible)
+- ✅ **Mobile UX** - Touch-optimized drawer, swipe gestures, responsive controls, large tap targets
+- ✅ **Performance** - Verified caching, debouncing (400ms viewport fetch), lazy heatmap sampling (>25k points)
+- ✅ **Final architect review** - Approved as production-ready, all tasks complete
+
+**2025-10-11: UX Polish Complete - UK Search Lock + Popup Stability ✅** *(Previous implementation - now deprecated by drawer system)*
 
 **2025-10-09: Initial Production MVP ✅**
 
