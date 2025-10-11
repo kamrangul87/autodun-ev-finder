@@ -182,9 +182,13 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
         role="dialog"
         aria-modal="true"
         aria-labelledby="drawer-title"
-        className="fixed bg-white shadow-2xl z-50 flex flex-col
-                   left-0 right-0 bottom-0 max-h-[70vh] rounded-t-2xl
-                   md:left-auto md:right-0 md:top-0 md:bottom-auto md:h-full md:w-[380px] md:rounded-none md:border-l md:border-gray-200"
+        style={{
+          position: 'fixed',
+          zIndex: 50,
+        }}
+        className="bg-white shadow-2xl flex flex-col
+                   bottom-0 left-0 right-0 max-h-[70vh] rounded-t-2xl
+                   lg:top-0 lg:right-0 lg:bottom-0 lg:left-auto lg:h-screen lg:w-[380px] lg:max-h-none lg:rounded-none lg:border-l lg:border-gray-200"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -212,19 +216,38 @@ export function StationDrawer({ station, userLocation, onClose, onFeedbackSubmit
 
         {/* Scrollable Content */}
         <div className="p-6 space-y-4 overflow-y-auto flex-1">
-          {/* Meta (small, muted) */}
-          <div className="text-sm text-gray-500 space-y-1">
+          {/* Station Details */}
+          <div className="space-y-3">
             {station.address && (
-              <div className="truncate" title={station.address}>
-                {station.address}
+              <div className="text-sm">
+                <div className="font-medium text-gray-900 mb-1">📍 Address</div>
+                <div className="text-gray-600">{station.address}</div>
               </div>
             )}
+            
             {totalConnectors > 0 && (
-              <div>
-                Connectors: {totalConnectors}
+              <div className="text-sm">
+                <div className="font-medium text-gray-900 mb-1">🔌 Connectors</div>
+                <div className="text-gray-600">{totalConnectors} available</div>
+              </div>
+            )}
+            
+            {station.provider && (
+              <div className="text-sm">
+                <div className="font-medium text-gray-900 mb-1">👤 Provider</div>
+                <div className="text-gray-600">{station.provider}</div>
+              </div>
+            )}
+            
+            {station.openingHours && (
+              <div className="text-sm">
+                <div className="font-medium text-gray-900 mb-1">🕐 Hours</div>
+                <div className="text-gray-600">{station.openingHours}</div>
               </div>
             )}
           </div>
+          
+          <div className="border-t border-gray-200 pt-4 my-4"></div>
 
           {/* Feedback Controls */}
           <div className="mt-3 space-y-3">
