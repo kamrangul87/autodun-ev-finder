@@ -21,8 +21,38 @@ export default function Home() {
   const [searchResult, setSearchResult] = useState(null);
   const [shouldZoomToData, setShouldZoomToData] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [regionName, setRegionName] = useState('United Kingdom');
+  const [initialDataReady, setInitialDataReady] = useState(false);
 
   useEffect(() => { setState(getInitialState()); }, []);
+
+  useEffect(() => {
+    const fetchInitialUKData = async () => {
+      try {
+        setLoading(true);
+        const bboxStr = `-8.649,49.823,1.763,60.845`;
+        const url = `/api/stations?bbox=${bboxStr}&tiles=4&limitPerTile=500`;
+        const response = await fetch(url, { cache: 'no-store' });
+        const data = await response.json();
+        if (response.ok) {
+          const normalizedData = {
+            items: data.features ? data.features.map(f => f.properties) : [],
+            count: data.count,
+            source: data.source,
+            bbox: data.bbox
+          };
+          handleFetchStations(normalizedData);
+        }
+      } catch (error) {
+        console.error('Initial UK data fetch error:', error);
+      } finally {
+        setLoading(false);
+        setInitialDataReady(true);
+      }
+    };
+    fetchInitialUKData();
+  }, []);
 
   const handleFetchStations = useCallback((data) => {
     if (!data) return;
@@ -63,15 +93,22 @@ export default function Home() {
   const toggleMarkers = () => setState(s => ({ ...s, markers: !s.markers }));
   const toggleCouncil = () => setState(s => ({ ...s, council: !s.council }));
 
+  const showToast = (message) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  };
+
   const handleSearch = async () => {
     if (!state.query.trim()) return;
     setSearching(true);
-    setError(null);
     try {
       const result = await searchLocation(state.query);
       setSearchResult(result);
+      if (result.regionName) {
+        setRegionName(result.regionName);
+      }
     } catch (err) {
-      setError(`Search failed: ${err.message}`);
+      showToast(err.message);
     } finally {
       setSearching(false);
     }
@@ -130,24 +167,35 @@ export default function Home() {
           `}</style>
         </div>
         <div style={{ padding: '0.5rem 1rem', background: '#e5e7eb', fontSize: '0.75rem', color: '#374151' }}>
-          <strong>Source:</strong> {dataSource === 'OPENCHARGE' ? 'OPENCHARGE (live)' : dataSource} • <strong>Stations:</strong> {stations.length} • <strong>Bounds:</strong> United Kingdom
+          <strong>Source:</strong> {dataSource === 'OPENCHARGE' ? 'OPENCHARGE (live)' : dataSource} • <strong>Stations:</strong> {stations.length} • <strong>Bounds:</strong> {regionName}
         </div>
         {error && (
           <div style={{ padding: '0.75rem 1rem', background: '#fef2f2', color: '#dc2626', fontSize: '0.875rem', borderBottom: '1px solid #fecaca' }}>⚠️ {error}</div>
         )}
+        {toast && (
+          <div style={{ position: 'fixed', top: '6rem', left: '50%', transform: 'translateX(-50%)', background: '#1f2937', color: 'white', padding: '0.75rem 1.5rem', borderRadius: '0.5rem', fontSize: '0.875rem', zIndex: 10000, boxShadow: '0 10px 25px rgba(0,0,0,0.3)' }}>
+            {toast}
+          </div>
+        )}
         <div style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}>
-          <EnhancedMap 
-            stations={stations} 
-            showHeatmap={state.heat} 
-            showMarkers={state.markers} 
-            showCouncil={state.council} 
-            councilData={councilData} 
-            searchResult={searchResult} 
-            shouldZoomToData={shouldZoomToData}
-            onFetchStations={handleFetchStations}
-            onLoadingChange={setLoading}
-            isLoading={loading}
-          />
+          {initialDataReady ? (
+            <EnhancedMap 
+              stations={stations} 
+              showHeatmap={state.heat} 
+              showMarkers={state.markers} 
+              showCouncil={state.council} 
+              councilData={councilData} 
+              searchResult={searchResult} 
+              shouldZoomToData={shouldZoomToData}
+              onFetchStations={handleFetchStations}
+              onLoadingChange={setLoading}
+              isLoading={loading}
+            />
+          ) : (
+            <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f3f4f6' }}>
+              <p>Loading UK stations...</p>
+            </div>
+          )}
         </div>
       </div>
     </>

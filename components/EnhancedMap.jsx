@@ -442,34 +442,11 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
     if (isFirstFetchRef.current) {
       const ukBounds = [[-8.649, 49.823], [1.763, 60.845]];
       map.fitBounds(ukBounds, { padding: [20, 20] });
-      setTimeout(async () => {
-        try {
-          onLoadingChange?.(true);
-          const bboxStr = `-8.649,49.823,1.763,60.845`;
-          const url = `/api/stations?bbox=${bboxStr}&tiles=4&limitPerTile=500`;
-          const response = await fetch(url, { cache: 'no-store' });
-          const data = await response.json();
-          if (response.ok) {
-            const normalizedData = {
-              items: data.features ? data.features.map(f => f.properties) : [],
-              count: data.count,
-              source: data.source,
-              bbox: data.bbox
-            };
-            const cacheKey = `bbox_${bboxStr}`;
-            setCache(cacheKey, normalizedData);
-            lastFetchRef.current = bboxStr;
-            onFetchStations?.(normalizedData);
-          }
-        } catch (error) {
-          console.error('First load fetch error:', error);
-        } finally {
-          onLoadingChange?.(false);
-          isFirstFetchRef.current = false;
-        }
-      }, 200);
+      const bboxStr = `-8.649,49.823,1.763,60.845`;
+      lastFetchRef.current = bboxStr;
+      isFirstFetchRef.current = false;
     }
-  }, [map, onFetchStations, onLoadingChange]);
+  }, [map]);
 
   useEffect(() => {
     if (searchResult) {
