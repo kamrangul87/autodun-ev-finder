@@ -1,0 +1,301 @@
+Goals
+
+Station drawer (not a floating popup) with close/cancel.
+
+Council layer shows real markers + counts (no heat effect) and opens a council drawer with stats.
+
+Add a “Locate me” button (center on user + directions-ready).
+
+On initial load and every zoom/pan, heatmap and markers appear together—no missing layers.
+
+Mobile-optimized, zero console errors, stable data on zoom/pan.
+
+Performance: snappy, throttled fetches, no flicker.
+
+CI + GitHub lock so future changes can’t break prod (Replit pushes to branch; merges require PR + green checks).
+
+1) Drawer UI (stations) — replace popup
+
+Replace any map popup with a fixed side drawer (right side on desktop: 360–420px; bottom sheet on mobile 100% width, 75vh height).
+
+Drawer must not auto-close on map drag/zoom. Close only by:
+
+Clicking × (top-right)
+
+Esc key
+
+Clicking the backdrop scrim
+
+Header: station name; subtitle shows operator or “X connectors”.
+
+Body: Address (copyable), connector types, any meta if available (pricing/hours), “How was this station?” with Good/Bad toggle and 280-char comment + counter.
+
+Footer (sticky): Cancel (resets and closes) • Submit feedback (enabled only if Good/Bad picked) • Get directions (opens Google/Apple Maps).
+
+A11y: role="dialog", aria-labelledby (header id), focus trap inside drawer, tab order top→bottom.
+
+Styling (Tailwind or CSS): 16px padding, 8px gaps, overflow-y: auto content, footer position: sticky; bottom: 0; and safe-area insets for iOS.
+
+Acceptance
+
+Drawer never disappears during map interactions.
+
+Keyboard navigation & screen reader work.
+
+No layout jump, no double scrollbars, no console warnings.
+
+2) Council layer = real markers + counts (no heat overlay)
+
+Goal: Show purple diamond markers for councils (centroid of polygon) with a numeric badge = station count inside that council.
+
+On click, open a Council Drawer (same component shell) showing:
+
+Council name
+
+Total stations in this council
+
+Top 3 connector types (counts)
+
+Buttons:
+
+Zoom to borough (fit bounds to polygon)
+
+Open in list (if we add a list later)
+
+Report boundary issue (pre-fill a feedback payload with council id)
+
+Data:
+
+Keep london-councils.geojson (already present).
+
+Compute counts using server-side endpoint (recommended) to avoid heavy client CPU:
+
+New API: GET /api/council?bounds=<bbox> returns { councils: [{ id, name, centroid:[lng,lat], count, bounds:[...], stats:{connectorType:count}}...] }
+
+Server implementation:
+
+Fetch stations for current bounds (existing /api/stations logic)
+
+Use @turf/pointsWithinPolygon or booleanPointInPolygon to count and aggregate per council polygon.
+
+Cache per-bounds result in-memory for 5 minutes (LRU by bbox hash).
+
+If server-side is not possible today, do it client-side with @turf/pointsWithinPolygon, but throttle to once every moveend and show a subtle loading skeleton (non-blocking).
+
+Marker style:
+
+Purple diamond base with a small white pill label showing the count (e.g., 86).
+
+Keep the legend in bottom-right updated:
+
+Blue = charging stations
+
+Purple = council markers
+
+Orange dashed = council boundaries
+
+No heat for councils. Heat remains only for station density.
+
+Acceptance
+
+On initial load (UK bounds) and after moving map, council markers appear with counts.
+
+Council drawer opens with the above data and zooms correctly.
+
+No jitter or flicker.
+
+3) “Locate me” button
+
+Add a small Locate (target icon) button next to the Go/search bar.
+
+On click:
+
+Use navigator.geolocation.getCurrentPosition({ enableHighAccuracy:true, timeout:8000 })
+
+Center map to user location, add a “You are here” blue dot, and trigger station fetch for that viewport.
+
+If blocked/denied: show a small toast “Location permission denied” and do nothing.
+
+In the station drawer, Directions uses the current location if we have it; otherwise prompt to enable location.
+
+Acceptance
+
+Works on desktop + mobile; graceful errors; no map freeze.
+
+4) Initial load & layer sync (no missing markers)
+
+On first render:
+
+UI status bar should show: Source: OPENCHARGE (live) • Stations: <count> • Bounds: United Kingdom
+
+Fetch stations for the current map bounds immediately; render both markers and heatmap.
+
+During pan/zoom:
+
+Debounce moveend by 300ms and re-fetch for new bounds.
+
+Use an AbortController to cancel stale requests.
+
+Keep previously rendered layers until new data arrives (“optimistic hold”)—no empty blink.
+
+Acceptance
+
+Heatmap + marker clusters always in sync; no “heatmap only” situations.
+
+5) Performance & stability
+
+Use Supercluster (via supercluster npm) for marker clustering (web worker recommended) or Leaflet’s markercluster if already stable.
+
+Memoize icons/components; avoid re-creating markers on every render.
+
+Ensure layers are separate React components with React.memo; keep data in a React Context so drawer and layers don’t re-mount.
+
+Throttle expensive work; never block main thread >16ms.
+
+Zero console errors/warnings.
+
+6) Mobile polish
+
+Drawer is a bottom sheet with a grip bar, swipe-to-close (with threshold), sticky footer actions.
+
+Map controls (zoom, legend, locate) positioned so they don’t overlap the drawer.
+
+Test iPhone 12/13/14, Android Pixel emulator; verify safe-area padding.
+
+7) Small UI touches
+
+Status bar:
+Source: OPENCHARGE (live) • Stations: N • Bounds: <Region or City>
+
+Remove all “demo” references.
+
+Keep the legend updated (blue/purple/ orange dashed).
+
+Ensure the feedback drawer never auto-closes and submit shows a snackbar: “Thanks! Your feedback helps improve the map.”
+
+8) QA script
+
+Desktop 1440×900: London, Manchester, Birmingham—screenshots with:
+
+Heatmap ON/OFF
+
+Markers clusters at z<10, split at z>13
+
+Council markers with counts visible and a council drawer open
+
+A station drawer open; submit Good/Bad with a comment
+
+Mobile 375×812: same flows + Locate button
+
+No console errors (check both Preview and Vercel Preview)
+
+Lighthouse mobile perf > 85.
+
+9) GitHub “auto-lock” so Replit can’t break prod
+
+We want Replit to push to a safe branch, and GitHub to enforce PR + green CI before merge to main (Vercel prod).
+
+In Replit Git panel:
+
+Set remote to GitHub if not already.
+
+Set default push branch to develop (or replit).
+
+Add GitHub Actions CI:
+
+Create .github/workflows/ci.yml:
+
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test --if-present
+
+
+Create .github/CODEOWNERS:
+
+* @kamrangul87
+
+
+In GitHub repo → Settings → Branches → Branch protection rules (for main):
+
+Require PR before merging ✅
+
+Require review from Code Owners ✅
+
+Require status checks to pass ✅ → mark CI / build as required
+
+Dismiss stale approvals ✅
+
+Block force pushes & deletions ✅
+
+Vercel: Project → Settings → Git
+
+Production branch = main
+
+Require checks to pass ✅
+
+Preview deployments for PRs ✅
+
+Workflow: Replit → commit/push to develop → open PR → CI must pass → merge to main → Vercel deploys.
+If prod ever breaks, revert in GitHub to last tag or use Vercel Rollback.
+
+Optional helper script in scripts/push.sh:
+
+#!/usr/bin/env bash
+set -euo pipefail
+branch=${1:-develop}
+git add -A
+git commit -m "replit: update"
+git push origin "$branch"
+echo "Pushed to $branch. Open a PR to main when CI is green."
+
+10) What files to touch
+
+components/ClientMap.tsx (or equivalent): add Locate button, debounce/abort logic, keep layers mounted.
+
+components/StationDrawer.tsx, components/CouncilDrawer.tsx: new/updated drawers.
+
+components/CouncilLayer.tsx: purple diamonds with numeric labels; click → CouncilDrawer.
+
+pages/api/council.ts (new): returns council aggregates for current bounds. Cache 5 min.
+
+utils/geo.ts: bbox helpers; turf wrappers; centroid calc.
+
+styles/global.css or Tailwind classes for drawer + footer.
+
+.github/workflows/ci.yml, .github/CODEOWNERS.
+
+Definition of Done
+
+On load: OPENCHARGE (live), stations + heatmap both visible.
+
+Council layer shows counts on purple diamonds; clicking opens Council Drawer with zoom + stats.
+
+Station Drawer behaves as specified (close/cancel, no auto-close).
+
+Locate me centers and fetches; Directions use current location.
+
+Stable on zoom/pan; zero console warnings; mobile & desktop validated with screenshots.
+
+GitHub protected; Replit pushes to develop; Vercel builds only after PR & green CI.
+
+Notes to Replit
+
+If you add @turf: use @turf/centroid, @turf/pointsWithinPolygon (npm i @turf/turf).
+
+For clustering performance, prefer supercluster (npm i supercluster), optionally with a Web Worker.
+
+Keep bundle lean: tree-shake turf imports and memoize icons/layers.
+
+Do not change OSM/leaflet base logic; only adjust council and drawer behavior per above.

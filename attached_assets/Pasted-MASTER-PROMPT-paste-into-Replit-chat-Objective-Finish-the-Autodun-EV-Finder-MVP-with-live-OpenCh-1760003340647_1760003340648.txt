@@ -1,0 +1,145 @@
+MASTER PROMPT (paste into Replit chat)
+
+Objective: Finish the Autodun EV Finder MVP with live OpenChargeMap data and safe fallbacks, fix the map not rendering sometimes, and keep the current simple UI/UX.
+
+Success Criteria (acceptance checklist)
+
+Data source priority: OpenChargeMap live → fallback to STATIC JSON → fallback to DEMO (banner reflects source & count).
+
+Map always renders and fills the viewport (no gray area / zero height).
+
+Search with UK postcode or place recenters the map and refetches stations near that point.
+
+Heatmap & markers toggles work together; council overlay works; “Zoom to data” fits visible stations.
+
+No duplicate “app/” vs “pages/” routes; Next.js builds cleanly (no module-not-found or config errors).
+
+API keys stay server-side only; nothing sensitive exposed to client bundle.
+
+One-click Deploy (Replit “Publish”) produces the same behavior as “Preview”.
+
+Environment & secrets (use Replit “Publishing → Production app secrets”)
+
+Set/confirm:
+
+STATIONS=OPENCHARGE (switches default to live data)
+
+OCM_API_KEY=<OpenChargeMap API key> (server-only)
+
+NEXT_PUBLIC_TILE_URL=https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png (optional override)
+
+CONNECTORS_HOSTNAME=openchargemap.org (optional for external links)
+
+If any are missing, stop and tell me which ones.
+
+Data plumbing & API
+
+Create or consolidate a server-side data adapter that takes {source, lat, lng, distanceKm} and returns {items[], count, source, fellBack?, originalSource?}.
+
+OPENCHARGE: call OpenChargeMap POI endpoint with key, latitude, longitude, distance, distanceunit=KM, countrycode=GB, maxresults=500, compact=true.
+
+STATIC: read public/data/static-stations.json.
+
+DEMO: use the in-project demo list.
+
+Normalize each station to {id, lat, lng, name, address, postcode, connectors, source}.
+
+On any failure, fall back to DEMO and include fellBack=true and originalSource.
+
+Single Next.js API route (e.g., /api/stations) that:
+
+Accepts GET with optional lat, lng, distance (km), and optional src to override source.
+
+Uses defaults (London & 50km) when not provided.
+
+Sets cache headers (s-maxage + stale-while-revalidate).
+
+Never leaks secrets to client.
+
+UI integration (no major redesign)
+
+Map height & layout
+
+Ensure the map container uses the full viewport height minus header/controls (e.g., via a parent flex layout or a safe fixed offset). No zero-height issues.
+
+Use NEXT_PUBLIC_TILE_URL if set; otherwise default to OSM tiles.
+
+Search flow
+
+Keep current flow (postcodes.io first; fall back to Nominatim).
+
+On a successful geocode: set map view and trigger a fresh station fetch with lat, lng (and reasonable distance).
+
+Station refetching
+
+When search completes or user taps “Refresh”: call /api/stations?lat=…&lng=…&distance=….
+
+Show counts and current source in the banner.
+
+Heatmap / markers / council
+
+Keep existing toggles and behavior.
+
+“Zoom to data” fits bounds of current stations.
+
+No duplicates
+
+Remove/avoid any route duplication between app/ and pages/. Use the project’s existing convention consistently (stick with pages/ if that’s what’s active).
+
+Quality, logging & safety
+
+Console logs: compact success/fail messages with counts and which source was used; log fallbacks.
+
+Handle empty results gracefully (banner should still show the source and 0 stations).
+
+Keep OCM key server-only (do not expose to client).
+
+Tests / run / deploy
+
+Keep or add a quick smoke script (e.g., ensure required files exist, API route returns JSON with items, Next build succeeds).
+
+Build/run in Replit: use the existing “Build command” and “Run command” (do not change unless necessary).
+
+Publish after verification. Confirm the published URL behaves the same as Preview.
+
+What to do now (step plan)
+
+Audit current routes and remove any app/ vs pages/ duplication (choose one).
+
+Add/confirm the server-side data adapter with OPENCHARGE → STATIC → DEMO logic.
+
+Wire /api/stations to accept lat/lng/distance/src, returning normalized stations.
+
+Update the page to:
+
+Guarantee full-height map,
+
+Use NEXT_PUBLIC_TILE_URL if provided,
+
+On search success: set view & refetch /api/stations near that point,
+
+Keep toggles + zoom-to-data + banner.
+
+Verify locally in Preview:
+
+Search “SW1A 1AA” → map pans, stations refetched,
+
+Toggle heatmap/markers/council,
+
+Click “Zoom to data”,
+
+Turn off network or remove OCM_API_KEY to see STATIC/DEMO fallback banner.
+
+Build and Publish. Share the published URL.
+
+Definition of Done
+
+Map renders reliably and fills the viewport.
+
+LIVE OCM data works when key is present; STATIC/DEMO fallback proven.
+
+Search recenters and refetches.
+
+No duplicated routing; Next build clean; no client-side secrets exposed.
+
+Published app behaves the same as Preview.

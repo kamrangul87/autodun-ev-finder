@@ -28,3 +28,22 @@ html, body {
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Marker Cluster Styling - Blue outline with white text per spec */
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background-color: rgba(59, 130, 246, 0.2) !important;
+}
+
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background-color: #3b82f6 !important;
+  color: white !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}

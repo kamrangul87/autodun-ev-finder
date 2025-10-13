@@ -1,0 +1,189 @@
+You are working in the autodun-ev-finder repo. Finish the MVP with the following scope. Treat this as a spec with success criteria and implement the code changes end-to-end. Keep TypeScript strict and do not introduce new services unless noted as optional via env vars.
+
+0) Non-negotiables / Definition of Done
+
+No demo data anywhere. Banner must never say “Using DEMO data”.
+
+On first load, the map shows live OCM data across the whole UK: cluster bubbles and heatmap visible immediately across the entire country. No “1000” center blob; instead we see many cluster numbers distributed nationwide.
+
+Council layer uses distinct point markers (purple diamond) for borough centroids and orange dashed boundaries (as we already had). Clicking a council marker opens a popup with name + simple stats (count of stations inside, computed on the fly) + “Feedback” + “Directions (to centroid)” buttons.
+
+Performance is smooth on desktop and mobile. No blocking main thread for >100ms.
+
+Responsive UI: works well on iPhone 12–15 Pro, Pixel 6–8, small laptops. Controls tuck into a row that collapses to two lines at ≤375px width.
+
+Accessibility: all controls keyboard reachable, labels announce via aria- attributes.
+
+Red bar message replaced with a neutral, compact status ribbon:
+Source: OPENCHARGE (live) • Stations: {total} • Bounds: {zoomed area name}
+
+Keep the existing feedback modal, but use a bottom sheet on mobile.
+
+“Zoom to data” fits to all fetched stations in current dataset (UK on first load, then current viewport after refetch).
+
+Environment parity: Vercel (Preview & Production) picks up the same behavior as Replit (OPENCHARGE). No regressions.
+
+1) Data fetching & tiling (server)
+
+Goal: On first load, fetch nationwide stations without freezing UI. Show cluster bubbles + heatmap everywhere.
+
+Extend /api/stations to support tiled paging by bbox:
+
+New query params:
+
+bbox=west,south,east,north (WGS84)
+
+tiles=integer (default 3) — split bbox into N x N subtiles and fetch each in parallel with OCM filters.
+
+limitPerTile (default 500) — cap per subtile.
+
+If no bbox provided, use UK bounds (Channel Islands & NI included):
+[-8.649, 49.823, 1.763, 60.845]
+
+For each tile, call OCM with compact=true, country=GB, and the tile bounds, then merge results (unique by ID).
+
+Return shape:
+{ source: "OPENCHARGE", count, bbox, features: Feature[] }
+Cache at the edge (s-maxage=300, stale-while-revalidate=600). Always add Cache-Control: no-store client-side on fetch to avoid stale UI.
+
+Add a light in-memory LRU (per serverless runtime) keyed by tile hash to avoid repeated OCM calls during hot deploys.
+
+Success check: Vercel function logs show multiple parallel subtile fetches and a merged payload with ~tens of thousands of points nationwide (clustered client-side).
+
+2) Client map behavior (first load & pan/zoom)
+
+Goal: “Full map shows stations & heatmap at first glance. Panning/zooming refetches”
+
+Update components/Map.tsx (and any wrappers):
+
+On mount:
+
+Set initial view to UK bounds (fitBounds).
+
+Immediately call /api/stations?bbox=<UK>&tiles=4&limitPerTile=500.
+
+Render:
+
+MarkerCluster layer (blue cluster bubbles, white count text).
+
+Heatmap layer (green→yellow→orange→red gradient).
+
+Council:
+
+keep orange dashed boundaries,
+
+add point layer (purple diamonds) with clickable popup.
+
+On moveend:
+
+Debounce 400ms, read current map bounds
+
+Refetch /api/stations?bbox=<currentBounds>&tiles=2&limitPerTile=750
+
+Update counts, legend, and banner.
+
+Ensure cluster bubbles don’t “flicker”: reuse a single cluster group instance; only replace the points.
+
+Prevent the single “1000” center blob by feeding the cluster layer all fetched features on first render (nationwide), not just the central tile.
+
+UI details
+
+Replace the red ribbon with a compact neutral banner (top under search):
+Source: OPENCHARGE • Stations: {count} • Center: {geocode(city|'United Kingdom')}
+
+Keep toggles: Heatmap, Markers, Council. Persist toggle state to localStorage.
+
+Add a circular non-blocking loader (bottom-left). Keep the lightweight skeleton already added.
+
+3) Council points & popup
+
+Load council GeoJSON (already present) and compute centroids client-side (or pre-computed if file has them).
+
+Place purple diamond markers at centroids; zIndex above clusters; click → popup:
+
+name, population (if present in properties), “Stations in boundary: {n}”
+
+Buttons: Feedback, Directions (to centroid lat/lng)
+
+“Stations in boundary” = on click, run a quick point-in-polygon for current fetched stations (turf.js). If heavy, sample features when >10k visible.
+
+4) Feedback + ML pipeline hook
+
+Feedback modal: on mobile render as bottom sheet (CSS + media query). Buttons: “Good / Bad”, textarea optional.
+
+/api/feedback:
+
+POST body: { stationId?, council?, vote: "good"|"bad", text?, lat, lng, zoom, ts }
+
+If env FEEDBACK_WEBHOOK_URL is set, forward JSON there (Zapier/Make/IFTTT/Google Apps Script) and return 204.
+
+Otherwise log server-side with a clear line: [feedback] ${JSON.stringify(...)}
+
+Add a tiny client event stream that batches anonymous interactions (toggle changes, zooms) and forwards to the same webhook if present (EVENTS_WEBHOOK_URL). This is the “wire for ML later” without adding infra now.
+
+5) Mobile polish
+
+Controls wrap to two lines ≤375px; increase tap targets to 40px; avoid overlapping with Leaflet zoom buttons.
+
+Legend floats bottom-right; collapse to a small “Legend” pill that opens a sheet on mobile.
+
+Popups are readable at 320px width (no overflow; use word-break).
+
+Ensure iOS 16/17 Safari doesn’t scroll-jank (avoid 100vh traps; container min-height: calc(100dvh - header)).
+
+6) Code pointers / files to touch
+
+components/Map.tsx (main behavior, layers, banner, toggles, debounced refetch)
+
+components/Legend.tsx (mobile sheet behavior)
+
+components/Feedback.tsx (bottom sheet variant on mobile)
+
+pages/api/stations.ts (tiling + merge)
+
+pages/api/feedback.ts (webhook forwarder)
+
+utils/geo.ts (tile split, bbox helpers, turf utils)
+
+styles/postcss.config.css or local module CSS for responsive tweaks
+
+Keep current next.config.*; ensure allowed dev origins is satisfied; no new libs unless small (e.g., @turf/*)
+
+7) Env & defaults (keep in Vercel + Replit)
+
+STATIONS_SOURCE=OPENCHARGE
+
+OCM_API_KEY=******
+
+COUNCIL_DATA_URL (current file path or remote)
+
+Optional: FEEDBACK_WEBHOOK_URL, EVENTS_WEBHOOK_URL
+
+8) Acceptance tests (run before you finish)
+
+First load (desktop): UK bounds fit, cluster numbers visible across country, heatmap painted nationwide; banner shows OPENCHARGE • Stations: {>10k} (actual number may vary).
+
+Pan to Scotland / NI: after stop, layer refetches and clusters appear there too; heatmap follows.
+
+Council toggles: purple diamonds + dashed boundaries; clicking diamond shows name + station count; directions link opens Google Maps.
+
+Mobile (iPhone 12/15 Safari): no layout shift; controls tappable; feedback opens as bottom sheet; markers/heatmap still smooth.
+
+No demo text anywhere; DevTools Network shows /api/stations?... with source: OPENCHARGE, not STATIC.
+
+Vercel Preview & Production behave the same as Replit.
+
+9) Performance guardrails
+
+Avoid sending all raw points to heatmap when zoomed far out. Use down-sampling (e.g., take every 3rd point) when features > 25k before building the heat layer.
+
+Debounce network calls; show skeleton loader; never block the main thread >100ms.
+
+Cluster layer: keep one instance and mutate data; no remounts.
+
+10) Commit message
+
+Use a single PR/commit with:
+feat: nationwide first-render (clusters+heatmap), council points, mobile bottom sheet, webhook-ready feedback, refetch-by-bbox
+
+When finished, push to GitHub (same branch) so Vercel redeploys, then paste the live Vercel URL in the chat.
