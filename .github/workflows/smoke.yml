@@ -1,0 +1,10 @@
+name: Smoke
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Actions index nudge at $(date)"
