@@ -28,5 +28,3 @@ jobs:
           OPENAI_PROJECT_ID: ${{ secrets.OPENAI_PROJECT_ID }}
           AGENT_GOAL: ${{ github.event.inputs.goal || '' }}
         run: npm run agent:fix
-      - name: Tell user where to find the Vercel preview
-        run: echo "Vercel builds a Preview automatically from the pushed branch. Check the Deployments tab for logs."
