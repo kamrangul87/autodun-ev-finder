@@ -1,0 +1,256 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 9998;
+}
+
+.drawer {
+  position: fixed;
+  background: white;
+  z-index: 9999;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Desktop: right panel */
+@media (min-width: 768px) {
+  .drawer {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 400px;
+    max-width: 420px;
+  }
+}
+
+/* Mobile: bottom sheet */
+@media (max-width: 767px) {
+  .drawer {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 70vh;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.15);
+  }
+}
+
+.closeButton {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 50%;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #333;
+  transition: background 0.2s;
+}
+
+.closeButton:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.closeButton:focus {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.content {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+@media (max-width: 767px) {
+  .content {
+    padding: 20px;
+  }
+}
+
+.content h2 {
+  margin: 0 0 12px 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: #1a1a1a;
+  padding-right: 40px;
+}
+
+.content h2:focus {
+  outline: none;
+}
+
+.address {
+  margin: 0 0 8px 0;
+  color: #666;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.connectors {
+  margin: 0 0 20px 0;
+  color: #0066cc;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.directionsButton {
+  width: 100%;
+  padding: 12px 16px;
+  background: #0066cc;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 24px;
+  transition: background 0.2s;
+  min-height: 48px;
+}
+
+.directionsButton:hover {
+  background: #0052a3;
+}
+
+.directionsButton:focus {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.legend {
+  font-size: 16px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  color: #1a1a1a;
+}
+
+.ratingButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 767px) {
+  .ratingButtons {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ratingButton {
+  padding: 12px 16px;
+  background: white;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.ratingButton:hover {
+  border-color: #0066cc;
+  background: #f0f8ff;
+}
+
+.ratingButton:focus {
+  outline: 2px solid #0066cc;
+  outline-offset: 2px;
+}
+
+.ratingButton.active {
+  background: #0066cc;
+  color: white;
+  border-color: #0066cc;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1a1a1a;
+}
+
+.textarea {
+  width: 100%;
+  padding: 12px;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  transition: border-color 0.2s;
+  min-height: 100px;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: #0066cc;
+}
+
+.charCount {
+  font-size: 12px;
+  color: #999;
+  text-align: right;
+}
+
+.submitButton {
+  width: 100%;
+  padding: 14px 16px;
+  background: #00b894;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  min-height: 48px;
+}
+
+.submitButton:hover:not(:disabled) {
+  background: #00a078;
+}
+
+.submitButton:focus {
+  outline: 2px solid #00b894;
+  outline-offset: 2px;
+}
+
+.submitButton:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
