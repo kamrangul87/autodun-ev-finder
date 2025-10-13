@@ -1,30 +1,81 @@
 name: Agent UI Fix
+
 on:
   workflow_dispatch:
     inputs:
       goal:
-        description: "Goal (UI-only)"
+        description: 'Goal (UI-only)'
         required: false
-        default: "Fix sticky Station Drawer; no Leaflet Popup; do NOT touch /api/**."
-  issue_comment:
-    types: [created]
+        default: 'Fix sticky Station Drawer; no Leaflet Popup; do not touch API'
+
+permissions:
+  contents: read
+  pull-requests: write
+  deployments: read
 
 jobs:
   run-agent:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/agent'))
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
+      - name: Disable submodule recursion (silences post-job warning)
+        run: git config --global submodule.recurse false
+
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-      - run: npm ci
+        with:
+          node-version: 20
+
+      - name: npm ci
+        run: npm ci
+
       - name: Run agent (UI-only)
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_PROJECT_ID: ${{ secrets.OPENAI_PROJECT_ID }}
           AGENT_GOAL: ${{ github.event.inputs.goal || '' }}
         run: npm run agent:fix
+
+      - name: Comment Vercel Preview URL on PR
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const ref   = context.sha;
+
+            // Try to resolve a PR number for this ref/branch
+            let prNumber = context.payload.pull_request?.number;
+            if (!prNumber) {
+              const headRef = (context.ref || '').replace('refs/heads/', '');
+              const prs = await github.pulls.list({ owner, repo, head: `${owner}:${headRef}`, per_page: 1 });
+              prNumber = prs.data[0]?.number;
+            }
+
+            // Find a GitHub Deployment created by Vercel for this commit
+            const { data: deployments } = await github.repos.listDeployments({
+              owner, repo, ref, per_page: 5
+            });
+            if (!deployments.length) {
+              core.notice('No deployments found yet. Vercel may still be building. Check the Vercel check on the PR shortly.');
+              return;
+            }
+
+            const dep = deployments[0];
+            const { data: statuses } = await github.repos.listDeploymentStatuses({
+              owner, repo, deployment_id: dep.id, per_page: 1
+            });
+            const envUrl = statuses[0]?.environment_url || statuses[0]?.log_url;
+
+            if (!prNumber) {
+              core.notice(`Preview URL: ${envUrl || '(not available yet)'}`);
+              return;
+            }
+
+            await github.issues.createComment({
+              owner, repo, issue_number: prNumber,
+              body: envUrl
+                ? `�� **Vercel Preview**: ${envUrl}`
+                : `Vercel preview is still building. Re-check the Vercel check on this PR in a minute.`
+            });
