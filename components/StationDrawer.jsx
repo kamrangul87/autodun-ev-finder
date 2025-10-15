@@ -1,3 +1,4 @@
+import DrawerPortalWrapper from "./DrawerPortalWrapper";
 import React, { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
@@ -15,8 +16,8 @@ export default function StationDrawer({ open, onClose, station }) {
     
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return (
-  <div id="station-drawer" style={{position:"fixed", right:16, bottom:16, width:"min(420px, 92vw)", maxHeight:"72vh", overflow:"auto", zIndex:60, background:"#fff", borderRadius:12, boxShadow:"0 12px 28px rgba(0,0,0,.28)"}}>
+    return (<DrawerPortalWrapper>
+<div id="station-drawer" style={{position:"fixed", right:16, bottom:16, width:"min(420px, 92vw)", maxHeight:"72vh", overflow:"auto", zIndex:60, background:"#fff", borderRadius:12, boxShadow:"0 12px 28px rgba(0,0,0,.28)"}}>
 ) => {
       document.body.style.overflow = prev || "";
     };
