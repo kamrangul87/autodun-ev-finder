@@ -47,3 +47,50 @@ html, body {
   align-items: center !important;
   justify-content: center !important;
 }
+
+/* --- Floating station drawer overlay --- */
+#station-drawer,
+.station-drawer {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, 92vw);
+  max-height: 60vh;
+  overflow: auto;
+  z-index: 5000; /* above map controls */
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.25);
+  border: 1px solid rgba(0,0,0,.06);
+  padding: 14px 16px 12px;
+}
+
+/* Hide when user clicks the X */
+#station-drawer.hidden,
+.station-drawer.hidden { display: none !important; }
+
+/* Close button (top-right inside drawer) */
+#station-drawer .drawer-close,
+.station-drawer .drawer-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  line-height: 24px;
+  font-size: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,0,0,.15);
+  background: #fff;
+  cursor: pointer;
+}
+#station-drawer .drawer-close:hover,
+.station-drawer .drawer-close:hover {
+  background: #f2f2f2;
+}
+
+/* Prevent the bottom sheet layout from pushing the map */
+#station-drawer, .station-drawer {
+  left: auto !important;  /* ensure it floats, not full-width */
+}
+@import "./floating-drawer.css";

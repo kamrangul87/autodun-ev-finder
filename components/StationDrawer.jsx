@@ -129,7 +129,9 @@ export default function StationDrawer({ open, onClose, station }) {
 
           {/* Feedback Form */}
           <div className="border border-green-200 bg-green-50 rounded p-3">
-            <form action="/api/feedback" method="POST" className="space-y-3">
+            <aside id="station-drawer" className="station-drawer">
+<form action="/api/feedback" method="POST" className="space-y-3">
+<button type="button" aria-label="Close" className="drawer-close" onclick="(function(e){e.preventDefault(); var el=document.getElementById("station-drawer"); if(el) el.classList.add("hidden");})(event)">×</button>
               <input type="hidden" name="stationId" value={station?.id || station?.ID || ""} />
               
               <label htmlFor="feedback-note" className="block text-sm font-medium text-gray-700">
@@ -149,6 +151,7 @@ export default function StationDrawer({ open, onClose, station }) {
                 Submit Feedback
               </button>
             </form>
+</aside>
           </div>
         </section>
 

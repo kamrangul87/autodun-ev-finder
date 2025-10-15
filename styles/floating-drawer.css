@@ -1,0 +1,26 @@
+/* Force the station drawer to float bottom-right */
+#station-drawer,
+.station-drawer,
+[data-testid="station-drawer"],
+[data-role="station-drawer"] {
+  position: fixed !important;
+  right: 1rem !important;
+  bottom: 1rem !important;
+  left: auto !important;
+  top: auto !important;
+
+  width: min(420px, 92vw) !important;
+  max-height: 72vh !important;
+  overflow: auto !important;
+
+  z-index: 60 !important;           /* above map controls */
+  border-radius: 12px !important;
+  background: #fff !important;
+  box-shadow: 0 12px 28px rgba(0,0,0,.28) !important;
+}
+
+/* Kill any modal/backdrop that could pin the drawer */
+#station-drawer-backdrop,
+.drawer-backdrop {
+  display: none !important;
+}
