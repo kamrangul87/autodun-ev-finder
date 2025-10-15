@@ -88,3 +88,5 @@ const StationDrawer: React.FC<Props> = ({ station, onClose }) => {
 };
 
 export default StationDrawer;
+
+export { StationDrawer };

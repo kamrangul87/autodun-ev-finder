@@ -350,7 +350,7 @@ function CouncilMarker({ feature, stations = [] }) {
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button 
                   type="button"
-                  onClick={() => setShowIssueForm(false)}
+                  
                   style={{ 
                     flex: 1,
                     padding: '4px 8px', 
