@@ -14,9 +14,10 @@ interface StationDrawerProps {
   station: Station | null;
   onClose: () => void;
   onFeedbackSubmit?: (stationId: string, vote: 'good' | 'bad', comment: string) => void;
+    open: boolean;
 }
 
-export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDrawerProps) {
+export function StationDrawer({ station, onClose, onFeedbackSubmit }: S, opentationDrawerProps) {
   const [vote, setVote] = useState<'good' | 'bad' | null>(null);
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -261,3 +262,6 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
 
   return createPortal(drawer, document.body);
 }
+export default StationDrawer;
+export { StationDrawer };
+
