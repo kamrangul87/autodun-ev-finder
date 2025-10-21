@@ -8,10 +8,12 @@ type Connector = { type: string; count?: number; powerKW?: number };
 export interface Station {
   id: string | number;
   name: string;
-  address?: string;
+  address?: string;   // e.g. "123 High St"
+  postcode?: string;  // e.g. "SW1A 1AA"
   lat: number;
   lng: number;
   connectors?: Connector[];
+  network?: string;
 }
 
 export interface StationDrawerProps {
@@ -24,25 +26,21 @@ export interface StationDrawerProps {
   ) => void | Promise<void>;
 }
 
-function StationDrawer({
-  station,
-  onClose,
-  onFeedbackSubmit,
-}: StationDrawerProps) {
+function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDrawerProps) {
   const [vote, setVote] = useState<"good" | "bad" | null>(null);
   const [comment, setComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const drawerRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
-  // Reset on station change + focus the close button
+  // Reset & focus on station change
   useEffect(() => {
     if (!station) return;
     setVote(null);
     setComment("");
     setIsSubmitting(false);
-    const t = setTimeout(() => closeButtonRef.current?.focus(), 80);
+    const t = setTimeout(() => closeRef.current?.focus(), 60);
     return () => clearTimeout(t);
   }, [station]);
 
@@ -55,12 +53,12 @@ function StationDrawer({
     return () => document.removeEventListener("keydown", onKey);
   }, [station, onClose]);
 
-  // Focus trap inside the drawer
+  // Focus trap
   useEffect(() => {
-    if (!station || !drawerRef.current) return;
-    const el = drawerRef.current;
+    if (!station || !panelRef.current) return;
+    const el = panelRef.current;
 
-    const getFocusables = () =>
+    const getFocus = () =>
       Array.from(
         el.querySelectorAll<HTMLElement>(
           'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
@@ -69,7 +67,7 @@ function StationDrawer({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const f = getFocusables();
+      const f = getFocus();
       if (!f.length) return;
       const first = f[0];
       const last = f[f.length - 1];
@@ -93,6 +91,8 @@ function StationDrawer({
       ? station.connectors.reduce((s, c) => s + (c.count ?? 1), 0)
       : 0;
 
+  const fullAddress = [station.address, station.postcode].filter(Boolean).join(", ");
+
   const handleSubmit = async () => {
     if (!vote || !station || isSubmitting) return;
     setIsSubmitting(true);
@@ -108,7 +108,7 @@ function StationDrawer({
         }),
       });
       await onFeedbackSubmit?.(station.id, vote, comment);
-      // Keep open but clear the selection/comment for another quick rating
+      // keep panel open; clear form
       setVote(null);
       setComment("");
     } catch (e) {
@@ -124,161 +124,106 @@ function StationDrawer({
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  // ---- RENDER ----
+  // Panel content
   const node = (
-    <div
-      className="fixed inset-0"
-      style={{ zIndex: 9999, pointerEvents: "none" }}
-    >
-      {/* Subtle dim on mobile only; map remains interactive (no onClick) */}
-      <div
-        className="lg:hidden fixed inset-0"
-        style={{ background: "rgba(0,0,0,0.25)", pointerEvents: "none" }}
-      />
+    <div className="fixed inset-0" style={{ zIndex: 9999, pointerEvents: "none" }}>
+      {/* mobile dim only (no click-to-close, map stays interactive) */}
+      <div className="lg:hidden fixed inset-0" style={{ background: "rgba(0,0,0,0.25)", pointerEvents: "none" }} />
 
-      {/* Panel container (gets the pointer events) */}
       <div
-        ref={drawerRef}
+        ref={panelRef}
         role="dialog"
         aria-modal="false"
         aria-label="Station details"
-        className="pointer-events-auto fixed bg-white overflow-auto"
-        // Mobile: bottom sheet (compact)
-        style={{
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: "45vh",
-          borderTopLeftRadius: 14,
-          borderTopRightRadius: 14,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
-        }}
+        className="pointer-events-auto fixed bg-white overflow-auto border border-gray-200 rounded-lg shadow-xl station-drawer"
       >
-        {/* Desktop: compact floating card in bottom-right */}
-        <style>{`
-          @media (min-width: 1024px) {
-            .drawer-compact {
-              left: auto !important;
-              right: 16px !important;
-              bottom: 16px !important;
-              top: auto !important;
-              width: 360px !important;
-              max-height: 70vh !important;
-              height: auto !important;
-              border-radius: 14px !important;
-              border: 1px solid rgba(0,0,0,0.08);
-            }
-          }
-        `}</style>
-        <div className="drawer-compact" />
-
-        {/* Header */}
-        <div
-          className="sticky top-0"
-          style={{
-            background: "#fff",
-            borderBottom: "1px solid #e5e7eb",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 12px",
-          }}
-        >
-          <div style={{ minWidth: 0 }}>
-            <div
-              style={{
-                fontSize: 15,
-                fontWeight: 600,
-                lineHeight: "20px",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-              title={station.name}
-            >
+        {/* header */}
+        <div className="sticky top-0 bg-white border-b border-gray-200 px-3 py-2.5 flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold truncate" title={station.name}>
               {station.name ?? "Charging station"}
             </div>
-            {station.address && (
-              <div
-                style={{
-                  marginTop: 2,
-                  fontSize: 12,
-                  color: "#6b7280",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-                title={station.address}
-              >
-                {station.address}
+            {fullAddress && (
+              <div className="mt-0.5 text-xs text-gray-600 truncate" title={fullAddress}>
+                {fullAddress}
               </div>
             )}
           </div>
 
           <button
-            ref={closeButtonRef}
+            ref={closeRef}
             onClick={onClose}
+            className="text-gray-600 hover:bg-gray-100 rounded-md px-2 py-1"
             aria-label="Close"
-            style={{
-              marginLeft: 8,
-              border: "1px solid transparent",
-              background: "transparent",
-              borderRadius: 8,
-              padding: "4px 6px",
-              color: "#6b7280",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
           >
             ✕
           </button>
         </div>
 
-        {/* Body */}
-        <div style={{ padding: 12 }}>
-          {/* Summary */}
-          <section
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              padding: 10,
-              marginBottom: 10,
-              fontSize: 13,
-              color: "#374151",
-            }}
-          >
-            <div>
-              <span style={{ fontWeight: 600 }}>Connectors:</span> {total}
-            </div>
-          </section>
-
-          {/* Rate */}
-          <section
-            style={{
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              padding: 10,
-              marginBottom: 10,
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-              Rate this location
+        {/* body */}
+        <div className="p-3 space-y-3">
+          {/* quick facts */}
+          <div className="border border-gray-200 rounded-md p-2.5 text-sm text-gray-700">
+            {!!station.network && (
+              <div>
+                <span className="font-medium">Network:</span> {station.network}
+              </div>
+            )}
+            <div className="mt-1">
+              <span className="font-medium">Connectors:</span> {total}
             </div>
 
-            <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+            {Array.isArray(station.connectors) && station.connectors.length > 0 && (
+              <ul className="mt-2 text-xs text-gray-600 list-disc list-inside space-y-0.5">
+                {station.connectors.map((c, i) => (
+                  <li key={`${c.type}-${i}`}>
+                    {c.type}
+                    {typeof c.count === "number" ? ` × ${c.count}` : ""}
+                    {typeof c.powerKW === "number" ? ` • ${c.powerKW} kW` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* actions */}
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleDirections}
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-[16px] w-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d="M12 2l7 7-7 7-7-7 7-7zm0 0v20" />
+              </svg>
+              Directions
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setVote(null);
+                setComment("");
+              }}
+              className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Clear
+            </button>
+          </div>
+
+          {/* feedback */}
+          <div className="border border-gray-200 rounded-md p-2.5">
+            <div className="text-sm font-medium mb-2">Rate this location</div>
+
+            <div className="flex gap-2 mb-2">
               <button
                 type="button"
                 onClick={() => setVote("good")}
                 aria-pressed={vote === "good"}
-                style={{
-                  flex: 1,
-                  borderRadius: 999,
-                  padding: "8px 10px",
-                  border: vote === "good" ? "1px solid #059669" : "1px solid #d1d5db",
-                  background: vote === "good" ? "#ecfdf5" : "#fff",
-                  color: vote === "good" ? "#065f46" : "#374151",
-                  fontSize: 13,
-                }}
+                className={`flex-1 rounded-full border px-3 py-1.5 text-sm ${
+                  vote === "good"
+                    ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                }`}
               >
                 👍 Good
               </button>
@@ -286,15 +231,11 @@ function StationDrawer({
                 type="button"
                 onClick={() => setVote("bad")}
                 aria-pressed={vote === "bad"}
-                style={{
-                  flex: 1,
-                  borderRadius: 999,
-                  padding: "8px 10px",
-                  border: vote === "bad" ? "1px solid #e11d48" : "1px solid #d1d5db",
-                  background: vote === "bad" ? "#fff1f2" : "#fff",
-                  color: vote === "bad" ? "#9f1239" : "#374151",
-                  fontSize: 13,
-                }}
+                className={`flex-1 rounded-full border px-3 py-1.5 text-sm ${
+                  vote === "bad"
+                    ? "border-rose-600 bg-rose-50 text-rose-700"
+                    : "border-gray-300 text-gray-700 hover:bg-gray-50"
+                }`}
               >
                 👎 Bad
               </button>
@@ -304,80 +245,51 @@ function StationDrawer({
               <textarea
                 value={comment}
                 onChange={(e) => setComment(e.target.value.slice(0, 280))}
-                placeholder="Optional comment…"
+                placeholder="Optional: broken connector, blocked bay, pricing issue…"
+                className="w-full rounded-md border border-gray-300 p-2 text-sm outline-none focus:border-gray-400"
                 rows={3}
                 maxLength={280}
-                style={{
-                  width: "100%",
-                  borderRadius: 8,
-                  border: "1px solid #d1d5db",
-                  padding: 8,
-                  fontSize: 13,
-                  resize: "vertical",
-                  outline: "none",
-                  marginBottom: 6,
-                }}
               />
             )}
 
-            <div style={{ display: "flex", gap: 8 }}>
+            <div className="mt-2 flex">
               <button
                 onClick={handleSubmit}
                 disabled={!vote || isSubmitting}
-                style={{
-                  flex: 1,
-                  borderRadius: 8,
-                  background: "#111827",
-                  color: "#fff",
-                  fontWeight: 600,
-                  padding: "8px 10px",
-                  fontSize: 13,
-                  opacity: !vote || isSubmitting ? 0.6 : 1,
-                  cursor: !vote || isSubmitting ? "not-allowed" : "pointer",
-                }}
+                className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isSubmitting ? "Submitting…" : "Submit feedback"}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setVote(null);
-                  setComment("");
-                }}
-                style={{
-                  borderRadius: 8,
-                  background: "#fff",
-                  border: "1px solid #d1d5db",
-                  color: "#374151",
-                  padding: "8px 10px",
-                  fontSize: 13,
-                }}
-              >
-                Cancel
-              </button>
             </div>
-          </section>
-
-          {/* Actions */}
-          <section>
-            <button
-              type="button"
-              onClick={handleDirections}
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: "#2563eb",
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                cursor: "pointer",
-              }}
-            >
-              Get directions →
-            </button>
-          </section>
+          </div>
         </div>
       </div>
+
+      {/* positioning styles */}
+      <style jsx>{`
+        /* Mobile: bottom sheet */
+        .station-drawer {
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 60vh;
+          border-top-left-radius: 16px;
+          border-top-right-radius: 16px;
+        }
+        /* Desktop+: compact floating card in the bottom-right corner */
+        @media (min-width: 1024px) {
+          .station-drawer {
+            top: auto;
+            bottom: 16px;
+            right: 16px;
+            left: auto;
+            height: auto;
+            max-height: 72vh;
+            width: 360px;
+            border-radius: 14px;
+          }
+        }
+      `}</style>
     </div>
   );
 
