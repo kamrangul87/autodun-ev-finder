@@ -1,5 +1,7 @@
 // components/StationDrawer.tsx
-import { useEffect, useRef, useState } from "react";
+"use client";
+
+import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 
 export interface Station {
@@ -27,12 +29,12 @@ export interface StationDrawerProps {
   ) => Promise<void> | void;
 }
 
-const StationDrawer = ({
+export default function StationDrawer({
   open,
   station,
   onClose,
   onFeedbackSubmit,
-}: StationDrawerProps) => {
+}: StationDrawerProps) {
   // feedback form state
   const [vote, setVote] = useState<"good" | "bad" | null>(null);
   const [comment, setComment] = useState("");
@@ -42,20 +44,18 @@ const StationDrawer = ({
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // reset form & focus on close button when station changes
+  // Reset form & focus on close button when station changes
   useEffect(() => {
-    if (station) {
-      setVote(null);
-      setComment("");
-      setIsSubmitting(false);
-      setSubmittedOk(false);
-      // Focus close after paint
-      const t = setTimeout(() => closeButtonRef.current?.focus(), 80);
-      return () => clearTimeout(t);
-    }
+    if (!station) return;
+    setVote(null);
+    setComment("");
+    setIsSubmitting(false);
+    setSubmittedOk(false);
+    const t = setTimeout(() => closeButtonRef.current?.focus(), 80);
+    return () => clearTimeout(t);
   }, [station]);
 
-  // close on Escape
+  // Close on Escape only (no backdrop close)
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape" && open) onClose();
@@ -64,7 +64,7 @@ const StationDrawer = ({
     return () => document.removeEventListener("keydown", handleEscape);
   }, [open, onClose]);
 
-  // trap focus inside drawer when open
+  // Trap focus inside the drawer when open
   useEffect(() => {
     if (!open || !drawerRef.current) return;
     const drawer = drawerRef.current;
@@ -96,13 +96,20 @@ const StationDrawer = ({
     return () => drawer.removeEventListener("keydown", trap as any);
   }, [open]);
 
-  // only render when open & station present (controlled, no auto-close)
+  // Only render when open & station present
   if (!open || !station) return null;
 
-  const totalConnectors =
-    Array.isArray(station.connectors)
-      ? station.connectors.reduce((sum, c) => sum + (c?.count ?? 0), 0)
-      : 0;
+  const totalConnectors = Array.isArray(station.connectors)
+    ? station.connectors.reduce((sum, c) => sum + (c?.count ?? 0), 0)
+    : 0;
+
+  const connectorsSummary =
+    Array.isArray(station.connectors) && station.connectors.length
+      ? station.connectors
+          .filter(Boolean)
+          .map((c) => `${c.type} × ${c.count ?? 1}`)
+          .join(", ")
+      : "";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,11 +119,10 @@ const StationDrawer = ({
       setIsSubmitting(true);
       await onFeedbackSubmit?.(station.id, vote, comment);
       setSubmittedOk(true);
-      // keep drawer open; just show "Thanks" for a moment
       const t = setTimeout(() => setSubmittedOk(false), 2200);
       return () => clearTimeout(t);
-    } catch (_) {
-      // swallow; optionally you can show an error state
+    } catch {
+      // Optional: surface an error state
     } finally {
       setIsSubmitting(false);
     }
@@ -128,39 +134,32 @@ const StationDrawer = ({
     setSubmittedOk(false);
   };
 
-  const handleDirections = () => {
-    if (typeof window === "undefined") return;
+  const handleDirections = useCallback(() => {
     const qName = encodeURIComponent(station.name ?? "");
-    const lat = station.lat;
-    const lng = station.lng;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=&travelmode=driving&destination_name=${qName}`;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}&travelmode=driving&destination_name=${qName}`;
     window.open(url, "_blank", "noopener,noreferrer");
-  };
+  }, [station]);
 
+  // Wrapper has pointer-events: none → map beneath stays interactive.
+  // Panel itself is pointer-events: auto so it’s clickable.
   const drawer = (
-    <>
-      {/* Mobile backdrop (no onClick so it never auto-closes) */}
-      <div
-        className="fixed inset-0 bg-black/30 lg:hidden"
-        style={{ zIndex: 9998 }}
-        aria-hidden="true"
-      />
-      {/* Drawer panel */}
+    <div
+      className="fixed inset-0"
+      style={{ zIndex: 9999, pointerEvents: "none" }}
+      aria-hidden={!open}
+    >
       <div
         ref={drawerRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal="false"
         aria-label="Station details"
-        className="fixed left-0 right-0 bottom-0 h-[55vh] bg-white overflow-auto rounded-t-2xl
-                   lg:top-[70px] lg:right-0 lg:left-auto lg:bottom-auto lg:w-[400px]
-                   lg:h-[calc(100vh-70px)] lg:rounded-none lg:border-l lg:border-gray-200"
-        style={{
-          zIndex: 9999,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
-        }}
+        className="pointer-events-auto fixed left-0 right-0 bottom-0 h-[55vh] bg-white overflow-auto rounded-t-2xl
+                   lg:top-[70px] lg:right-4 lg:left-auto lg:bottom-auto lg:w-[420px]
+                   lg:h-[calc(100vh-86px)] lg:rounded-2xl lg:border lg:border-gray-200"
+        style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.12)" }}
       >
         {/* Header */}
-        <header className="flex items-center justify-between border-b px-4 py-3">
+        <header className="flex items-center justify-between border-b px-4 py-3 sticky top-0 bg-white z-10">
           <div className="min-w-0">
             <h2 className="truncate text-lg font-semibold">
               {station.name ?? "Charging station"}
@@ -188,23 +187,17 @@ const StationDrawer = ({
             <div className="text-sm text-gray-700">
               {!!station.network && (
                 <p>
-                  <span className="font-medium">Network:</span>{" "}
-                  {station.network}
+                  <span className="font-medium">Network:</span> {station.network}
                 </p>
               )}
               <p className="mt-1">
-                <span className="font-medium">Connectors:</span>{" "}
-                {totalConnectors}
+                <span className="font-medium">Connectors:</span> {totalConnectors}
+                {connectorsSummary ? ` (${connectorsSummary})` : ""}
               </p>
-              {Array.isArray(station.connectors) && station.connectors.length > 0 && (
-                <ul className="mt-2 list-inside list-disc text-sm text-gray-600">
-                  {station.connectors.map((c, i) => (
-                    <li key={`${c.type}-${i}`}>
-                      {c.type} × {c.count}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <p className="mt-1 text-gray-600">
+                <span className="font-medium">Coords:</span>{" "}
+                {station.lat.toFixed(5)}, {station.lng.toFixed(5)}
+              </p>
             </div>
           </section>
 
@@ -220,8 +213,11 @@ const StationDrawer = ({
                   <button
                     type="button"
                     onClick={() => setVote("good")}
-                    className={`rounded-md border px-3 py-1 text-sm
-                               ${vote === "good" ? "border-emerald-600 bg-emerald-50 text-emerald-700" : "border-gray-300 hover:bg-gray-50"}`}
+                    className={`rounded-md border px-3 py-1 text-sm ${
+                      vote === "good"
+                        ? "border-emerald-600 bg-emerald-50 text-emerald-700"
+                        : "border-gray-300 hover:bg-gray-50"
+                    }`}
                     aria-pressed={vote === "good"}
                   >
                     👍 Good
@@ -229,8 +225,11 @@ const StationDrawer = ({
                   <button
                     type="button"
                     onClick={() => setVote("bad")}
-                    className={`rounded-md border px-3 py-1 text-sm
-                               ${vote === "bad" ? "border-rose-600 bg-rose-50 text-rose-700" : "border-gray-300 hover:bg-gray-50"}`}
+                    className={`rounded-md border px-3 py-1 text-sm ${
+                      vote === "bad"
+                        ? "border-rose-600 bg-rose-50 text-rose-700"
+                        : "border-gray-300 hover:bg-gray-50"
+                    }`}
                     aria-pressed={vote === "bad"}
                   >
                     👎 Bad
@@ -277,12 +276,9 @@ const StationDrawer = ({
           </section>
         </div>
       </div>
-    </>
+    </div>
   );
 
+  // Render above Leaflet panes, into <body>
   return createPortal(drawer, document.body);
-};
-
-// provide both default and named exports
-export default StationDrawer;
-export { StationDrawer };
+}
