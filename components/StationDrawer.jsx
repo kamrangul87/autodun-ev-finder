@@ -3,27 +3,14 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-
-export interface Station {
-  id: string;
-  name: string;
-  address?: string;
-  lat: number;
-  lng: number;
-  connectors?: Array<{ type: string; count: number }>;
-  network?: string;
-}
+import type { Station } from "../types/station";
 
 export interface StationDrawerProps {
-  /** whether the drawer is visible */
-  open: boolean;
-  /** selected station (or null) */
-  station: Station | null;
-  /** called when the user clicks “×” or presses Escape */
-  onClose: () => void;
-  /** optional feedback handler */
+  open: boolean;                // whether the drawer is visible
+  station: Station | null;      // selected station
+  onClose: () => void;          // close when user clicks × or presses Esc
   onFeedbackSubmit?: (
-    stationId: string,
+    stationId: number,
     vote: "good" | "bad",
     comment: string
   ) => Promise<void> | void;
@@ -35,7 +22,7 @@ export default function StationDrawer({
   onClose,
   onFeedbackSubmit,
 }: StationDrawerProps) {
-  // feedback form state
+  // feedback state
   const [vote, setVote] = useState<"good" | "bad" | null>(null);
   const [comment, setComment] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -44,7 +31,7 @@ export default function StationDrawer({
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Reset form & focus on close button when station changes
+  // reset on station change
   useEffect(() => {
     if (!station) return;
     setVote(null);
@@ -55,34 +42,33 @@ export default function StationDrawer({
     return () => clearTimeout(t);
   }, [station]);
 
-  // Close on Escape only (no backdrop close)
+  // Esc to close
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && open) onClose();
     };
-    document.addEventListener("keydown", handleEscape);
-    return () => document.removeEventListener("keydown", handleEscape);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // Trap focus inside the drawer when open
+  // focus trap
   useEffect(() => {
     if (!open || !drawerRef.current) return;
-    const drawer = drawerRef.current;
+    const el = drawerRef.current;
 
     const getFocusable = () =>
       Array.from(
-        drawer.querySelectorAll<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        el.querySelectorAll<HTMLElement>(
+          'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
         )
-      ).filter((el) => !el.hasAttribute("disabled"));
+      ).filter((x) => !x.hasAttribute("disabled"));
 
-    const trap = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const focusable = getFocusable();
-      if (focusable.length === 0) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-
+      const f = getFocusable();
+      if (!f.length) return;
+      const first = f[0];
+      const last = f[f.length - 1];
       if (e.shiftKey && document.activeElement === first) {
         e.preventDefault();
         last?.focus();
@@ -92,37 +78,44 @@ export default function StationDrawer({
       }
     };
 
-    drawer.addEventListener("keydown", trap as any);
-    return () => drawer.removeEventListener("keydown", trap as any);
+    el.addEventListener("keydown", onKey as any);
+    return () => el.removeEventListener("keydown", onKey as any);
   }, [open]);
 
-  // Only render when open & station present
   if (!open || !station) return null;
 
   const totalConnectors = Array.isArray(station.connectors)
-    ? station.connectors.reduce((sum, c) => sum + (c?.count ?? 0), 0)
+    ? station.connectors.reduce(
+        (sum, c) => sum + (typeof c.quantity === "number" ? c.quantity : 1),
+        0
+      )
     : 0;
 
   const connectorsSummary =
     Array.isArray(station.connectors) && station.connectors.length
       ? station.connectors
           .filter(Boolean)
-          .map((c) => `${c.type} × ${c.count ?? 1}`)
+          .map((c) =>
+            [
+              c.type,
+              typeof c.powerKW === "number" ? `${c.powerKW}kW` : undefined,
+              `× ${typeof c.quantity === "number" ? c.quantity : 1}`,
+            ]
+              .filter(Boolean)
+              .join(" ")
+          )
           .join(", ")
       : "";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!station?.id || !vote || isSubmitting) return;
-
     try {
       setIsSubmitting(true);
       await onFeedbackSubmit?.(station.id, vote, comment);
       setSubmittedOk(true);
       const t = setTimeout(() => setSubmittedOk(false), 2200);
       return () => clearTimeout(t);
-    } catch {
-      // Optional: surface an error state
     } finally {
       setIsSubmitting(false);
     }
@@ -140,8 +133,7 @@ export default function StationDrawer({
     window.open(url, "_blank", "noopener,noreferrer");
   }, [station]);
 
-  // Wrapper has pointer-events: none → map beneath stays interactive.
-  // Panel itself is pointer-events: auto so it’s clickable.
+  // Wrapper uses pointer-events:none → map remains interactive outside panel.
   const drawer = (
     <div
       className="fixed inset-0"
@@ -164,9 +156,9 @@ export default function StationDrawer({
             <h2 className="truncate text-lg font-semibold">
               {station.name ?? "Charging station"}
             </h2>
-            {station.address && (
+            {(station.address || station.postcode) && (
               <p className="mt-0.5 truncate text-sm text-gray-600">
-                {station.address}
+                {[station.address, station.postcode].filter(Boolean).join(", ")}
               </p>
             )}
           </div>
@@ -185,12 +177,7 @@ export default function StationDrawer({
           {/* Summary */}
           <section className="rounded-lg border p-3">
             <div className="text-sm text-gray-700">
-              {!!station.network && (
-                <p>
-                  <span className="font-medium">Network:</span> {station.network}
-                </p>
-              )}
-              <p className="mt-1">
+              <p>
                 <span className="font-medium">Connectors:</span> {totalConnectors}
                 {connectorsSummary ? ` (${connectorsSummary})` : ""}
               </p>
@@ -279,6 +266,6 @@ export default function StationDrawer({
     </div>
   );
 
-  // Render above Leaflet panes, into <body>
+  // Render above Leaflet panes
   return createPortal(drawer, document.body);
 }
