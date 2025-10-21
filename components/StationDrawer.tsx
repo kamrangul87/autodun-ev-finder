@@ -14,11 +14,8 @@ export interface Station {
 }
 
 export interface StationDrawerProps {
-  /** show the drawer when station is non-null */
   station: Station | null;
-  /** called when the user clicks “×” or presses Escape */
   onClose: () => void;
-  /** optional feedback handler (fires after POST succeeds) */
   onFeedbackSubmit?: (
     stationId: string | number,
     vote: "good" | "bad",
@@ -26,7 +23,7 @@ export interface StationDrawerProps {
   ) => void | Promise<void>;
 }
 
-export function StationDrawer({
+export default function StationDrawer({
   station,
   onClose,
   onFeedbackSubmit,
@@ -38,7 +35,7 @@ export function StationDrawer({
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // reset & focus when station changes
+  // reset on station change
   useEffect(() => {
     if (!station) return;
     setVote(null);
@@ -48,7 +45,7 @@ export function StationDrawer({
     return () => clearTimeout(t);
   }, [station]);
 
-  // close on Escape
+  // esc to close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && station) onClose();
@@ -57,12 +54,11 @@ export function StationDrawer({
     return () => document.removeEventListener("keydown", onKey);
   }, [station, onClose]);
 
-  // trap focus while open
+  // focus trap
   useEffect(() => {
     if (!station || !drawerRef.current) return;
     const el = drawerRef.current;
-
-    const getFocusables = () =>
+    const getFocus = () =>
       Array.from(
         el.querySelectorAll<HTMLElement>(
           'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
@@ -71,7 +67,7 @@ export function StationDrawer({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const f = getFocusables();
+      const f = getFocus();
       if (!f.length) return;
       const first = f[0];
       const last = f[f.length - 1];
@@ -110,74 +106,67 @@ export function StationDrawer({
         }),
       });
       await onFeedbackSubmit?.(station.id, vote, comment);
-      // keep drawer open; UX is nicer. If you want to close: onClose();
+      // keep open, just reset
       setVote(null);
       setComment("");
-    } catch (e) {
-      console.error("[StationDrawer] feedback error", e);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleDirections = () => {
-    const qName = encodeURIComponent(station.name ?? "");
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}&travelmode=driving&destination_name=${qName}`;
+    const q = encodeURIComponent(station.name ?? "");
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}&travelmode=driving&destination_name=${q}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  // ---------- RENDER ----------
+  // --------- RENDER ----------
   const node = (
     <div
-      // wrapper: allow clicks through except the panel itself
       className="fixed inset-0"
       style={{ zIndex: 9999, pointerEvents: "none" }}
-      aria-hidden={!station}
     >
-      {/* optional dim on mobile only; NO onClick (don’t auto-close) */}
+      {/* subtle dim only on mobile; no click handler (don’t auto-close) */}
       <div
         className="lg:hidden fixed inset-0"
-        style={{
-          background: "rgba(0,0,0,0.28)",
-          pointerEvents: "none",
-        }}
+        style={{ background: "rgba(0,0,0,0.25)", pointerEvents: "none" }}
       />
 
-      {/* panel (gets the pointer events) */}
+      {/* panel */}
       <div
         ref={drawerRef}
         role="dialog"
         aria-modal="false"
         aria-label="Station details"
         className="pointer-events-auto fixed bg-white overflow-auto"
-        // layout: bottom on mobile, floating right on desktop
+        // mobile: bottom sheet
         style={{
-          // mobile
           left: 0,
           right: 0,
           bottom: 0,
-          height: "55vh",
-          borderTopLeftRadius: 16,
-          borderTopRightRadius: 16,
-          boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+          height: "45vh", // smaller than before
+          borderTopLeftRadius: 14,
+          borderTopRightRadius: 14,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
         }}
       >
-        {/* floating right on >= lg */}
+        {/* desktop: compact floating card in bottom-right */}
         <style>{`
-          @media (min-width: 1024px){
-            .drawer-lg {
-              top: 70px;
-              right: 16px;
-              left: auto;
-              bottom: auto;
-              width: 420px;
-              height: calc(100vh - 86px);
-              border-radius: 16px;
+          @media (min-width: 1024px) {
+            .drawer-compact {
+              left: auto !important;
+              right: 16px !important;
+              bottom: 16px !important;
+              top: auto !important;
+              width: 360px !important;
+              max-height: 70vh !important;
+              height: auto !important;
+              border-radius: 14px !important;
               border: 1px solid rgba(0,0,0,0.08);
             }
           }
         `}</style>
-        <div className="drawer-lg" />
+        <div className="drawer-compact" />
 
         {/* header */}
         <div
@@ -188,13 +177,13 @@ export function StationDrawer({
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "12px 16px",
+            padding: "10px 12px",
           }}
         >
           <div style={{ minWidth: 0 }}>
             <div
               style={{
-                fontSize: 16,
+                fontSize: 15,
                 fontWeight: 600,
                 lineHeight: "20px",
                 whiteSpace: "nowrap",
@@ -225,13 +214,13 @@ export function StationDrawer({
           <button
             ref={closeButtonRef}
             onClick={onClose}
-            aria-label="Close drawer"
+            aria-label="Close"
             style={{
               marginLeft: 8,
               border: "1px solid transparent",
               background: "transparent",
               borderRadius: 8,
-              padding: "6px 8px",
+              padding: "4px 6px",
               color: "#6b7280",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.background = "#f3f4f6")}
@@ -242,53 +231,37 @@ export function StationDrawer({
         </div>
 
         {/* body */}
-        <div style={{ padding: 16 }}>
-          {/* Summary */}
+        <div style={{ padding: 12 }}>
+          {/* summary */}
           <section
             style={{
               border: "1px solid #e5e7eb",
               borderRadius: 10,
-              padding: 12,
-              marginBottom: 12,
-              fontSize: 14,
+              padding: 10,
+              marginBottom: 10,
+              fontSize: 13,
               color: "#374151",
             }}
           >
             <div>
               <span style={{ fontWeight: 600 }}>Connectors:</span> {total}
             </div>
-            {Array.isArray(station.connectors) && station.connectors.length > 0 && (
-              <ul
-                style={{
-                  marginTop: 8,
-                  paddingLeft: 16,
-                  color: "#6b7280",
-                }}
-              >
-                {station.connectors.map((c, i) => (
-                  <li key={`${c.type}-${i}`}>
-                    {c.type} × {c.count ?? 1}
-                    {typeof c.powerKW === "number" ? ` • ${c.powerKW} kW` : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
           </section>
 
-          {/* Feedback */}
+          {/* rate */}
           <section
             style={{
               border: "1px solid #e5e7eb",
               borderRadius: 10,
-              padding: 12,
-              marginBottom: 12,
+              padding: 10,
+              marginBottom: 10,
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
               Rate this location
             </div>
 
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
               <button
                 type="button"
                 onClick={() => setVote("good")}
@@ -296,10 +269,11 @@ export function StationDrawer({
                 style={{
                   flex: 1,
                   borderRadius: 999,
-                  padding: "8px 12px",
+                  padding: "8px 10px",
                   border: vote === "good" ? "1px solid #059669" : "1px solid #d1d5db",
                   background: vote === "good" ? "#ecfdf5" : "#fff",
                   color: vote === "good" ? "#065f46" : "#374151",
+                  fontSize: 13,
                 }}
               >
                 👍 Good
@@ -311,10 +285,11 @@ export function StationDrawer({
                 style={{
                   flex: 1,
                   borderRadius: 999,
-                  padding: "8px 12px",
+                  padding: "8px 10px",
                   border: vote === "bad" ? "1px solid #e11d48" : "1px solid #d1d5db",
                   background: vote === "bad" ? "#fff1f2" : "#fff",
                   color: vote === "bad" ? "#9f1239" : "#374151",
+                  fontSize: 13,
                 }}
               >
                 👎 Bad
@@ -330,13 +305,13 @@ export function StationDrawer({
                 maxLength={280}
                 style={{
                   width: "100%",
-                  borderRadius: 10,
+                  borderRadius: 8,
                   border: "1px solid #d1d5db",
-                  padding: 10,
-                  fontSize: 14,
+                  padding: 8,
+                  fontSize: 13,
                   resize: "vertical",
                   outline: "none",
-                  marginBottom: 8,
+                  marginBottom: 6,
                 }}
               />
             )}
@@ -351,7 +326,8 @@ export function StationDrawer({
                   background: "#111827",
                   color: "#fff",
                   fontWeight: 600,
-                  padding: "8px 12px",
+                  padding: "8px 10px",
+                  fontSize: 13,
                   opacity: !vote || isSubmitting ? 0.6 : 1,
                   cursor: !vote || isSubmitting ? "not-allowed" : "pointer",
                 }}
@@ -369,7 +345,8 @@ export function StationDrawer({
                   background: "#fff",
                   border: "1px solid #d1d5db",
                   color: "#374151",
-                  padding: "8px 12px",
+                  padding: "8px 10px",
+                  fontSize: 13,
                 }}
               >
                 Cancel
@@ -377,13 +354,13 @@ export function StationDrawer({
             </div>
           </section>
 
-          {/* Actions */}
+          {/* actions */}
           <section>
             <button
               type="button"
               onClick={handleDirections}
               style={{
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 600,
                 color: "#2563eb",
                 background: "transparent",
@@ -402,5 +379,3 @@ export function StationDrawer({
 
   return createPortal(node, document.body);
 }
-
-export default StationDrawer;
