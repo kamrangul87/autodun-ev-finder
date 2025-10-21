@@ -1,8 +1,9 @@
 // utils/ocm.ts
-import type { Station } from "../components/StationDrawer";
+import type { Station, Connector } from "../types/station";
 
 export function mapOcmToStation(ocmItem: any): Station {
-  const id = String(ocmItem?.ID ?? ocmItem?.id ?? "");
+  const id = Number(ocmItem?.ID ?? ocmItem?.id ?? 0);
+
   const name =
     ocmItem?.AddressInfo?.Title ??
     ocmItem?.OperatorInfo?.Title ??
@@ -14,12 +15,13 @@ export function mapOcmToStation(ocmItem: any): Station {
   const address = [
     ocmItem?.AddressInfo?.AddressLine1,
     ocmItem?.AddressInfo?.Town,
-    ocmItem?.AddressInfo?.Postcode,
   ]
     .filter(Boolean)
-    .join(", ");
+    .join(", ") || undefined;
 
-  const connectors =
+  const postcode = ocmItem?.AddressInfo?.Postcode || undefined;
+
+  const connectors: Connector[] =
     Array.isArray(ocmItem?.Connections) && ocmItem.Connections.length
       ? ocmItem.Connections.map((c: any) => ({
           type:
@@ -27,13 +29,20 @@ export function mapOcmToStation(ocmItem: any): Station {
             c?.CurrentType?.Title ??
             c?.Level?.Title ??
             "Connector",
-          count: Number(c?.Quantity ?? 1),
+          powerKW:
+            typeof c?.PowerKW === "number"
+              ? c.PowerKW
+              : typeof c?.PowerKW === "string"
+              ? Number(c.PowerKW)
+              : undefined,
+          quantity:
+            typeof c?.Quantity === "number"
+              ? c.Quantity
+              : typeof c?.Quantity === "string"
+              ? Number(c.Quantity)
+              : 1,
         }))
       : [];
 
-  const network =
-    ocmItem?.OperatorInfo?.Title ??
-    (ocmItem?.OperatorID ? `Operator ${ocmItem.OperatorID}` : undefined);
-
-  return { id, name, address, lat, lng, connectors, network };
+  return { id, name, lat, lng, address, postcode, connectors };
 }
