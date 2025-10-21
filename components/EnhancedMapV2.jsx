@@ -13,16 +13,13 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-// NOTE: Drawer now expects: { open, station, onClose, onFeedbackSubmit }
-//       (no userLocation prop)
 import StationDrawer from "./StationDrawer";
-
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
+import { mapOcmToStation } from "../utils/ocm"; // if you need to map raw OCM -> Station anywhere
 
-// --- Leaflet default icon setup (client only) ---
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -48,7 +45,6 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-// --- Map setup helpers ---
 function MapInitializer() {
   const map = useMap();
   useEffect(() => {
@@ -93,14 +89,26 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       }
 
       const maxIntensity = Math.max(
-        ...processedStations.map((s) => s.connectors || 1)
+        ...processedStations.map((s) =>
+          Array.isArray(s.connectors) && s.connectors.length
+            ? s.connectors.reduce(
+                (sum, c) => sum + (typeof c.quantity === "number" ? c.quantity : 1),
+                0
+              )
+            : 1
+        )
       );
 
-      const heatData = processedStations.map((s) => [
-        s.lat,
-        s.lng,
-        ((s.connectors || 1) / maxIntensity) * intensity,
-      ]);
+      const heatData = processedStations.map((s) => {
+        const weight =
+          Array.isArray(s.connectors) && s.connectors.length
+            ? s.connectors.reduce(
+                (sum, c) => sum + (typeof c.quantity === "number" ? c.quantity : 1),
+                0
+              )
+            : 1;
+        return [s.lat, s.lng, (weight / maxIntensity) * intensity];
+      });
 
       // @ts-ignore
       heatLayerRef.current = L.heatLayer(heatData, {
@@ -108,12 +116,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         blur: 15,
         maxZoom: 17,
         max: 1.0,
-        gradient: {
-          0.0: "green",
-          0.4: "yellow",
-          0.7: "orange",
-          1.0: "red",
-        },
+        gradient: { 0.0: "green", 0.4: "yellow", 0.7: "orange", 1.0: "red" },
       }).addTo(map);
     });
 
@@ -132,9 +135,7 @@ function StationMarker({ station, onClick }) {
   return (
     <Marker
       position={[station.lat, station.lng]}
-      eventHandlers={{
-        click: () => onClick(station),
-      }}
+      eventHandlers={{ click: () => onClick(station) }}
     />
   );
 }
@@ -142,7 +143,6 @@ function StationMarker({ station, onClick }) {
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
   const fetchTimeoutRef = useRef(null);
   const lastBboxRef = useRef(null);
 
@@ -151,12 +151,10 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       setCouncilStations([]);
       return;
     }
-
     const bounds = map.getBounds();
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
     const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-
     if (lastBboxRef.current === bboxStr) return;
 
     const cacheKey = `council_${bboxStr}`;
@@ -168,32 +166,35 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
     }
 
     try {
-      setIsLoading(true);
       const url = `/api/council-stations?bbox=${bboxStr}`;
       const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
-
       if (response.ok && data.features) {
         const items = data.features.map((f) => ({
-          id: f.properties.id,
+          id: Number(f.properties.id),
           name: f.properties.title || f.properties.AddressInfo?.Title,
           lat: f.geometry.coordinates[1],
           lng: f.geometry.coordinates[0],
           address: f.properties.AddressInfo?.AddressLine1,
-          connectors: f.properties.NumberOfPoints,
+          postcode: f.properties.AddressInfo?.Postcode,
+          connectors: [
+            {
+              type: "Unknown",
+              quantity:
+                typeof f.properties.NumberOfPoints === "number"
+                  ? f.properties.NumberOfPoints
+                  : 1,
+            },
+          ],
           isCouncil: true,
         }));
-
         setCouncilStations(items);
         setCache(cacheKey, { items, count: items.length });
         lastBboxRef.current = bboxStr;
-
         telemetry.councilSelected("viewport", items.length);
       }
-    } catch (error) {
-      console.error("[CouncilMarkerLayer] Fetch error:", error);
-    } finally {
-      setIsLoading(false);
+    } catch (err) {
+      console.error("[CouncilMarkerLayer] Fetch error:", err);
     }
   }, [map, showCouncil]);
 
@@ -217,9 +218,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
-          eventHandlers={{
-            click: () => onMarkerClick(station),
-          }}
+          eventHandlers={{ click: () => onMarkerClick(station) }}
         />
       ))}
     </MarkerClusterGroup>
@@ -228,7 +227,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
 function UserLocationMarker({ location, accuracy }) {
   if (!location) return null;
-
   return (
     <>
       <Circle
@@ -264,7 +262,6 @@ function ViewportFetcher({
       const sw = bounds.getSouthWest();
       const ne = bounds.getNorthEast();
       const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-
       if (lastFetchRef.current === bboxStr) return;
 
       const cacheKey = `bbox_${bboxStr}`;
@@ -324,9 +321,7 @@ function ViewportFetcher({
     if (searchResult) {
       map.setView([searchResult.lat, searchResult.lng], 13);
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => {
-        fetchForViewport(false);
-      }, 500);
+      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 500);
     }
   }, [map, searchResult, fetchForViewport]);
 
@@ -344,23 +339,18 @@ function LocateMeControl({ onLocationChange, onError }) {
   const handleLocationFound = (lat, lng, accuracy) => {
     onLocationChange({ lat, lng }, accuracy);
   };
-
   return (
     <div
       className="leaflet-top leaflet-right"
       style={{ marginTop: "80px", marginRight: "10px" }}
     >
       <div className="leaflet-control">
-        <LocateMeButton
-          onLocationFound={handleLocationFound}
-          onError={onError}
-        />
+        <LocateMeButton onLocationFound={handleLocationFound} onError={onError} />
       </div>
     </div>
   );
 }
 
-// --- MAIN MAP ---
 export default function EnhancedMap({
   stations = [],
   showHeatmap = false,
@@ -379,7 +369,6 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // Handle external location updates from controls
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
       setUserLocation(externalUserLocation);
@@ -401,11 +390,8 @@ export default function EnhancedMap({
 
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
-      onToast?.({
-        message: "✓ Thanks for your feedback!",
-        type: "success",
-      });
-      // TODO: wire to backend when ready
+      onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
+      // TODO: send to backend if/when ready
     },
     [onToast]
   );
@@ -414,10 +400,8 @@ export default function EnhancedMap({
     (location, accuracy) => {
       setUserLocation(location);
       setLocationAccuracy(accuracy);
-
       if (mapRef.current && location) {
         mapRef.current.setView([location.lat, location.lng], 14);
-
         const nearest = findNearestStation(location, stations);
         if (nearest) {
           console.log(
@@ -433,10 +417,7 @@ export default function EnhancedMap({
 
   const handleLocationError = useCallback(
     (error) => {
-      onToast?.({
-        message: error,
-        type: "error",
-      });
+      onToast?.({ message: error, type: "error" });
     },
     [onToast]
   );
@@ -571,7 +552,7 @@ export default function EnhancedMap({
         />
       </MapContainer>
 
-      {/* Drawer floats above the map; map remains interactive outside the panel */}
+      {/* Drawer floats; map stays interactive outside it */}
       <StationDrawer
         open={!!activeStation}
         station={activeStation}
