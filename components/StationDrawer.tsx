@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 type Connector = { type: string; count?: number; powerKW?: number };
+
 export interface Station {
   id: string | number;
   name: string;
@@ -23,7 +24,7 @@ export interface StationDrawerProps {
   ) => void | Promise<void>;
 }
 
-export default function StationDrawer({
+function StationDrawer({
   station,
   onClose,
   onFeedbackSubmit,
@@ -35,7 +36,7 @@ export default function StationDrawer({
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
-  // reset on station change
+  // Reset on station change + focus the close button
   useEffect(() => {
     if (!station) return;
     setVote(null);
@@ -45,7 +46,7 @@ export default function StationDrawer({
     return () => clearTimeout(t);
   }, [station]);
 
-  // esc to close
+  // ESC to close
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && station) onClose();
@@ -54,11 +55,12 @@ export default function StationDrawer({
     return () => document.removeEventListener("keydown", onKey);
   }, [station, onClose]);
 
-  // focus trap
+  // Focus trap inside the drawer
   useEffect(() => {
     if (!station || !drawerRef.current) return;
     const el = drawerRef.current;
-    const getFocus = () =>
+
+    const getFocusables = () =>
       Array.from(
         el.querySelectorAll<HTMLElement>(
           'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
@@ -67,7 +69,7 @@ export default function StationDrawer({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const f = getFocus();
+      const f = getFocusables();
       if (!f.length) return;
       const first = f[0];
       const last = f[f.length - 1];
@@ -106,9 +108,11 @@ export default function StationDrawer({
         }),
       });
       await onFeedbackSubmit?.(station.id, vote, comment);
-      // keep open, just reset
+      // Keep open but clear the selection/comment for another quick rating
       setVote(null);
       setComment("");
+    } catch (e) {
+      console.error("[StationDrawer] feedback error", e);
     } finally {
       setIsSubmitting(false);
     }
@@ -120,37 +124,37 @@ export default function StationDrawer({
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
-  // --------- RENDER ----------
+  // ---- RENDER ----
   const node = (
     <div
       className="fixed inset-0"
       style={{ zIndex: 9999, pointerEvents: "none" }}
     >
-      {/* subtle dim only on mobile; no click handler (don’t auto-close) */}
+      {/* Subtle dim on mobile only; map remains interactive (no onClick) */}
       <div
         className="lg:hidden fixed inset-0"
         style={{ background: "rgba(0,0,0,0.25)", pointerEvents: "none" }}
       />
 
-      {/* panel */}
+      {/* Panel container (gets the pointer events) */}
       <div
         ref={drawerRef}
         role="dialog"
         aria-modal="false"
         aria-label="Station details"
         className="pointer-events-auto fixed bg-white overflow-auto"
-        // mobile: bottom sheet
+        // Mobile: bottom sheet (compact)
         style={{
           left: 0,
           right: 0,
           bottom: 0,
-          height: "45vh", // smaller than before
+          height: "45vh",
           borderTopLeftRadius: 14,
           borderTopRightRadius: 14,
           boxShadow: "0 8px 24px rgba(0,0,0,0.14)",
         }}
       >
-        {/* desktop: compact floating card in bottom-right */}
+        {/* Desktop: compact floating card in bottom-right */}
         <style>{`
           @media (min-width: 1024px) {
             .drawer-compact {
@@ -168,7 +172,7 @@ export default function StationDrawer({
         `}</style>
         <div className="drawer-compact" />
 
-        {/* header */}
+        {/* Header */}
         <div
           className="sticky top-0"
           style={{
@@ -230,9 +234,9 @@ export default function StationDrawer({
           </button>
         </div>
 
-        {/* body */}
+        {/* Body */}
         <div style={{ padding: 12 }}>
-          {/* summary */}
+          {/* Summary */}
           <section
             style={{
               border: "1px solid #e5e7eb",
@@ -248,7 +252,7 @@ export default function StationDrawer({
             </div>
           </section>
 
-          {/* rate */}
+          {/* Rate */}
           <section
             style={{
               border: "1px solid #e5e7eb",
@@ -354,7 +358,7 @@ export default function StationDrawer({
             </div>
           </section>
 
-          {/* actions */}
+          {/* Actions */}
           <section>
             <button
               type="button"
@@ -379,3 +383,6 @@ export default function StationDrawer({
 
   return createPortal(node, document.body);
 }
+
+export default StationDrawer;
+export { StationDrawer };
