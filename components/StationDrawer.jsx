@@ -21,7 +21,7 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
   station,
   onClose,
   onFeedbackSubmit,
-}) => {
+}: StationDrawerProps) => {
   const [vote, setVote] = useState<Vote>(null);
   const [comment, setComment] = useState<string>("");
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -86,11 +86,7 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
   const totalConnectors =
     Array.isArray(station.connectors) && station.connectors.length
       ? station.connectors.reduce((s, c) => {
-          // support both count and quantity keys
-          const qty =
-            (c as any)?.count ??
-            (c as any)?.quantity ??
-            1;
+          const qty = (c as any)?.count ?? (c as any)?.quantity ?? 1;
           return s + Number(qty || 0);
         }, 0)
       : 0;
@@ -99,7 +95,7 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
     if (!vote || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // keep your API endpoint; ignore if not configured
+      // soft-try API (ok if endpoint not configured locally)
       await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -110,7 +106,7 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
           type: "station",
         }),
       }).catch(() => {});
-      await onFeedbackSubmit?.(station.id, vote, comment);
+      await onFeedbackSubmit?.(station.id, vote as "good" | "bad", comment);
       // keep open; clear form
       setVote(null);
       setComment("");
@@ -242,7 +238,7 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
           position: fixed;
           inset: 0;
           z-index: 9999;
-          pointer-events: none; /* map stays interactive except on the card */
+          pointer-events: none;
         }
         .drawer-dim {
           position: fixed;
@@ -265,7 +261,6 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
           flex-direction: column;
           overflow: hidden;
         }
-        /* Desktop — compact floating card bottom-right */
         @media (min-width: 1024px) {
           .drawer-card {
             bottom: 16px;
