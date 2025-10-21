@@ -1,4 +1,3 @@
-// components/StationDrawer.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
@@ -7,7 +6,7 @@ import type { Station as StationType } from "../types/station";
 
 type Vote = "good" | "bad" | null;
 
-export interface StationDrawerProps {
+interface Props {
   station: StationType | null;
   onClose: () => void;
   onFeedbackSubmit?: (
@@ -17,97 +16,55 @@ export interface StationDrawerProps {
   ) => Promise<void> | void;
 }
 
-export const StationDrawer: React.FC<StationDrawerProps> = ({
-  station,
-  onClose,
-  onFeedbackSubmit,
-}: StationDrawerProps) => {
+export function StationDrawer({ station, onClose, onFeedbackSubmit }: Props) {
   const [vote, setVote] = useState<Vote>(null);
-  const [comment, setComment] = useState<string>("");
-  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [comment, setComment] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const closeRef = useRef<HTMLButtonElement | null>(null);
-
-  // Reset form + focus when station changes
+  // reset form when station changes
   useEffect(() => {
     if (!station) return;
     setVote(null);
     setComment("");
     setIsSubmitting(false);
-    const t = setTimeout(() => closeRef.current?.focus(), 60);
-    return () => clearTimeout(t);
+    setTimeout(() => closeRef.current?.focus(), 50);
   }, [station]);
 
-  // ESC to close
+  // ESC key closes
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && station) onClose?.();
-    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && station && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [station, onClose]);
 
-  // Focus trap
-  useEffect(() => {
-    if (!station || !panelRef.current) return;
-    const el = panelRef.current;
-
-    const getFocusables = () =>
-      Array.from(
-        el.querySelectorAll<HTMLElement>(
-          'button,[href],input,select,textarea,[tabindex]:not([tabindex="-1"])'
-        )
-      ).filter((n) => !n.hasAttribute("disabled"));
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
-      const items = getFocusables();
-      if (!items.length) return;
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault();
-        last?.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault();
-        first?.focus();
-      }
-    };
-
-    el.addEventListener("keydown", onKey);
-    return () => el.removeEventListener("keydown", onKey);
-  }, [station]);
-
   if (!station) return null;
 
-  const fullAddress = [station.address, station.postcode].filter(Boolean).join(", ");
-
+  const address = [station.address, station.postcode].filter(Boolean).join(", ");
   const totalConnectors =
     Array.isArray(station.connectors) && station.connectors.length
-      ? station.connectors.reduce((s, c) => {
-          const qty = (c as any)?.count ?? (c as any)?.quantity ?? 1;
-          return s + Number(qty || 0);
-        }, 0)
+      ? station.connectors.reduce(
+          (s, c: any) => s + Number(c.count ?? c.quantity ?? 1),
+          0
+        )
       : 0;
 
   const handleSubmit = async () => {
-    if (!vote || isSubmitting) return;
+    if (!vote) return;
     setIsSubmitting(true);
     try {
-      // soft-try API (ok if endpoint not configured locally)
       await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           stationId: station.id,
           vote,
-          comment: comment.trim(),
+          comment,
           type: "station",
         }),
       }).catch(() => {});
       await onFeedbackSubmit?.(station.id, vote as "good" | "bad", comment);
-      // keep open; clear form
       setVote(null);
       setComment("");
     } finally {
@@ -117,97 +74,52 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
 
   const handleDirections = () => {
     const q = encodeURIComponent(station.name ?? "");
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}&travelmode=driving&destination_name=${q}`;
-    window.open(url, "_blank", "noopener,noreferrer");
+    window.open(
+      `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}&destination_name=${q}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
   };
 
-  const node = (
-    <div className="station-drawer-layer" aria-hidden={!station}>
-      {/* Dim only on mobile; desktop stays interactive */}
+  return createPortal(
+    <div className="station-drawer-layer">
       <div className="drawer-dim lg:hidden" />
-
-      {/* Panel */}
-      <div ref={panelRef} role="dialog" aria-modal="false" className="drawer-card">
-        {/* Header */}
+      <div ref={panelRef} className="drawer-card" role="dialog">
         <div className="drawer-header">
           <div className="drawer-title">
-            <div className="name" title={station.name}>
-              {station.name || "Charging station"}
-            </div>
-            {fullAddress && (
-              <div className="address" title={fullAddress}>
-                {fullAddress}
-              </div>
-            )}
+            <div className="name">{station.name}</div>
+            {address && <div className="address">{address}</div>}
           </div>
-          <button ref={closeRef} onClick={onClose} className="close" aria-label="Close">
-            ✕
-          </button>
+          <button ref={closeRef} onClick={onClose} className="close">✕</button>
         </div>
 
-        {/* Body */}
         <div className="drawer-body">
-          {/* Quick facts */}
           <div className="card">
-            {!!(station as any).network && (
-              <div className="row">
-                <span className="label">Network:</span> {(station as any).network}
-              </div>
-            )}
             <div className="row">
               <span className="label">Connectors:</span> {totalConnectors}
             </div>
-
-            {Array.isArray(station.connectors) && station.connectors.length > 0 && (
-              <ul className="conns">
-                {station.connectors.map((c, i) => (
-                  <li key={`${(c as any)?.type || "conn"}-${i}`}>
-                    {(c as any)?.type || "Connector"}
-                    {typeof ((c as any)?.count ?? (c as any)?.quantity) === "number"
-                      ? ` × ${((c as any)?.count ?? (c as any)?.quantity) as number}`
-                      : ""}
-                    {typeof (c as any)?.powerKW === "number"
-                      ? ` • ${(c as any).powerKW} kW`
-                      : ""}
-                  </li>
-                ))}
-              </ul>
-            )}
           </div>
 
-          {/* Actions */}
           <div className="actions">
             <button className="btn primary" onClick={handleDirections}>
               ⤴ Directions
             </button>
-            <button
-              className="btn"
-              onClick={() => {
-                setVote(null);
-                setComment("");
-              }}
-            >
+            <button className="btn" onClick={() => { setVote(null); setComment(""); }}>
               Clear
             </button>
           </div>
 
-          {/* Feedback */}
           <div className="card">
             <div className="row head">Rate this location</div>
-
             <div className="vote">
               <button
-                type="button"
                 onClick={() => setVote("good")}
-                aria-pressed={vote === "good"}
                 className={`chip ${vote === "good" ? "chip-on-good" : ""}`}
               >
                 👍 Good
               </button>
               <button
-                type="button"
                 onClick={() => setVote("bad")}
-                aria-pressed={vote === "bad"}
                 className={`chip ${vote === "bad" ? "chip-on-bad" : ""}`}
               >
                 👎 Bad
@@ -218,21 +130,24 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
               <textarea
                 value={comment}
                 onChange={(e) => setComment(e.target.value.slice(0, 280))}
-                placeholder="Optional: broken connector, blocked bay, pricing issue…"
+                placeholder="Optional comment…"
                 rows={3}
                 maxLength={280}
                 className="ta"
               />
             )}
 
-            <button onClick={handleSubmit} disabled={!vote || isSubmitting} className="btn block dark">
+            <button
+              onClick={handleSubmit}
+              disabled={!vote || isSubmitting}
+              className="btn block dark"
+            >
               {isSubmitting ? "Submitting…" : "Submit feedback"}
             </button>
           </div>
         </div>
       </div>
 
-      {/* Styles (scoped) */}
       <style jsx>{`
         .station-drawer-layer {
           position: fixed;
@@ -249,184 +164,56 @@ export const StationDrawer: React.FC<StationDrawerProps> = ({
         .drawer-card {
           pointer-events: auto;
           position: fixed;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          height: 56vh;
+          bottom: 16px;
+          right: 16px;
+          width: 360px;
           background: #fff;
-          border-top-left-radius: 14px;
-          border-top-right-radius: 14px;
+          border-radius: 14px;
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
-          display: flex;
-          flex-direction: column;
+          border: 1px solid #e5e7eb;
           overflow: hidden;
         }
-        @media (min-width: 1024px) {
+        @media (max-width: 1023px) {
           .drawer-card {
-            bottom: 16px;
-            right: 16px;
-            left: auto;
-            top: auto;
-            height: auto;
-            max-height: 72vh;
-            width: 360px;
-            border-radius: 14px;
-            border: 1px solid #e5e7eb;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: auto;
+            border-radius: 14px 14px 0 0;
           }
         }
-
         .drawer-header {
           display: flex;
+          justify-content: space-between;
           align-items: center;
-          gap: 8px;
           padding: 10px 12px;
           border-bottom: 1px solid #e5e7eb;
-          background: #fff;
-          position: sticky;
-          top: 0;
-          z-index: 1;
-        }
-        .drawer-title {
-          min-width: 0;
-          flex: 1;
         }
         .name {
           font-weight: 600;
-          font-size: 15px;
           color: #111827;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
         }
         .address {
-          margin-top: 2px;
           font-size: 12px;
           color: #6b7280;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
         }
-        .close {
-          color: #6b7280;
-          border: 0;
-          background: transparent;
-          border-radius: 6px;
-          padding: 4px 6px;
-        }
-        .close:hover {
-          background: #f3f4f6;
-        }
-
-        .drawer-body {
-          padding: 10px;
-          overflow: auto;
-          display: grid;
-          gap: 10px;
-        }
-        .card {
-          border: 1px solid #e5e7eb;
-          border-radius: 10px;
-          padding: 10px;
-        }
-        .row {
-          font-size: 14px;
-          color: #374151;
-        }
-        .row + .row {
-          margin-top: 4px;
-        }
-        .row .label {
-          font-weight: 600;
-        }
-        .row.head {
-          font-weight: 600;
-          margin-bottom: 8px;
-        }
-        .conns {
-          margin-top: 6px;
-          color: #6b7280;
-          font-size: 12px;
-          padding-left: 18px;
-          list-style: disc;
-        }
-
-        .actions {
-          display: flex;
-          gap: 8px;
-        }
-        .btn {
-          border: 1px solid #d1d5db;
-          background: #fff;
-          color: #374151;
-          font-weight: 500;
-          font-size: 14px;
-          padding: 8px 10px;
-          border-radius: 8px;
-        }
-        .btn:hover {
-          background: #f9fafb;
-        }
-        .btn.primary {
-          background: #2563eb;
-          border-color: #2563eb;
-          color: #fff;
-        }
-        .btn.primary:hover {
-          background: #1e40af;
-          border-color: #1e40af;
-        }
-        .btn.block {
-          width: 100%;
-          margin-top: 8px;
-        }
-        .btn.dark {
-          background: #111827;
-          border-color: #111827;
-          color: #fff;
-        }
-
-        .vote {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-          margin-bottom: 8px;
-        }
-        .chip {
-          border: 1px solid #d1d5db;
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 14px;
-          color: #374151;
-          background: #fff;
-        }
-        .chip-on-good {
-          background: #ecfdf5;
-          border-color: #059669;
-          color: #047857;
-        }
-        .chip-on-bad {
-          background: #fef2f2;
-          border-color: #dc2626;
-          color: #b91c1c;
-        }
-
-        .ta {
-          width: 100%;
-          border: 1px solid #d1d5db;
-          border-radius: 8px;
-          padding: 8px;
-          font-size: 14px;
-          color: #374151;
-          outline: none;
-        }
-        .ta:focus {
-          border-color: #9ca3af;
-        }
+        .drawer-body { padding: 10px; display: grid; gap: 10px; }
+        .card { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; }
+        .row { font-size: 14px; color: #374151; }
+        .label { font-weight: 600; margin-right: 4px; }
+        .actions { display: flex; gap: 8px; }
+        .btn { border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+        .btn.primary { background: #2563eb; color: #fff; }
+        .btn.dark { background: #111827; color: #fff; }
+        .vote { display: flex; gap: 8px; margin-top: 8px; }
+        .chip { flex: 1; border: 1px solid #d1d5db; border-radius: 999px; padding: 6px; text-align: center; }
+        .chip-on-good { background: #ecfdf5; border-color: #059669; color: #047857; }
+        .chip-on-bad { background: #fef2f2; border-color: #dc2626; color: #b91c1c; }
+        .ta { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 8px; margin-top: 6px; }
       `}</style>
-    </div>
+    </div>,
+    document.body
   );
-
-  return createPortal(node, document.body);
-};
+}
 
 export default StationDrawer;
