@@ -555,10 +555,10 @@ export default function EnhancedMap({
 
       {/* Drawer floats; map stays interactive outside it */}
       <StationDrawer
-        open={!!activeStation}
-        station={activeStation}
-        onClose={handleDrawerClose}
-        onFeedbackSubmit={handleFeedbackSubmit}
+   station={activeStation}
+   onClose={handleDrawerClose}
+   onFeedbackSubmit={handleFeedbackSubmit}
+
       />
 
       <style jsx global>{`
