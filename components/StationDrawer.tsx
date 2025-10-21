@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Station as StationType } from "../types/station";
+import type { Station as StationType } from "../types/stations";
 
 type Vote = "good" | "bad" | null;
 
