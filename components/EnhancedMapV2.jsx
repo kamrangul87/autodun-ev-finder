@@ -3,17 +3,22 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  MapContainer, TileLayer, Marker, Circle, useMap, useMapEvents,
+  MapContainer,
+  TileLayer,
+  Marker,
+  Circle,
+  useMap,
+  useMapEvents,
 } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer";
+import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
-import { CONNECTOR_COLORS } from "../lib/connectorCatalog"; // NEW
+import { CONNECTOR_COLORS } from "../lib/connectorCatalog";
 
 if (typeof window !== "undefined") {
   // @ts-ignore
@@ -49,7 +54,91 @@ function MapInitializer() {
   return null;
 }
 
-/* ... HeatmapLayer and StationMarker unchanged ... */
+function HeatmapLayer({ stations, intensity = 1 }) {
+  const map = useMap();
+  const heatLayerRef = useRef(null);
+  const [zoom, setZoom] = useState(map.getZoom());
+
+  useEffect(() => {
+    const updateZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", updateZoom);
+    return () => map.off("zoomend", updateZoom);
+  }, [map]);
+
+  useEffect(() => {
+    if (!map || !stations || stations.length === 0) {
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
+      }
+      return;
+    }
+
+    import("leaflet.heat").then(() => {
+      if (heatLayerRef.current) map.removeLayer(heatLayerRef.current);
+
+      const currentZoom = map.getZoom();
+      const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
+
+      let processedStations = stations;
+      if (stations.length > 25000) {
+        processedStations = stations.filter((_, idx) => idx % 3 === 0);
+        console.log(
+          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
+        );
+      }
+
+      const sumQty = (arr) =>
+        arr.reduce(
+          (sum, c) => sum + (typeof c?.quantity === "number" ? c.quantity : 1),
+          0
+        );
+
+      const maxIntensity = Math.max(
+        ...processedStations.map((s) =>
+          Array.isArray(s.connectors) && s.connectors.length
+            ? sumQty(s.connectors)
+            : 1
+        )
+      );
+
+      const heatData = processedStations.map((s) => {
+        const weight =
+          Array.isArray(s.connectors) && s.connectors.length
+            ? sumQty(s.connectors)
+            : 1;
+        return [s.lat, s.lng, (weight / maxIntensity) * intensity];
+      });
+
+      // @ts-ignore
+      heatLayerRef.current = L.heatLayer(heatData, {
+        radius,
+        blur: 15,
+        maxZoom: 17,
+        max: 1.0,
+        gradient: { 0.0: "green", 0.4: "yellow", 0.7: "orange", 1.0: "red" },
+      }).addTo(map);
+    });
+
+    return () => {
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
+      }
+    };
+  }, [map, stations, intensity, zoom]);
+
+  return null;
+}
+
+function StationMarker({ station, onClick }) {
+  return (
+    <Marker
+      position={[station.lat, station.lng]}
+      eventHandlers={{ click: () => onClick(station) }}
+    />
+  );
+}
 
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
@@ -92,7 +181,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
         const items = data.features.map((f) => {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
-          // better postcode extraction (multiple common keys)
           const postcode =
             pick(p, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
             pick(ai, ["Postcode", "PostalCode"]);
@@ -103,7 +191,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             lng: f.geometry.coordinates[0],
             address: p.AddressLine1 || ai?.AddressLine1 || p.address || ai?.Title || undefined,
             town: p.Town || p.town || ai?.Town || ai?.City,
-            postcode,                    // <— ensures drawer sees it
+            postcode,
             connectors: [
               {
                 type: "Unknown",
@@ -153,30 +241,237 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   );
 }
 
-/* ... UserLocationMarker, ViewportFetcher, LocateMeControl unchanged ... */
+function UserLocationMarker({ location, accuracy }) {
+  if (!location) return null;
+  return (
+    <>
+      <Circle
+        center={[location.lat, location.lng]}
+        radius={accuracy || 100}
+        pathOptions={{
+          color: "#3b82f6",
+          fillColor: "#3b82f6",
+          fillOpacity: 0.1,
+          weight: 1,
+        }}
+      />
+      <Marker position={[location.lat, location.lng]} icon={userLocationIcon} />
+    </>
+  );
+}
 
-export default function EnhancedMap(props) {
-  const {
-    stations = [],
-    showHeatmap = false,
-    showMarkers = true,
-    showCouncil = false,
-    searchResult = null,
-    shouldZoomToData = false,
-    userLocation: externalUserLocation,
-    onFetchStations,
-    onLoadingChange,
-    onToast,
-    isLoading = false,
-  } = props;
+function ViewportFetcher({
+  onFetchStations,
+  onLoadingChange,
+  searchResult,
+  shouldZoomToData,
+  stations,
+}) {
+  const map = useMap();
+  const fetchTimeoutRef = useRef(null);
+  const lastFetchRef = useRef(null);
+  const isFirstFetchRef = useRef(true);
 
-  /* state & handlers unchanged ... */
+  const fetchForViewport = useCallback(
+    async (isFirstLoad = false) => {
+      const bounds = map.getBounds();
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+      if (lastFetchRef.current === bboxStr) return;
+
+      const cacheKey = `bbox_${bboxStr}`;
+      const cached = getCached(cacheKey);
+      if (cached) {
+        lastFetchRef.current = bboxStr;
+        onFetchStations?.(cached);
+        return;
+      }
+
+      try {
+        onLoadingChange?.(true);
+        const tiles = isFirstLoad ? 4 : 2;
+        const limitPerTile = isFirstLoad ? 500 : 750;
+        const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
+        const response = await fetch(url, { cache: "no-store" });
+        const data = await response.json();
+        if (response.ok) {
+          const normalizedData = {
+            items: data.features ? data.features.map((f) => f.properties) : [],
+            count: data.count,
+            source: data.source,
+            bbox: data.bbox,
+          };
+          setCache(cacheKey, normalizedData);
+          lastFetchRef.current = bboxStr;
+          onFetchStations?.(normalizedData);
+        } else {
+          console.error("API error:", data.error || "Failed to fetch stations");
+        }
+      } catch (error) {
+        console.error("Viewport fetch error:", error);
+        lastFetchRef.current = null;
+      } finally {
+        onLoadingChange?.(false);
+      }
+    },
+    [map, onFetchStations, onLoadingChange]
+  );
+
+  useMapEvents({
+    moveend: () => {
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 400);
+    },
+  });
+
+  useEffect(() => {
+    if (isFirstFetchRef.current && stations && stations.length > 0) {
+      const bboxStr = `-8.649,49.823,1.763,60.845`;
+      lastFetchRef.current = bboxStr;
+      isFirstFetchRef.current = false;
+    }
+  }, [map, stations]);
+
+  useEffect(() => {
+    if (searchResult) {
+      map.setView([searchResult.lat, searchResult.lng], 13);
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 500);
+    }
+  }, [map, searchResult, fetchForViewport]);
+
+  useEffect(() => {
+    if (shouldZoomToData && stations && stations.length > 0) {
+      const bounds = L.latLngBounds(stations.map((s) => [s.lat, s.lng]));
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+  }, [map, stations, shouldZoomToData]);
+
+  return null;
+}
+
+function LocateMeControl({ onLocationChange, onError }) {
+  const handleLocationFound = (lat, lng, accuracy) => {
+    onLocationChange({ lat, lng }, accuracy);
+  };
+  return (
+    <div
+      className="leaflet-top leaflet-right"
+      style={{ marginTop: "80px", marginRight: "10px" }}
+    >
+      <div className="leaflet-control">
+        <LocateMeButton onLocationFound={handleLocationFound} onError={onError} />
+      </div>
+    </div>
+  );
+}
+
+export default function EnhancedMap({
+  stations = [],
+  showHeatmap = false,
+  showMarkers = true,
+  showCouncil = false,
+  searchResult = null,
+  shouldZoomToData = false,
+  userLocation: externalUserLocation,
+  onFetchStations,
+  onLoadingChange,
+  onToast,
+  isLoading = false,
+}) {
+  const [activeStation, setActiveStation] = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [locationAccuracy, setLocationAccuracy] = useState(null);
+  const mapRef = useRef(null);
+
+  useEffect(() => {
+    if (externalUserLocation && mapRef.current) {
+      setUserLocation(externalUserLocation);
+      mapRef.current.setView(
+        [externalUserLocation.lat, externalUserLocation.lng],
+        Math.max(mapRef.current.getZoom(), 14)
+      );
+    }
+  }, [externalUserLocation]);
+
+  const handleStationClick = useCallback((station) => {
+    setActiveStation(station);
+    telemetry.drawerOpen(station.id, station.isCouncil || false);
+  }, []);
+
+  const handleDrawerClose = useCallback(() => {
+    setActiveStation(null);
+  }, []);
+
+  const handleFeedbackSubmit = useCallback(
+    (stationId, vote, comment) => {
+      onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
+      // TODO: post to /api/feedback if needed
+    },
+    [onToast]
+  );
+
+  const handleLocationChange = useCallback(
+    (location, accuracy) => {
+      setUserLocation(location);
+      setLocationAccuracy(accuracy);
+      if (mapRef.current && location) {
+        mapRef.current.setView([location.lat, location.lng], 14);
+        const nearest = findNearestStation(location, stations);
+        if (nearest) {
+          console.log(
+            `[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(
+              2
+            )} km)`
+          );
+        }
+      }
+    },
+    [stations]
+  );
+
+  const handleLocationError = useCallback(
+    (error) => {
+      onToast?.({ message: error, type: "error" });
+    },
+    [onToast]
+  );
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
-      {/* loading pill unchanged ... */}
+      {isLoading && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "10px",
+            left: "10px",
+            zIndex: 1000,
+            background: "white",
+            padding: "6px 10px",
+            borderRadius: "20px",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+          }}
+        >
+          <div
+            style={{
+              width: "14px",
+              height: "14px",
+              border: "2px solid #3b82f6",
+              borderTopColor: "transparent",
+              borderRadius: "50%",
+              animation: "spin 0.6s linear infinite",
+            }}
+          />
+          <span style={{ fontSize: "11px", fontWeight: "500", color: "#374151" }}>
+            Loading…
+          </span>
+        </div>
+      )}
 
-      {/* Legend: add connector color hints (visual only) */}
       <div
         style={{
           position: "absolute",
@@ -191,58 +486,124 @@ export default function EnhancedMap(props) {
           minWidth: 160,
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>Legend</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-          <div style={{ width: 12, height: 12, background: "#3b82f6", borderRadius: "50%" }} />
+        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+          Legend
+        </div>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+        >
+          <div
+            style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
+          ></div>
           <span>Charging stations</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <div
             style={{
-              width: 12,
-              height: 12,
+              width: "12px",
+              height: "12px",
               background: "#9333ea",
               transform: "rotate(45deg)",
               border: "1px solid white",
             }}
-          />
+          ></div>
           <span>Council markers</span>
         </div>
 
-        {/* NEW: connector color keys */}
-        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>Connector types</div>
+        {/* Connector types (colors) */}
+        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
+          Connector types
+        </div>
         {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
-          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-            <div style={{ width: 10, height: 10, borderRadius: 999, background: color as string }} />
+          <div
+            key={label}
+            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+          >
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                background: String(color), // <-- FIX: no TS cast in .jsx
+              }}
+            />
             <span>{label}</span>
           </div>
         ))}
       </div>
 
-      <MapContainer /* ... unchanged props ... */ center={[54.5, -4]} zoom={6}
-        style={{ position:"absolute", top:0, left:0, right:0, bottom:0, width:"100%", height:"100%" }}
+      <MapContainer
+        ref={mapRef}
+        center={[54.5, -4]}
+        zoom={6}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: "100%",
+          height: "100%",
+        }}
         scrollWheelZoom={true}
-        bounds={[[-8.649,49.823],[1.763,60.845]]}
+        bounds={[
+          [-8.649, 49.823],
+          [1.763, 60.845],
+        ]}
       >
         <MapInitializer />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
+          url={
+            process.env.NEXT_PUBLIC_TILE_URL ||
+            "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          }
           maxZoom={19}
         />
-        {/* viewport fetcher / layers unchanged */}
-        {/* ... */}
-        <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} />
-        {/* ... */}
+        <ViewportFetcher
+          onFetchStations={onFetchStations}
+          onLoadingChange={onLoadingChange}
+          searchResult={searchResult}
+          shouldZoomToData={shouldZoomToData}
+          stations={stations}
+        />
+        {showHeatmap && <HeatmapLayer stations={stations} />}
+        {showMarkers && (
+          <MarkerClusterGroup chunkedLoading>
+            {stations.map((station) => (
+              <StationMarker
+                key={station.id}
+                station={station}
+                onClick={handleStationClick}
+              />
+            ))}
+          </MarkerClusterGroup>
+        )}
+        <CouncilMarkerLayer
+          showCouncil={showCouncil}
+          onMarkerClick={handleStationClick}
+        />
+        <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
+        <LocateMeControl
+          onLocationChange={handleLocationChange}
+          onError={handleLocationError}
+        />
       </MapContainer>
 
+      {/* Drawer floats; map stays interactive outside it */}
       <StationDrawer
         station={activeStation}
         onClose={handleDrawerClose}
         onFeedbackSubmit={handleFeedbackSubmit}
       />
 
-      <style jsx global>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style jsx global>{`
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+      `}</style>
     </div>
   );
 }
