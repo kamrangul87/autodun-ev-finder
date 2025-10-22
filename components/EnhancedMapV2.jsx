@@ -13,13 +13,13 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
-import SafeBoundary from "./SafeBoundary";   // <-- NEW: isolate drawer errors
+import StationDrawer from "./StationDrawer"; // drawer handles council + normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 
+// ---------- leaflet icon setup ----------
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -45,48 +45,51 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
+// ---------- legend colours for three connectors (visual only) ----------
+const CONNECTOR_COLORS = {
+  CCS: "#f59e0b",      // amber
+  CHAdeMO: "#fbbf24",  // light amber
+  "Type 2": "#10b981", // green
+};
+
+// ---------- small helpers ----------
 function MapInitializer() {
   const map = useMap();
   useEffect(() => {
-    const timer = setTimeout(() => map.invalidateSize(), 100);
-    return () => clearTimeout(timer);
+    const t = setTimeout(() => map.invalidateSize(), 100);
+    return () => clearTimeout(t);
   }, [map]);
   return null;
 }
 
 function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
-  const heatLayerRef = useRef(null);
+  const layerRef = useRef(null);
   const [zoom, setZoom] = useState(map.getZoom());
 
   useEffect(() => {
-    const updateZoom = () => setZoom(map.getZoom());
-    map.on("zoomend", updateZoom);
-    return () => map.off("zoomend", updateZoom);
+    const onZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", onZoom);
+    return () => map.off("zoomend", onZoom);
   }, [map]);
 
   useEffect(() => {
     if (!map || !stations || stations.length === 0) {
-      if (heatLayerRef.current) {
-        map.removeLayer(heatLayerRef.current);
-        heatLayerRef.current = null;
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
       }
       return;
     }
 
     import("leaflet.heat").then(() => {
-      if (heatLayerRef.current) map.removeLayer(heatLayerRef.current);
+      if (layerRef.current) map.removeLayer(layerRef.current);
 
       const currentZoom = map.getZoom();
       const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
 
-      let processedStations = stations;
-      if (stations.length > 25000) {
-        processedStations = stations.filter((_, idx) => idx % 3 === 0);
-        console.log(
-          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
-        );
-      }
+      let processed = stations;
+      if (stations.length > 25000) processed = stations.filter((_, i) => i % 3 === 0);
 
       const sumQty = (arr) =>
         arr.reduce(
@@ -95,14 +98,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         );
 
       const maxIntensity = Math.max(
-        ...processedStations.map((s) =>
+        ...processed.map((s) =>
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
             : 1
         )
       );
 
-      const heatData = processedStations.map((s) => {
+      const heatData = processed.map((s) => {
         const weight =
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
@@ -111,7 +114,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       });
 
       // @ts-ignore
-      heatLayerRef.current = L.heatLayer(heatData, {
+      layerRef.current = L.heatLayer(heatData, {
         radius,
         blur: 15,
         maxZoom: 17,
@@ -121,9 +124,9 @@ function HeatmapLayer({ stations, intensity = 1 }) {
     });
 
     return () => {
-      if (heatLayerRef.current) {
-        map.removeLayer(heatLayerRef.current);
-        heatLayerRef.current = null;
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
       }
     };
   }, [map, stations, intensity, zoom]);
@@ -175,8 +178,8 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           name: f.properties.title || f.properties.AddressInfo?.Title,
           lat: f.geometry.coordinates[1],
           lng: f.geometry.coordinates[0],
-          address: f.properties.AddressInfo?.AddressLine1,
-          postcode: f.properties.AddressInfo?.Postcode,
+          address: f.properties.AddressInfo?.AddressLine1 || f.properties.AddressInfo?.Town,
+          postcode: f.properties.AddressInfo?.Postcode || "",
           connectors: [
             {
               type: "Unknown",
@@ -191,7 +194,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
         setCouncilStations(items);
         setCache(cacheKey, { items, count: items.length });
         lastBboxRef.current = bboxStr;
-        telemetry?.councilSelected?.("viewport", items.length);
+        try { telemetry?.councilSelected?.("viewport", items.length); } catch {}
       }
     } catch (err) {
       console.error("[CouncilMarkerLayer] Fetch error:", err);
@@ -275,9 +278,6 @@ function ViewportFetcher({
       try {
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
-        thelimit: {
-          /* eslint-disable no-labels */
-        }
         const limitPerTile = isFirstLoad ? 500 : 750;
         const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
@@ -354,6 +354,7 @@ function LocateMeControl({ onLocationChange, onError }) {
   );
 }
 
+// ---------- MAIN COMPONENT ----------
 export default function EnhancedMap({
   stations = [],
   showHeatmap = false,
@@ -384,12 +385,9 @@ export default function EnhancedMap({
 
   const handleStationClick = useCallback((station) => {
     setActiveStation(station);
-    // SAFE: don’t let missing telemetry crash the app
     try {
       telemetry?.drawerOpen?.(station?.id ?? "unknown", Boolean(station?.isCouncil));
-    } catch {
-      // no-op
-    }
+    } catch {}
   }, []);
 
   const handleDrawerClose = useCallback(() => {
@@ -399,7 +397,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
-      // TODO: post to /api/feedback if needed
+      // Hook to API if needed later
     },
     [onToast]
   );
@@ -464,6 +462,7 @@ export default function EnhancedMap({
         </div>
       )}
 
+      {/* Floating legend (includes 3 connector colors) */}
       <div
         style={{
           position: "absolute",
@@ -475,46 +474,45 @@ export default function EnhancedMap({
           borderRadius: "6px",
           boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
           fontSize: "11px",
+          maxWidth: 200,
         }}
       >
-        <div style={{ fontWeight: "600", marginBottom: "6px", color: "#1f2937" }}>
+        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
           Legend
         </div>
-        <div
-          style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}
-        >
-          <div
-            style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
-          ></div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <div style={{ width: 12, height: 12, background: "#3b82f6", borderRadius: "50%" }} />
           <span>Charging stations</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <div
             style={{
-              width: "12px",
-              height: "12px",
+              width: 12,
+              height: 12,
               background: "#9333ea",
               transform: "rotate(45deg)",
               border: "1px solid white",
             }}
-          ></div>
+          />
           <span>Council markers</span>
         </div>
+
+        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
+          Connector types
+        </div>
+        {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
+          <div key={label} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 999, background: color }} />
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
 
       <MapContainer
         ref={mapRef}
         center={[54.5, -4]}
         zoom={6}
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          width: "100%",
-          height: "100%",
-        }}
+        style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
         scrollWheelZoom={true}
         bounds={[
           [-8.649, 49.823],
@@ -561,13 +559,11 @@ export default function EnhancedMap({
       </MapContainer>
 
       {/* Drawer floats; map stays interactive outside it */}
-      <SafeBoundary>
-        <StationDrawer
-          station={activeStation}
-          onClose={handleDrawerClose}
-          onFeedbackSubmit={handleFeedbackSubmit}
-        />
-      </SafeBoundary>
+      <StationDrawer
+        station={activeStation}
+        onClose={handleDrawerClose}
+        onFeedbackSubmit={handleFeedbackSubmit}
+      />
 
       <style jsx global>{`
         @keyframes spin {
