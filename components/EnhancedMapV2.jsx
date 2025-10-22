@@ -13,13 +13,13 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
+import StationDrawer from "./StationDrawer";
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 
-// ---- helpers ----
+// -------- helpers ----------
 const toBool = (v) => {
   if (typeof v === "boolean") return v;
   if (typeof v === "number") return v !== 0;
@@ -61,7 +61,7 @@ function MapInitializer() {
   return null;
 }
 
-// Ensure a dedicated pane exists for council markers (consistent z-index on desktop)
+// NEW: ensure a dedicated pane for council markers (fixes desktop z-order)
 function EnsureCouncilPane() {
   const map = useMap();
   useEffect(() => {
@@ -161,13 +161,13 @@ function StationMarker({ station, onClick }) {
   );
 }
 
-// Council markers rendered in a dedicated pane; no popups, same drawer click
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
   const fetchTimeoutRef = useRef(null);
   const lastBboxRef = useRef(null);
 
+  // NEW: coerce in case parent passes "1"/"true"
   const showCouncilBool = toBool(showCouncil);
 
   const fetchCouncilData = useCallback(async () => {
@@ -245,7 +245,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
-          pane="council-pane"
+          pane="council-pane"               // NEW: render in dedicated pane
           zIndexOffset={200}
           eventHandlers={{ click: () => onMarkerClick(station) }}
         />
@@ -425,7 +425,6 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
-      // TODO: post to /api/feedback if needed
     },
     [onToast]
   );
@@ -548,7 +547,7 @@ export default function EnhancedMap({
         ]}
       >
         <MapInitializer />
-        <EnsureCouncilPane />
+        <EnsureCouncilPane /> {/* <-- NEW */}
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url={
