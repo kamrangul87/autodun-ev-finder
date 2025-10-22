@@ -1,7 +1,7 @@
 // components/EnhancedMapV2.jsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback, Component } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -13,11 +13,12 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // your drawer (unchanged look)
+import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
+import { CONNECTOR_COLORS } from "../lib/connectorCatalog";
 
 if (typeof window !== "undefined") {
   // @ts-ignore
@@ -44,103 +45,48 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-// ——— helper: only pass safe, expected fields into the drawer
-function sanitizeStation(raw) {
-  if (!raw || typeof raw !== "object") return null;
-
-  const ai = raw.AddressInfo || {};
-  const connectors = Array.isArray(raw.connectors) ? raw.connectors : [];
-
-  // Keep only fields the drawer reads; coerce to safe shapes.
-  return {
-    id: raw.id ?? ai?.ID ?? String(Math.random()).slice(2),
-    name: raw.name || ai?.Title || "Unknown location",
-    lat: typeof raw.lat === "number" ? raw.lat : ai?.Latitude ?? null,
-    lng: typeof raw.lng === "number" ? raw.lng : ai?.Longitude ?? null,
-    address:
-      raw.address ||
-      ai?.AddressLine1 ||
-      ai?.AddressLine2 ||
-      ai?.Town ||
-      ai?.StateOrProvince ||
-      "",
-    postcode: raw.postcode || ai?.Postcode || "",
-    isCouncil: Boolean(raw.isCouncil),
-    // guarantee connectors are simple objects with known keys
-    connectors: connectors.map((c) => ({
-      type:
-        (typeof c?.type === "string" && c.type) ||
-        (typeof c?.ConnectionType?.Title === "string" && c.ConnectionType.Title) ||
-        "Unknown",
-      quantity:
-        typeof c?.quantity === "number"
-          ? c.quantity
-          : typeof c?.Quantity === "number"
-          ? c.Quantity
-          : 1,
-      powerKW:
-        typeof c?.powerKW === "number"
-          ? c.powerKW
-          : typeof c?.PowerKW === "number"
-          ? c.PowerKW
-          : undefined,
-    })),
-  };
-}
-
-// ——— tiny error boundary only for the drawer (prevents whole app crash)
-class DrawerBoundary extends Component {
-  state = { hasError: false };
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-  componentDidCatch(err, info) {
-    // keep quiet in UI, but log for diagnostics
-    console.error("[StationDrawer] render error:", err, info);
-  }
-  render() {
-    if (this.state.hasError) return null; // fail silent for bad record
-    return this.props.children;
-  }
-}
-
 function MapInitializer() {
   const map = useMap();
   useEffect(() => {
-    const t = setTimeout(() => map.invalidateSize(), 100);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => map.invalidateSize(), 100);
+    return () => clearTimeout(timer);
   }, [map]);
   return null;
 }
 
 function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
-  const layerRef = useRef(null);
+  const heatLayerRef = useRef(null);
   const [zoom, setZoom] = useState(map.getZoom());
 
   useEffect(() => {
-    const onZoom = () => setZoom(map.getZoom());
-    map.on("zoomend", onZoom);
-    return () => map.off("zoomend", onZoom);
+    const updateZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", updateZoom);
+    return () => map.off("zoomend", updateZoom);
   }, [map]);
 
   useEffect(() => {
     if (!map || !stations || stations.length === 0) {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
       }
       return;
     }
 
     import("leaflet.heat").then(() => {
-      if (layerRef.current) map.removeLayer(layerRef.current);
+      if (heatLayerRef.current) map.removeLayer(heatLayerRef.current);
 
       const currentZoom = map.getZoom();
       const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
 
-      let processed = stations;
-      if (stations.length > 25000) processed = stations.filter((_, i) => i % 3 === 0);
+      let processedStations = stations;
+      if (stations.length > 25000) {
+        processedStations = stations.filter((_, idx) => idx % 3 === 0);
+        console.log(
+          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
+        );
+      }
 
       const sumQty = (arr) =>
         arr.reduce(
@@ -149,14 +95,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         );
 
       const maxIntensity = Math.max(
-        ...processed.map((s) =>
+        ...processedStations.map((s) =>
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
             : 1
         )
       );
 
-      const heatData = processed.map((s) => {
+      const heatData = processedStations.map((s) => {
         const weight =
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
@@ -165,7 +111,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       });
 
       // @ts-ignore
-      layerRef.current = L.heatLayer(heatData, {
+      heatLayerRef.current = L.heatLayer(heatData, {
         radius,
         blur: 15,
         maxZoom: 17,
@@ -175,9 +121,9 @@ function HeatmapLayer({ stations, intensity = 1 }) {
     });
 
     return () => {
-      if (layerRef.current) {
-        map.removeLayer(layerRef.current);
-        layerRef.current = null;
+      if (heatLayerRef.current) {
+        map.removeLayer(heatLayerRef.current);
+        heatLayerRef.current = null;
       }
     };
   }, [map, stations, intensity, zoom]);
@@ -192,6 +138,47 @@ function StationMarker({ station, onClick }) {
       eventHandlers={{ click: () => onClick(station) }}
     />
   );
+}
+
+/* ---------- Helpers just for Council layer ---------- */
+const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
+
+/** Deep search for any key that *looks like* a postcode */
+function findPostcode(obj) {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const [k, v] of Object.entries(obj)) {
+    const key = ci(k) || "";
+    if (
+      key.includes("postcode") ||
+      key === "post code" ||
+      key.includes("postalcode") ||
+      key.includes("post_code") ||
+      key.includes("zip")
+    ) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    if (v && typeof v === "object") {
+      const deep = findPostcode(v);
+      if (deep) return deep;
+    }
+  }
+  return undefined;
+}
+
+/** Deep search for town/city */
+function findTown(obj) {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const [k, v] of Object.entries(obj)) {
+    const key = ci(k) || "";
+    if (key === "town" || key === "city" || key.includes("locality")) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    if (v && typeof v === "object") {
+      const deep = findTown(v);
+      if (deep) return deep;
+    }
+  }
+  return undefined;
 }
 
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
@@ -223,33 +210,57 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       const url = `/api/council-stations?bbox=${bboxStr}`;
       const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
-      if (response.ok && data.features) {
-        const items = data.features.map((f) => ({
-          id: Number(f.properties.id),
-          name: f.properties.title || f.properties.AddressInfo?.Title,
-          lat: f.geometry.coordinates[1],
-          lng: f.geometry.coordinates[0],
-          address:
-            f.properties.AddressInfo?.AddressLine1 ||
-            f.properties.AddressInfo?.Town ||
-            "",
-          postcode: f.properties.AddressInfo?.Postcode || "",
-          connectors: [
+      if (response.ok && data?.features) {
+        const items = data.features.map((f) => {
+          const p = f.properties || {};
+          const ai = p.AddressInfo || {};
+
+          // Title / address bits
+          const name =
+            p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
+          const addressLine =
+            p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
+
+          // Robust extraction for town & postcode
+          const town = findTown({ ...p, ...ai });
+          const postcode =
+            findPostcode({ ...p, ...ai }) ||
+            // sometimes people smuggle postcode into the "title"
+            (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
+            (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
+            undefined;
+
+          // Quantity
+          const qty =
+            typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
+              ? p.NumberOfPoints
+              : 1;
+
+          // Per your request: default **council** connectors to "Type 2"
+          // so they wire into the legend + drawer instead of "Unknown".
+          const connectors = [
             {
-              type: "Unknown",
-              quantity:
-                typeof f.properties.NumberOfPoints === "number"
-                  ? f.properties.NumberOfPoints
-                  : 1,
+              type: "Type 2",
+              quantity: qty,
             },
-          ],
-          isCouncil: true,
-        }));
+          ];
+
+          return {
+            id: Number(p.id),
+            name,
+            lat: f.geometry.coordinates[1],
+            lng: f.geometry.coordinates[0],
+            address: addressLine,
+            town,
+            postcode,
+            connectors,
+            isCouncil: true,
+          };
+        });
         setCouncilStations(items);
         setCache(cacheKey, { items, count: items.length });
-        try {
-          telemetry?.councilSelected?.("viewport", items.length);
-        } catch {}
+        lastBboxRef.current = bboxStr;
+        telemetry.councilSelected("viewport", items.length);
       }
     } catch (err) {
       console.error("[CouncilMarkerLayer] Fetch error:", err);
@@ -438,12 +449,8 @@ export default function EnhancedMap({
   }, [externalUserLocation]);
 
   const handleStationClick = useCallback((station) => {
-    // sanitize BEFORE opening drawer so bad shapes can’t crash render
-    const safe = sanitizeStation(station);
-    setActiveStation(safe);
-    try {
-      telemetry?.drawerOpen?.(safe?.id ?? "unknown", Boolean(safe?.isCouncil));
-    } catch {}
+    setActiveStation(station);
+    telemetry.drawerOpen(station.id, station.isCouncil || false);
   }, []);
 
   const handleDrawerClose = useCallback(() => {
@@ -517,7 +524,6 @@ export default function EnhancedMap({
         </div>
       )}
 
-      {/* compact legend (kept as you had) */}
       <div
         style={{
           position: "absolute",
@@ -526,19 +532,24 @@ export default function EnhancedMap({
           zIndex: 1000,
           background: "white",
           padding: "8px",
-          borderRadius: "6px",
+          borderRadius: "8px",
           boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
           fontSize: "11px",
+          minWidth: 160,
         }}
       >
-        <div style={{ fontWeight: "600", marginBottom: "6px", color: "#1f2937" }}>
+        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
           Legend
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}>
-          <div style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }} />
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+        >
+          <div
+            style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
+          />
           <span>Charging stations</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <div
             style={{
               width: "12px",
@@ -550,13 +561,41 @@ export default function EnhancedMap({
           />
           <span>Council markers</span>
         </div>
+
+        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
+          Connector types
+        </div>
+        {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
+          <div
+            key={label}
+            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+          >
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                background: String(color),
+              }}
+            />
+            <span>{label}</span>
+          </div>
+        ))}
       </div>
 
       <MapContainer
         ref={mapRef}
         center={[54.5, -4]}
         zoom={6}
-        style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: "100%",
+          height: "100%",
+        }}
         scrollWheelZoom={true}
         bounds={[
           [-8.649, 49.823],
@@ -602,14 +641,11 @@ export default function EnhancedMap({
         />
       </MapContainer>
 
-      {/* Drawer wrapped ONLY in a tiny boundary so a bad record can't crash the app */}
-      <DrawerBoundary>
-        <StationDrawer
-          station={activeStation}
-          onClose={handleDrawerClose}
-          onFeedbackSubmit={handleFeedbackSubmit}
-        />
-      </DrawerBoundary>
+      <StationDrawer
+        station={activeStation}
+        onClose={handleDrawerClose}
+        onFeedbackSubmit={handleFeedbackSubmit}
+      />
 
       <style jsx global>{`
         @keyframes spin {
