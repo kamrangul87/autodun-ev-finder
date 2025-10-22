@@ -1,11 +1,11 @@
+"use client";
+
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import type { Station, Connector } from "../types/stations";
 
-// ------- minimal helpers (visuals unchanged from the compact floating drawer you approved) -------
-
+// ------- helpers (no UI changes) -------
 const isNonEmpty = (s?: string | null) => typeof s === "string" && s.trim().length > 0;
 
-// Map various OpenCharge labels/IDs to our 3 canonical buckets
 function normalizeLabel(raw: string): "CCS" | "CHAdeMO" | "Type 2" | null {
   const t = raw.toLowerCase();
   if (t.includes("ccs") || t.includes("combo")) return "CCS";
@@ -14,15 +14,12 @@ function normalizeLabel(raw: string): "CCS" | "CHAdeMO" | "Type 2" | null {
   return null;
 }
 
-// OpenCharge connection -> canonical label
 function ocConnToLabel(conn: any): "CCS" | "CHAdeMO" | "Type 2" | null {
-  // Prefer explicit title
   const title: string | undefined = conn?.ConnectionType?.Title || conn?.ConnectionTypeTitle;
   if (isNonEmpty(title)) {
     const byTitle = normalizeLabel(title!);
     if (byTitle) return byTitle;
   }
-  // Fallback to common ConnectionTypeID values seen in OCM
   const id: number | undefined =
     typeof conn?.ConnectionTypeID === "number" ? conn.ConnectionTypeID : undefined;
   switch (id) {
@@ -32,41 +29,39 @@ function ocConnToLabel(conn: any): "CCS" | "CHAdeMO" | "Type 2" | null {
     case 2: // CHAdeMO
       return "CHAdeMO";
     case 25: // Type 2 (Mennekes)
-    case 30: // Tesla (Type 2) – treat as Type 2 bucket for UI
+    case 30: // Tesla (Type 2) → display as Type 2
       return "Type 2";
     default:
       return null;
   }
 }
 
-// Build a clean list of connectors for the drawer without changing your map data
 function deriveConnectorsForDisplay(station: any): Array<{ label: string; quantity: number }> {
-  // 1) Use normalized connectors if present
+  // Use normalized connectors if present
   if (Array.isArray(station?.connectors) && station.connectors.length > 0) {
     const byType: Record<string, number> = {};
     (station.connectors as Connector[]).forEach((c) => {
       const raw = (c as any)?.type || (c as any)?.label || "Unknown";
-      const q = typeof (c as any)?.quantity === "number" && (c as any).quantity > 0 ? (c as any).quantity : 1;
+      const q =
+        typeof (c as any)?.quantity === "number" && (c as any).quantity > 0 ? (c as any).quantity : 1;
       const canon = normalizeLabel(String(raw)) || (String(raw).trim() || "Unknown");
       byType[canon] = (byType[canon] || 0) + q;
     });
     return Object.entries(byType).map(([label, quantity]) => ({ label, quantity }));
   }
 
-  // 2) Fallback to OpenChargeMap shape: AddressInfo + Connections[]
+  // Fallback to OpenChargeMap shape
   const oc = station?.Connections || station?.connections;
   if (Array.isArray(oc) && oc.length > 0) {
     const byType: Record<string, number> = {};
     oc.forEach((conn: any) => {
       const canon = ocConnToLabel(conn) || normalizeLabel(conn?.ConnectionType?.Title || "") || "Unknown";
-      const qty =
-        typeof conn?.Quantity === "number" && conn.Quantity > 0 ? conn.Quantity : 1;
+      const qty = typeof conn?.Quantity === "number" && conn.Quantity > 0 ? conn.Quantity : 1;
       byType[canon] = (byType[canon] || 0) + qty;
     });
     return Object.entries(byType).map(([label, quantity]) => ({ label, quantity }));
   }
 
-  // 3) Nothing available
   return [];
 }
 
@@ -79,7 +74,6 @@ type Props = {
 export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Props) {
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
-
   const [vote, setVote] = useState<"good" | "bad" | null>(null);
   const [comment, setComment] = useState("");
 
@@ -88,7 +82,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     setComment("");
   }, [station?.id]);
 
-  // Keep the same hardened focus/scroll/outside-click behavior you asked for earlier
+  // Hardened focus/scroll/outside-click behavior
   useEffect(() => {
     if (!station) return;
 
@@ -127,7 +121,6 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     (station as any)?.AddressInfo?.AddressLine1 ||
     (station as any)?.AddressInfo?.Title ||
     (station as any)?.AddressInfo?.Town ||
-    (station as any)?.AddressInfo?.TownName ||
     (station as any)?.AddressInfo?.Place ||
     "—";
 
@@ -150,12 +143,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   return (
     <div
       ref={backdropRef}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 2000,
-        background: "transparent",
-      }}
+      style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }}
     >
       <div
         ref={panelRef}
@@ -166,7 +154,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           right: 16,
           top: 16,
           bottom: 16,
-          width: 380,           // matches the compact floating drawer you liked
+          width: 380,
           maxWidth: "92vw",
           background: "#fff",
           borderRadius: 12,
@@ -204,13 +192,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           <button
             onClick={onClose}
             aria-label="Close"
-            style={{
-              border: 0,
-              background: "transparent",
-              padding: 6,
-              borderRadius: 8,
-              cursor: "pointer",
-            }}
+            style={{ border: 0, background: "transparent", padding: 6, borderRadius: 8, cursor: "pointer" }}
           >
             ✕
           </button>
@@ -218,7 +200,6 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
 
         {/* body */}
         <div style={{ padding: 16, overflowY: "auto" }}>
-          {/* Address (with postcode when available) */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Address:</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -247,7 +228,6 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             </div>
           </div>
 
-          {/* Connectors (text-only – icons/legend unchanged) */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
               Connectors:{" "}
@@ -292,7 +272,6 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             )}
           </div>
 
-          {/* Actions */}
           <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
             <a
               href={
@@ -336,7 +315,6 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             </button>
           </div>
 
-          {/* Rating + comment (feedback disabled for council as before) */}
           <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>Rate this location</div>
           <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <button
