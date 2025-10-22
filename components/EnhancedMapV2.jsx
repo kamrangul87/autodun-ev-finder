@@ -13,13 +13,13 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer";
+import StationDrawer from "./StationDrawer"; // drawer handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 
-// -------- helpers ----------
+// ---------- helpers ----------
 const toBool = (v) => {
   if (typeof v === "boolean") return v;
   if (typeof v === "number") return v !== 0;
@@ -61,14 +61,14 @@ function MapInitializer() {
   return null;
 }
 
-// NEW: ensure a dedicated pane for council markers (fixes desktop z-order)
+// Ensure a dedicated pane for council markers (fixes desktop z-order)
 function EnsureCouncilPane() {
   const map = useMap();
   useEffect(() => {
     const name = "council-pane";
     if (!map.getPane(name)) {
       const pane = map.createPane(name);
-      pane.style.zIndex = "450"; // above tiles/heat, below drawer
+      pane.style.zIndex = "650"; // ABOVE markerPane(600) & overlayPane(400); still below your drawer
       pane.style.pointerEvents = "auto";
     }
   }, [map]);
@@ -141,7 +141,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       }).addTo(map);
     });
 
-    return () => {
+  return () => {
       if (heatLayerRef.current) {
         map.removeLayer(heatLayerRef.current);
         heatLayerRef.current = null;
@@ -167,7 +167,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const fetchTimeoutRef = useRef(null);
   const lastBboxRef = useRef(null);
 
-  // NEW: coerce in case parent passes "1"/"true"
   const showCouncilBool = toBool(showCouncil);
 
   const fetchCouncilData = useCallback(async () => {
@@ -238,15 +237,17 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   return (
     <MarkerClusterGroup
       chunkedLoading
-      key={`council-${showCouncilBool ? "on" : "off"}`} // force clean mount on toggle
+      pane="council-pane"                               // <-- important for desktop
+      key={`council-${showCouncilBool ? "on" : "off"}`} // remount on toggle
+      disableClusteringAtZoom={13}                      // optional UX
     >
       {councilStations.map((station) => (
         <Marker
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
-          pane="council-pane"               // NEW: render in dedicated pane
-          zIndexOffset={200}
+          pane="council-pane"
+          zIndexOffset={1000}
           eventHandlers={{ click: () => onMarkerClick(station) }}
         />
       ))}
@@ -304,8 +305,7 @@ function ViewportFetcher({
       try {
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
-        /* eslint-disable no-labels */
-        thelimit: {}
+        /* eslint-disable no-labels */ thelimit: {}
         const limitPerTile = isFirstLoad ? 500 : 750;
         const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
@@ -425,6 +425,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
+      // (wire to /api/feedback if needed later)
     },
     [onToast]
   );
@@ -547,7 +548,7 @@ export default function EnhancedMap({
         ]}
       >
         <MapInitializer />
-        <EnsureCouncilPane /> {/* <-- NEW */}
+        <EnsureCouncilPane />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url={
