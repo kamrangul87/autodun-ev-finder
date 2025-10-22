@@ -19,6 +19,14 @@ import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 
+// ---- helpers ----
+const toBool = (v) => {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  if (typeof v === "string") return v === "1" || v.toLowerCase() === "true";
+  return false;
+};
+
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -49,6 +57,20 @@ function MapInitializer() {
   useEffect(() => {
     const timer = setTimeout(() => map.invalidateSize(), 100);
     return () => clearTimeout(timer);
+  }, [map]);
+  return null;
+}
+
+// Ensure a dedicated pane exists for council markers (consistent z-index on desktop)
+function EnsureCouncilPane() {
+  const map = useMap();
+  useEffect(() => {
+    const name = "council-pane";
+    if (!map.getPane(name)) {
+      const pane = map.createPane(name);
+      pane.style.zIndex = "450"; // above tiles/heat, below drawer
+      pane.style.pointerEvents = "auto";
+    }
   }, [map]);
   return null;
 }
@@ -139,14 +161,17 @@ function StationMarker({ station, onClick }) {
   );
 }
 
+// Council markers rendered in a dedicated pane; no popups, same drawer click
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
   const fetchTimeoutRef = useRef(null);
   const lastBboxRef = useRef(null);
 
+  const showCouncilBool = toBool(showCouncil);
+
   const fetchCouncilData = useCallback(async () => {
-    if (!showCouncil) {
+    if (!showCouncilBool) {
       setCouncilStations([]);
       return;
     }
@@ -195,7 +220,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
     } catch (err) {
       console.error("[CouncilMarkerLayer] Fetch error:", err);
     }
-  }, [map, showCouncil]);
+  }, [map, showCouncilBool]);
 
   useMapEvents({
     moveend: () => {
@@ -206,17 +231,22 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
   useEffect(() => {
     fetchCouncilData();
-  }, [fetchCouncilData, showCouncil]);
+  }, [fetchCouncilData, showCouncilBool]);
 
-  if (!showCouncil || councilStations.length === 0) return null;
+  if (!showCouncilBool || councilStations.length === 0) return null;
 
   return (
-    <MarkerClusterGroup chunkedLoading>
+    <MarkerClusterGroup
+      chunkedLoading
+      key={`council-${showCouncilBool ? "on" : "off"}`} // force clean mount on toggle
+    >
       {councilStations.map((station) => (
         <Marker
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
+          pane="council-pane"
+          zIndexOffset={200}
           eventHandlers={{ click: () => onMarkerClick(station) }}
         />
       ))}
@@ -274,9 +304,8 @@ function ViewportFetcher({
       try {
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
-        thelimit: {
-          /* eslint-disable no-labels */
-        }
+        /* eslint-disable no-labels */
+        thelimit: {}
         const limitPerTile = isFirstLoad ? 500 : 750;
         const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
@@ -370,6 +399,9 @@ export default function EnhancedMap({
   const [userLocation, setUserLocation] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
+
+  // coerce council prop in case it's coming from URL as "1"/"true"
+  const showCouncilBool = toBool(showCouncil);
 
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
@@ -516,6 +548,7 @@ export default function EnhancedMap({
         ]}
       >
         <MapInitializer />
+        <EnsureCouncilPane />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           url={
@@ -544,7 +577,7 @@ export default function EnhancedMap({
           </MarkerClusterGroup>
         )}
         <CouncilMarkerLayer
-          showCouncil={showCouncil}
+          showCouncil={showCouncilBool}
           onMarkerClick={handleStationClick}
         />
         <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
