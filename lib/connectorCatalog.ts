@@ -1,37 +1,49 @@
 // lib/connectorCatalog.ts
-export type CanonicalConnector = "CCS" | "CHAdeMO" | "Type 2";
-
-export const CONNECTOR_COLORS: Record<CanonicalConnector, string> = {
-  CCS: "#0ea5e9",       // sky-500
-  CHAdeMO: "#f59e0b",   // amber-500
-  "Type 2": "#10b981",  // emerald-500
+export const CONNECTOR_COLORS: Record<string, string> = {
+  CCS: "#3b82f6",       // blue
+  CHAdeMO: "#f59e0b",   // amber
+  "Type 2": "#22c55e",  // green
 };
 
-const contains = (s: string | undefined | null, needle: string) =>
-  !!s && s.toLowerCase().includes(needle.toLowerCase());
+const TYPE_ALIASES: Array<[RegExp, "CCS" | "CHAdeMO" | "Type 2"]> = [
+  [/ccs/i, "CCS"],
+  [/combo\s*2/i, "CCS"],
+  [/combined\s*charging/i, "CCS"],
 
-/** Map a raw connector title/name into one of the 3 canonical types (best effort). */
-export function toCanonicalConnector(title?: string | null): CanonicalConnector | null {
-  if (!title) return null;
-  if (contains(title, "ccs")) return "CCS";
-  if (contains(title, "chademo")) return "CHAdeMO";
-  if (contains(title, "type 2") || contains(title, "type-2") || contains(title, "mennekes"))
-    return "Type 2";
+  [/chademo/i, "CHAdeMO"],
+  [/cha\s*de\s*mo/i, "CHAdeMO"],
+
+  [/type\s*2/i, "Type 2"],
+  [/mennekes/i, "Type 2"],
+];
+
+export function normalizeConnectorLabel(raw?: string): "CCS" | "CHAdeMO" | "Type 2" | null {
+  if (!raw) return null;
+  for (const [rx, label] of TYPE_ALIASES) {
+    if (rx.test(raw)) return label;
+  }
   return null;
 }
 
-/** Aggregate any list of {type, quantity, powerKW?} into the 3 canonical buckets. */
+/** Aggregate arbitrary connectors to canonical CCS/CHAdeMO/Type 2 buckets */
 export function aggregateToCanonical(
-  raw: Array<{ type?: string; quantity?: number; powerKW?: number }>
-): Array<{ label: CanonicalConnector; quantity: number }> {
-  const tally: Record<CanonicalConnector, number> = { CCS: 0, CHAdeMO: 0, "Type 2": 0 };
-  for (const c of raw || []) {
-    const label = toCanonicalConnector(c?.type || "");
-    if (!label) continue;
-    const q = typeof c?.quantity === "number" && c.quantity > 0 ? c.quantity : 1;
-    tally[label] += q;
+  connectors: Array<{ type?: string; quantity?: number }>
+): Array<{ label: "CCS" | "CHAdeMO" | "Type 2"; quantity: number }> {
+  const bucket: Record<"CCS" | "CHAdeMO" | "Type 2", number> = {
+    CCS: 0,
+    CHAdeMO: 0,
+    "Type 2": 0,
+  };
+  for (const c of connectors || []) {
+    const qty = typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1;
+    const label = normalizeConnectorLabel(c?.type || "");
+    if (label) bucket[label] += qty;
   }
-  return (Object.keys(tally) as CanonicalConnector[])
-    .filter((k) => tally[k] > 0)
-    .map((k) => ({ label: k, quantity: tally[k] }));
+  return (Object.entries(bucket) as Array<[any, number]>)
+    .filter(([, q]) => q > 0)
+    .map(([label, quantity]) => ({ label, quantity })) as Array<{
+    label: "CCS" | "CHAdeMO" | "Type 2";
+    quantity: number;
+  }>;
 }
+
