@@ -1,5 +1,5 @@
 // components/StationDrawer.tsx
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
@@ -45,9 +45,11 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const list = Array.from(el.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      ));
+      const list = Array.from(
+        el.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+      );
       if (!list.length) return;
 
       const current = document.activeElement as HTMLElement | null;
@@ -76,7 +78,7 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
 }
 
 /* ------------------------------------------------------------------ */
-/* Utilities                                                           */
+/* Connector helpers                                                   */
 /* ------------------------------------------------------------------ */
 const sumConnectors = (connectors?: Connector[]) => {
   if (!Array.isArray(connectors) || connectors.length === 0) return null;
@@ -162,9 +164,34 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     (station as unknown as { AddressInfo?: { Town?: string } })?.AddressInfo?.Town ??
     undefined;
 
-  const totalConnectors = useMemo(() => sumConnectors(station?.connectors), [station]);
-  const perLines = useMemo(() => prettyConnectorLines(station?.connectors), [station]);
   const isCouncil = Boolean((station as any)?.isCouncil);
+
+  // Derive total connectors with smart fallbacks
+  const totalConnectorsNumOrNull = useMemo(() => {
+    const connectors = (station as any)?.connectors as Connector[] | undefined;
+
+    // If we have per-connector details, sum them.
+    const summed = sumConnectors(connectors);
+    if (summed !== null) return summed;
+
+    // Try NumberOfPoints (present on council feed items sometimes).
+    const npts = (station as any)?.NumberOfPoints;
+    if (typeof npts === "number" && npts > 0) return npts;
+
+    // Council feed with no per-connector: assume one logical point
+    if (isCouncil) return 1;
+
+    // Unknown for everything else.
+    return null;
+  }, [station, isCouncil]);
+
+  const totalConnectorsLabel =
+    totalConnectorsNumOrNull !== null ? String(totalConnectorsNumOrNull) : "Unknown";
+
+  const perLines = useMemo(
+    () => prettyConnectorLines((station as any)?.connectors as Connector[] | undefined),
+    [station]
+  );
 
   if (!open) return null;
 
@@ -181,33 +208,33 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
         justifyContent: "flex-end",
       }}
     >
-      {/* Drawer card */}
+      {/* Drawer card (narrower + slightly tighter padding) */}
       <div
         ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         style={{
-          width: "min(420px, 92vw)",
+          width: "min(360px, 90vw)",       // was 420px, now slimmer
           height: "100%",
           background: "#fff",
           boxShadow:
             "0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)",
           borderLeft: "1px solid rgba(0,0,0,0.06)",
-          padding: "14px 14px 12px 14px",
+          padding: "12px 12px 10px 12px",  // slightly tighter
           display: "flex",
           flexDirection: "column",
-          gap: "10px",
+          gap: "8px",
         }}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <h3
                 style={{
-                  fontSize: 18,
+                  fontSize: 17,
                   fontWeight: 700,
                   lineHeight: 1.2,
                   margin: 0,
@@ -223,11 +250,11 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               {isCouncil && (
                 <span
                   style={{
-                    fontSize: 12,
+                    fontSize: 11,
                     fontWeight: 600,
                     background: "#ede9fe",
                     color: "#6d28d9",
-                    padding: "3px 8px",
+                    padding: "2px 7px",
                     borderRadius: 999,
                     whiteSpace: "nowrap",
                   }}
@@ -248,9 +275,9 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               appearance: "none",
               border: 0,
               background: "transparent",
-              width: 36,
-              height: 36,
-              borderRadius: 10,
+              width: 32,
+              height: 32,
+              borderRadius: 8,
               display: "grid",
               placeItems: "center",
               cursor: "pointer",
@@ -280,13 +307,14 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             border: "1px solid #efefef",
           }}
         >
-          <div style={{ fontWeight: 600, color: "#374151" }}>Address:</div>
+          <div style={{ fontWeight: 600, color: "#374151", fontSize: 13 }}>Address:</div>
           <div
             style={{
               color: "#111827",
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
+              fontSize: 13,
             }}
             title={`${address}${postcode ? `, ${postcode}` : ""}`}
           >
@@ -316,23 +344,23 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             gap: 6,
           }}
         >
-          <div style={{ fontWeight: 700, color: "#111827" }}>
-            Connectors: {totalConnectors ?? "Unknown"}
+          <div style={{ fontWeight: 700, color: "#111827", fontSize: 14 }}>
+            Connectors: {totalConnectorsLabel}
           </div>
-          <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 14 }}>
+          <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 13 }}>
             {perLines.map((l, i) => (
               <li key={i}>{l}</li>
             ))}
           </ul>
           {isCouncil && (
-            <div style={{ fontSize: 12, color: "#6b7280" }}>
+            <div style={{ fontSize: 11, color: "#6b7280" }}>
               Council feed may not include per-connector details.
             </div>
           )}
         </div>
 
         {/* CTA row */}
-        <div style={{ display: "flex", gap: 10, marginTop: 2 }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
           <a
             href={
               station
@@ -348,7 +376,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             ➤ Directions
           </a>
 
-        <button
+          <button
             onClick={() => {
               if (!station) return;
               const text =
@@ -366,8 +394,8 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
 
         {/* Feedback */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontSize: 13, color: "#374151" }}>Rate this location</div>
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ fontSize: 12.5, color: "#374151" }}>Rate this location</div>
+          <div style={{ display: "flex", gap: 8 }}>
             <button
               style={voteBtnStyle}
               onClick={() => station && onFeedbackSubmit?.((station as any).id, "up")}
@@ -403,7 +431,7 @@ const copyBtnStyle: CSSProperties = {
   background: "#fff",
   padding: "6px 10px",
   borderRadius: 8,
-  fontSize: 13,
+  fontSize: 12.5,
   cursor: "pointer",
 };
 
@@ -416,12 +444,13 @@ const primaryBtnStyle: CSSProperties = {
   border: 0,
   background: "#2563eb",
   color: "#fff",
-  padding: "12px 14px",
+  padding: "11px 12px",
   borderRadius: 10,
   fontWeight: 700,
   width: "100%",
   cursor: "pointer",
   boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+  fontSize: 14,
 };
 
 const secondaryBtnStyle: CSSProperties = {
@@ -435,6 +464,7 @@ const voteBtnStyle: CSSProperties = {
   ...secondaryBtnStyle,
   padding: "10px 12px",
   fontWeight: 600,
+  fontSize: 13,
 };
 
 const footerSubmitStyle: CSSProperties = {
