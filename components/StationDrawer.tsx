@@ -73,9 +73,17 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
 }
 
 /* ------------------------ Normalization helpers ----------------------- */
-// → return your Connector[] shape regardless of source
+function pick<T = any>(obj: any, keys: string[]): T | undefined {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && v !== "") return v as T;
+  }
+  return undefined;
+}
+
+// Normalize into your Connector[] shape regardless of source.
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Already normalized
+  // 1) Already normalized (your app)
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
       type: c?.type ?? "Unknown",
@@ -84,7 +92,8 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
     }));
   }
-  // 2) OpenChargeMap
+
+  // 2) OpenChargeMap (Connections[])
   if (Array.isArray(station?.Connections) && station.Connections.length) {
     return station.Connections.map((c: any) => ({
       type:
@@ -96,14 +105,20 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined,
     }));
   }
-  // 3) Council feed (no per-connector detail)
-  if (typeof station?.NumberOfPoints === "number" && station.NumberOfPoints > 0) {
-    return [{ type: "Unknown", quantity: station.NumberOfPoints }];
+
+  // 3) Council dataset: NumberOfPoints if provided
+  const npts =
+    pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ?? null;
+  if (typeof npts === "number" && npts > 0) {
+    return [{ type: "Unknown", quantity: npts }];
   }
-  // 4) If explicitly a council row with nothing else, assume 1 logical point
+
+  // 4) If explicitly council row and no info, assume one logical point
   if (station?.isCouncil) {
     return [{ type: "Unknown", quantity: 1 }];
   }
+
+  // 5) nothing
   return null;
 }
 
@@ -160,24 +175,42 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   }, [open, station]);
 
   /* -------- normalized display fields (handles all shapes) -------- */
-  const isCouncil = Boolean((station as any)?.isCouncil);
-  const title = (station as any)?.name || "Unknown location";
+  const s: any = station || {};
+  const isCouncil = Boolean(s.isCouncil);
+  const title = s.name || "Unknown location";
 
-  const ai = (station as any)?.AddressInfo || {};
-  const addressLine1: string | undefined =
-    (station as any)?.address ?? ai.AddressLine1 ?? undefined;
-  const town: string | undefined =
-    (station as any)?.town ?? ai.Town ?? undefined;
-  const postcode: string | undefined =
-    (station as any)?.postcode ?? ai.Postcode ?? undefined;
+  const ai = s.AddressInfo || {};
 
-  // Full address string (AddressLine1, Town, Postcode)
+  // Address line candidates
+  const addressLine1 =
+    pick<string>(s, ["address", "AddressLine1"]) ??
+    pick<string>(ai, ["AddressLine1", "Title"]) ??
+    undefined;
+
+  // Town candidates
+  const town =
+    pick<string>(s, ["town", "city", "Town", "City"]) ??
+    pick<string>(ai, ["Town", "City"]) ??
+    undefined;
+
+  // Postcode candidates (handle different casings/keys)
+  const postcode =
+    pick<string>(s, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
+    pick<string>(ai, ["Postcode", "PostalCode"]) ??
+    undefined;
+
+  // Full address string
   const fullAddress = [addressLine1, town, postcode].filter(Boolean).join(", ") || "—";
 
-  // Normalized connectors + total
-  const connectors = useMemo(() => normalizeConnectors(station as any), [station]);
-  const totalNum = useMemo(() => sumConnectors(connectors), [connectors]);
+  // Normalized connectors + total (never Unknown for council)
+  const connectors = useMemo(() => normalizeConnectors(s), [s]);
+  const totalNum = useMemo(() => {
+    const val = sumConnectors(connectors);
+    if (val !== null) return val;
+    return isCouncil ? 1 : null;
+  }, [connectors, isCouncil]);
   const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
+
   const perLines = useMemo(() => {
     if (!Array.isArray(connectors) || !connectors.length) return ["Unknown × 1"];
     return connectors.map((c) => {
@@ -209,7 +242,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
         aria-label={title}
         onPointerDown={(e) => e.stopPropagation()}
         style={{
-          width: "min(304px, 86vw)", // compact
+          width: "min(288px, 92vw)", // **extra compact drawer**
           height: "100%",
           background: "#fff",
           borderLeft: "1px solid rgba(0,0,0,0.06)",
@@ -220,15 +253,15 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
         }}
       >
         {/* content (scrollable) */}
-        <div style={{ padding: "8px 10px 8px", overflowY: "auto" }}>
+        <div style={{ padding: "8px 9px", overflowY: "auto" }}>
           {/* header */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <h3
                   title={title}
                   style={{
-                    fontSize: 16,
+                    fontSize: 15,
                     fontWeight: 700,
                     margin: 0,
                     color: "#111827",
@@ -242,11 +275,11 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
                 {isCouncil && (
                   <span
                     style={{
-                      fontSize: 11,
+                      fontSize: 10.5,
                       fontWeight: 600,
                       background: "#ede9fe",
                       color: "#6d28d9",
-                      padding: "2px 6px",
+                      padding: "1px 6px",
                       borderRadius: 999,
                       whiteSpace: "nowrap",
                     }}
@@ -289,15 +322,15 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               display: "grid",
               gridTemplateColumns: "auto 1fr auto",
               alignItems: "center",
-              gap: 8,
-              padding: "8px 10px",
+              gap: 6,
+              padding: "7px 9px",
               borderRadius: 10,
               background: "#fafafa",
               border: "1px solid #efefef",
               marginTop: 8,
             }}
           >
-            <div style={{ fontWeight: 600, color: "#374151", fontSize: 12.5 }}>Address:</div>
+            <div style={{ fontWeight: 600, color: "#374151", fontSize: 12 }}>Address:</div>
             <div
               title={fullAddress}
               style={{
@@ -305,7 +338,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
-                fontSize: 12.5,
+                fontSize: 12,
               }}
             >
               {fullAddress}
@@ -321,7 +354,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           {/* connectors */}
           <div
             style={{
-              padding: "8px 10px",
+              padding: "7px 9px",
               borderRadius: 10,
               background: "#fafafa",
               border: "1px solid #efefef",
@@ -331,28 +364,28 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               marginTop: 8,
             }}
           >
-            <div style={{ fontWeight: 700, color: "#111827", fontSize: 13.5 }}>
+            <div style={{ fontWeight: 700, color: "#111827", fontSize: 13 }}>
               Connectors: {totalLabel}
             </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 12.5 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 12 }}>
               {perLines.map((l, i) => (
                 <li key={i}>{l}</li>
               ))}
             </ul>
             {isCouncil && (
-              <div style={{ fontSize: 11, color: "#6b7280" }}>
+              <div style={{ fontSize: 10.5, color: "#6b7280" }}>
                 Council feed may not include per-connector details.
               </div>
             )}
           </div>
 
           {/* actions */}
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
             <a
               href={
                 station
                   ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                      `${(station as any).lat},${(station as any).lng}`
+                      `${(s.lat as number) ?? ""},${(s.lng as number) ?? ""}`
                     )}`
                   : "#"
               }
@@ -364,11 +397,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             </a>
             <button
               onClick={() => {
-                if (!station) return;
-                const text =
-                  (station as any).name ||
-                  fullAddress ||
-                  `${(station as any).lat}, ${(station as any).lng}`;
+                const text = s.name || fullAddress || `${s.lat}, ${s.lng}`;
                 navigator.clipboard?.writeText(String(text));
               }}
               style={secondaryBtnStyle}
@@ -379,27 +408,25 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
         </div>
 
         {/* footer */}
-        <div style={{ padding: "8px 10px 10px", borderTop: "1px solid #f1f1f1" }}>
-          <div style={{ fontSize: 12.5, color: "#374151", marginBottom: 6 }}>
-            Rate this location
-          </div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <div style={{ padding: "8px 9px 9px", borderTop: "1px solid #f1f1f1" }}>
+          <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>Rate this location</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
             <button
               style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.((station as any).id, "up")}
+              onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
             >
               👍 Good
             </button>
             <button
               style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.((station as any).id, "down")}
+              onClick={() => station && onFeedbackSubmit?.(s.id, "down")}
             >
               👎 Bad
             </button>
           </div>
           <button
             style={footerSubmitStyle}
-            onClick={() => station && onFeedbackSubmit?.((station as any).id, "up")}
+            onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
           >
             Submit feedback
           </button>
@@ -414,9 +441,9 @@ const copyBtnStyle: CSSProperties = {
   appearance: "none",
   border: "1px solid #e5e7eb",
   background: "#fff",
-  padding: "6px 10px",
+  padding: "6px 9px",
   borderRadius: 8,
-  fontSize: 12.5,
+  fontSize: 12,
   cursor: "pointer",
 };
 
@@ -429,13 +456,13 @@ const primaryBtnStyle: CSSProperties = {
   border: 0,
   background: "#2563eb",
   color: "#fff",
-  padding: "10px 12px",
+  padding: "9px 10px",
   borderRadius: 10,
   fontWeight: 700,
   width: "100%",
   cursor: "pointer",
   boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-  fontSize: 13.5,
+  fontSize: 13,
 };
 
 const secondaryBtnStyle: CSSProperties = {
@@ -447,9 +474,9 @@ const secondaryBtnStyle: CSSProperties = {
 
 const voteBtnStyle: CSSProperties = {
   ...secondaryBtnStyle,
-  padding: "9px 10px",
+  padding: "8px 10px",
   fontWeight: 600,
-  fontSize: 12.5,
+  fontSize: 12,
 };
 
 const footerSubmitStyle: CSSProperties = {
