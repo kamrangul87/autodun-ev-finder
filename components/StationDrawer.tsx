@@ -3,6 +3,10 @@ import { useEffect, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
+import {
+  aggregateToCanonical,
+  CONNECTOR_COLORS,
+} from "../lib/connectorCatalog";
 
 /* ───────────────────────────── UX helpers ───────────────────────────── */
 
@@ -27,7 +31,10 @@ function useEscapeToClose(open: boolean, onClose?: () => void) {
   }, [open, onClose]);
 }
 
-function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElement>) {
+function useFocusTrap(
+  enabled: boolean,
+  containerRef: React.RefObject<HTMLElement>
+) {
   useEffect(() => {
     if (!enabled || !containerRef.current) return;
     const el = containerRef.current;
@@ -38,7 +45,9 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
       ) as HTMLElement | null) || el;
 
     const prevActive = document.activeElement as HTMLElement | null;
-    const raf = requestAnimationFrame(() => firstFocusable.focus({ preventScroll: true }));
+    const raf = requestAnimationFrame(() =>
+      firstFocusable.focus({ preventScroll: true })
+    );
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
@@ -51,13 +60,18 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
 
       const cur = (document.activeElement as HTMLElement) || nodes[0];
       if (!el.contains(cur)) {
-        (e.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus({ preventScroll: true });
+        (e.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus({
+          preventScroll: true,
+        });
         e.preventDefault();
         return;
       }
 
       const i = Math.max(0, nodes.indexOf(cur));
-      const next = e.shiftKey ? (i - 1 + nodes.length) % nodes.length : (i + 1) % nodes.length;
+      const next = e.shiftKey
+        ? (i - 1 + nodes.length) % nodes.length
+        : (i + 1) % nodes.length;
+
       if ((e.shiftKey && i === 0) || (!e.shiftKey && i === nodes.length - 1)) {
         nodes[next].focus({ preventScroll: true });
         e.preventDefault();
@@ -67,7 +81,9 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
     document.addEventListener("keydown", onKey, { capture: true });
     return () => {
       cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", onKey, { capture: true } as any);
+      document.removeEventListener("keydown", onKey, {
+        capture: true,
+      } as any);
       prevActive?.focus?.();
     };
   }, [enabled, containerRef]);
@@ -84,17 +100,19 @@ const pick = <T,>(obj: any, keys: string[]): T | undefined => {
 };
 
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Your normalized shape
+  // 1) Already normalized in app
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
       type: c?.type ?? "Unknown",
       quantity:
-        typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1,
+        typeof c?.quantity === "number" && !Number.isNaN(c.quantity)
+          ? c.quantity
+          : 1,
       powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
     }));
   }
 
-  // 2) OpenChargeMap
+  // 2) OpenChargeMap (Connections[])
   if (Array.isArray(station?.Connections) && station.Connections.length) {
     return station.Connections.map((c: any) => ({
       type:
@@ -107,14 +125,13 @@ function normalizeConnectors(station: any): Connector[] | null {
     }));
   }
 
-  // 3) Council dataset: NumberOfPoints (or variants)
+  // 3) Council dataset: NumberOfPoints
   const npts =
-    pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ?? null;
-  if (typeof npts === "number" && npts > 0) {
-    return [{ type: "Unknown", quantity: npts }];
-  }
+    pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
+    null;
+  if (typeof npts === "number" && npts > 0) return [{ type: "Unknown", quantity: npts }];
 
-  // 4) Explicit council row → assume one logical point
+  // 4) Explicit council row fallback
   if (station?.isCouncil) return [{ type: "Unknown", quantity: 1 }];
 
   return null;
@@ -124,7 +141,8 @@ function sumConnectors(list: Connector[] | null): number | null {
   if (!Array.isArray(list) || !list.length) return null;
   let total = 0;
   for (const c of list) {
-    const q = typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 0;
+    const q =
+      typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 0;
     total += q;
   }
   return total > 0 ? total : null;
@@ -142,7 +160,11 @@ type Props = {
   ) => void;
 };
 
-export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Props) {
+export default function StationDrawer({
+  station,
+  onClose,
+  onFeedbackSubmit,
+}: Props) {
   const open = Boolean(station);
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -176,7 +198,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   const s: any = station || {};
   const isCouncil = Boolean(s.isCouncil);
 
-  // Address fields (robust)
+  // Address fields (robust join of line1, town/city, postcode)
   const ai = s.AddressInfo || {};
   const line1 =
     pick<string>(s, ["address", "AddressLine1"]) ??
@@ -189,10 +211,9 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     pick<string>(ai, ["Postcode", "PostalCode"]);
   const fullAddress = [line1, town, postcode].filter(Boolean).join(", ") || "—";
 
-  // Title
   const title = s.name || ai.Title || "Unknown location";
 
-  // Connectors (always numeric for council)
+  // Connectors (aggregate into CCS / CHAdeMO / Type 2)
   const connectors = useMemo(() => normalizeConnectors(s), [s]);
   const totalNum = useMemo(() => {
     const n = sumConnectors(connectors);
@@ -201,28 +222,26 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   }, [connectors, isCouncil]);
   const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
 
-  // Per-type lines; for council with no types → concise message
-  const allTypesUnknown =
-    Array.isArray(connectors) &&
-    connectors.length > 0 &&
-    connectors.every((c) => !c.type || c.type === "Unknown");
-
-  const perTypeLines = useMemo(() => {
+  const canonical = useMemo(() => {
     if (!Array.isArray(connectors) || !connectors.length) return [];
-    if (isCouncil && allTypesUnknown) return [];
-    return connectors.map((c) => {
-      const t = c?.type ? String(c.type) : "Unknown";
-      const q =
-        typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1;
-      return `${t} × ${q}`;
-    });
-  }, [connectors, isCouncil, allTypesUnknown]);
+    return aggregateToCanonical(
+      connectors.map((c) => ({
+        type: c?.type,
+        quantity: c?.quantity,
+        powerKW: (c as any)?.powerKW,
+      }))
+    );
+  }, [connectors]);
+
+  const showTypesMessage =
+    isCouncil &&
+    (!Array.isArray(connectors) || !connectors.length || canonical.length === 0);
 
   if (!open) return null;
 
   return (
     <>
-      {/* transparent overlay to catch outside clicks */}
+      {/* transparent overlay (outside click catcher) */}
       <div
         ref={overlayRef}
         style={{
@@ -232,7 +251,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           background: "transparent",
         }}
       />
-      {/* floating card (NOT full-height) */}
+      {/* floating compact card (keep as-is) */}
       <div
         ref={cardRef}
         role="dialog"
@@ -276,19 +295,27 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               )}
             </div>
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            style={iconBtn}
-          >
+          <button onClick={onClose} aria-label="Close" style={iconBtn}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path d="M6 6l12 12M18 6L6 18" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                stroke="#6b7280"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
         </div>
 
-        {/* Body (scrolls if needed) */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
+        {/* Body */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            overflowY: "auto",
+          }}
+        >
           {/* Address */}
           <div style={cardRow}>
             <div style={rowLabel}>Address:</div>
@@ -308,17 +335,50 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
               Connectors: {totalLabel}
             </div>
-            {perTypeLines.length > 0 ? (
-              <ul style={{ margin: "6px 0 0 16px", padding: 0, color: "#374151", fontSize: 12 }}>
-                {perTypeLines.map((l, i) => (
-                  <li key={i}>{l}</li>
-                ))}
-              </ul>
-            ) : (
+
+            {showTypesMessage ? (
               <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                 Connector types not specified.
               </div>
+            ) : (
+              <ul
+                style={{
+                  margin: "6px 0 0 0",
+                  padding: 0,
+                  listStyle: "none",
+                }}
+              >
+                {canonical.map((c) => (
+                  <li
+                    key={c.label}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 12,
+                      color: "#374151",
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: CONNECTOR_COLORS[c.label],
+                        display: "inline-block",
+                        flex: "0 0 10px",
+                      }}
+                    />
+                    <span>
+                      {c.label} × {c.quantity}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
+
             {isCouncil && (
               <div style={{ marginTop: 4, fontSize: 10.5, color: "#6b7280" }}>
                 Council feed may not include per-connector details.
@@ -354,18 +414,27 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           </div>
         </div>
 
-        {/* Footer (sticks to bottom of the card, not the screen) */}
+        {/* Footer inside the card */}
         <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
           <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button style={voteBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "up")}>
+            <button
+              style={voteBtn}
+              onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
+            >
               👍 Good
             </button>
-            <button style={voteBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "down")}>
+            <button
+              style={voteBtn}
+              onClick={() => station && onFeedbackSubmit?.(s.id, "down")}
+            >
               👎 Bad
             </button>
           </div>
-          <button style={primaryBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "up")}>
+          <button
+            style={primaryBtn}
+            onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
+          >
             Submit feedback
           </button>
         </div>
