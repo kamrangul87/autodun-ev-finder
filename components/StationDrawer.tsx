@@ -147,8 +147,15 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
 
   // Derived display fields (safe against missing data)
   const title = station?.name || "Unknown location";
-  const address = station?.address || station?.AddressInfo?.AddressLine1 || "—";
-  const postcode = station?.postcode || station?.AddressInfo?.Postcode || "—";
+  const address =
+  station?.address ??
+  (station as unknown as { AddressInfo?: { AddressLine1?: string } })?.AddressInfo?.AddressLine1 ??
+  "—";
+
+const postcode =
+  station?.postcode ??
+  (station as unknown as { AddressInfo?: { Postcode?: string } })?.AddressInfo?.Postcode ??
+  "—";
   const totalConnectors = useMemo(() => sumConnectors(station?.connectors), [station]);
   const perLines = useMemo(() => prettyConnectorLines(station?.connectors), [station]);
   const isCouncil = Boolean((station as any)?.isCouncil);
