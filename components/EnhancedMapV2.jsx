@@ -14,11 +14,11 @@ import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
 import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
+import SafeBoundary from "./SafeBoundary";   // <-- NEW: isolate drawer errors
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
-import { CONNECTOR_COLORS } from "../lib/connectorCatalog";
 
 if (typeof window !== "undefined") {
   // @ts-ignore
@@ -140,47 +140,6 @@ function StationMarker({ station, onClick }) {
   );
 }
 
-/* ---------- Helpers just for Council layer ---------- */
-const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
-
-/** Deep search for any key that *looks like* a postcode */
-function findPostcode(obj) {
-  if (!obj || typeof obj !== "object") return undefined;
-  for (const [k, v] of Object.entries(obj)) {
-    const key = ci(k) || "";
-    if (
-      key.includes("postcode") ||
-      key === "post code" ||
-      key.includes("postalcode") ||
-      key.includes("post_code") ||
-      key.includes("zip")
-    ) {
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-    if (v && typeof v === "object") {
-      const deep = findPostcode(v);
-      if (deep) return deep;
-    }
-  }
-  return undefined;
-}
-
-/** Deep search for town/city */
-function findTown(obj) {
-  if (!obj || typeof obj !== "object") return undefined;
-  for (const [k, v] of Object.entries(obj)) {
-    const key = ci(k) || "";
-    if (key === "town" || key === "city" || key.includes("locality")) {
-      if (typeof v === "string" && v.trim()) return v.trim();
-    }
-    if (v && typeof v === "object") {
-      const deep = findTown(v);
-      if (deep) return deep;
-    }
-  }
-  return undefined;
-}
-
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
@@ -210,57 +169,29 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       const url = `/api/council-stations?bbox=${bboxStr}`;
       const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
-      if (response.ok && data?.features) {
-        const items = data.features.map((f) => {
-          const p = f.properties || {};
-          const ai = p.AddressInfo || {};
-
-          // Title / address bits
-          const name =
-            p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
-          const addressLine =
-            p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
-
-          // Robust extraction for town & postcode
-          const town = findTown({ ...p, ...ai });
-          const postcode =
-            findPostcode({ ...p, ...ai }) ||
-            // sometimes people smuggle postcode into the "title"
-            (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
-            (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
-            undefined;
-
-          // Quantity
-          const qty =
-            typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
-              ? p.NumberOfPoints
-              : 1;
-
-          // Per your request: default **council** connectors to "Type 2"
-          // so they wire into the legend + drawer instead of "Unknown".
-          const connectors = [
+      if (response.ok && data.features) {
+        const items = data.features.map((f) => ({
+          id: Number(f.properties.id),
+          name: f.properties.title || f.properties.AddressInfo?.Title,
+          lat: f.geometry.coordinates[1],
+          lng: f.geometry.coordinates[0],
+          address: f.properties.AddressInfo?.AddressLine1,
+          postcode: f.properties.AddressInfo?.Postcode,
+          connectors: [
             {
-              type: "Type 2",
-              quantity: qty,
+              type: "Unknown",
+              quantity:
+                typeof f.properties.NumberOfPoints === "number"
+                  ? f.properties.NumberOfPoints
+                  : 1,
             },
-          ];
-
-          return {
-            id: Number(p.id),
-            name,
-            lat: f.geometry.coordinates[1],
-            lng: f.geometry.coordinates[0],
-            address: addressLine,
-            town,
-            postcode,
-            connectors,
-            isCouncil: true,
-          };
-        });
+          ],
+          isCouncil: true,
+        }));
         setCouncilStations(items);
         setCache(cacheKey, { items, count: items.length });
         lastBboxRef.current = bboxStr;
-        telemetry.councilSelected("viewport", items.length);
+        telemetry?.councilSelected?.("viewport", items.length);
       }
     } catch (err) {
       console.error("[CouncilMarkerLayer] Fetch error:", err);
@@ -344,6 +275,9 @@ function ViewportFetcher({
       try {
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
+        thelimit: {
+          /* eslint-disable no-labels */
+        }
         const limitPerTile = isFirstLoad ? 500 : 750;
         const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
@@ -450,7 +384,12 @@ export default function EnhancedMap({
 
   const handleStationClick = useCallback((station) => {
     setActiveStation(station);
-    telemetry.drawerOpen(station.id, station.isCouncil || false);
+    // SAFE: don’t let missing telemetry crash the app
+    try {
+      telemetry?.drawerOpen?.(station?.id ?? "unknown", Boolean(station?.isCouncil));
+    } catch {
+      // no-op
+    }
   }, []);
 
   const handleDrawerClose = useCallback(() => {
@@ -460,6 +399,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
+      // TODO: post to /api/feedback if needed
     },
     [onToast]
   );
@@ -532,24 +472,23 @@ export default function EnhancedMap({
           zIndex: 1000,
           background: "white",
           padding: "8px",
-          borderRadius: "8px",
+          borderRadius: "6px",
           boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
           fontSize: "11px",
-          minWidth: 160,
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+        <div style={{ fontWeight: "600", marginBottom: "6px", color: "#1f2937" }}>
           Legend
         </div>
         <div
-          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+          style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px" }}
         >
           <div
             style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
-          />
+          ></div>
           <span>Charging stations</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
           <div
             style={{
               width: "12px",
@@ -558,29 +497,9 @@ export default function EnhancedMap({
               transform: "rotate(45deg)",
               border: "1px solid white",
             }}
-          />
+          ></div>
           <span>Council markers</span>
         </div>
-
-        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
-          Connector types
-        </div>
-        {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
-          <div
-            key={label}
-            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
-          >
-            <div
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 999,
-                background: String(color),
-              }}
-            />
-            <span>{label}</span>
-          </div>
-        ))}
       </div>
 
       <MapContainer
@@ -641,11 +560,14 @@ export default function EnhancedMap({
         />
       </MapContainer>
 
-      <StationDrawer
-        station={activeStation}
-        onClose={handleDrawerClose}
-        onFeedbackSubmit={handleFeedbackSubmit}
-      />
+      {/* Drawer floats; map stays interactive outside it */}
+      <SafeBoundary>
+        <StationDrawer
+          station={activeStation}
+          onClose={handleDrawerClose}
+          onFeedbackSubmit={handleFeedbackSubmit}
+        />
+      </SafeBoundary>
 
       <style jsx global>{`
         @keyframes spin {
