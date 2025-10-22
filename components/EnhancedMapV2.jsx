@@ -15,10 +15,10 @@ import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
 import StationDrawer from "./StationDrawer";
-import { LocateMeButton } from "./LocateMeButton.tsx";
+import { LocateMeButton } from "./LocateMeButton";
 import { getCached, setCache } from "../lib/api-cache";
-import { telemetry } from "../utils/telemetry.ts";
-import { findNearestStation } from "../utils/haversine.ts";
+import { telemetry } from "../utils/telemetry";
+import { findNearestStation } from "../utils/haversine";
 
 /* ----------------- helpers ----------------- */
 const toBool = (v) => {
