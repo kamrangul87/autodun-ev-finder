@@ -1,18 +1,19 @@
 // components/StationDrawer.tsx
-import { useEffect, useRef, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
 
-/* ----------------------------- UX helpers ----------------------------- */
+/* ───────────────────────────── UX helpers ───────────────────────────── */
+
 function useBodyScrollLock(locked: boolean) {
   useEffect(() => {
-    const body = typeof document !== "undefined" ? document.body : null;
-    if (!body) return;
-    const prev = body.style.overflow;
-    if (locked) body.style.overflow = "hidden";
+    const b = typeof document !== "undefined" ? document.body : null;
+    if (!b) return;
+    const prev = b.style.overflow;
+    if (locked) b.style.overflow = "hidden";
     return () => {
-      body.style.overflow = prev;
+      b.style.overflow = prev;
     };
   }, [locked]);
 }
@@ -48,14 +49,14 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
       );
       if (!nodes.length) return;
 
-      const current = (document.activeElement as HTMLElement) || nodes[0];
-      if (!el.contains(current)) {
+      const cur = (document.activeElement as HTMLElement) || nodes[0];
+      if (!el.contains(cur)) {
         (e.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus({ preventScroll: true });
         e.preventDefault();
         return;
       }
 
-      const i = Math.max(0, nodes.indexOf(current));
+      const i = Math.max(0, nodes.indexOf(cur));
       const next = e.shiftKey ? (i - 1 + nodes.length) % nodes.length : (i + 1) % nodes.length;
       if ((e.shiftKey && i === 0) || (!e.shiftKey && i === nodes.length - 1)) {
         nodes[next].focus({ preventScroll: true });
@@ -72,18 +73,18 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
   }, [enabled, containerRef]);
 }
 
-/* ------------------------ Normalization helpers ----------------------- */
-function pick<T = any>(obj: any, keys: string[]): T | undefined {
+/* ───────────────────────────── Normalizers ───────────────────────────── */
+
+const pick = <T,>(obj: any, keys: string[]): T | undefined => {
   for (const k of keys) {
     const v = obj?.[k];
     if (v !== undefined && v !== null && v !== "") return v as T;
   }
   return undefined;
-}
+};
 
-// Normalize into your Connector[] shape regardless of source.
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Already normalized (your app)
+  // 1) Your normalized shape
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
       type: c?.type ?? "Unknown",
@@ -93,7 +94,7 @@ function normalizeConnectors(station: any): Connector[] | null {
     }));
   }
 
-  // 2) OpenChargeMap (Connections[])
+  // 2) OpenChargeMap
   if (Array.isArray(station?.Connections) && station.Connections.length) {
     return station.Connections.map((c: any) => ({
       type:
@@ -106,19 +107,16 @@ function normalizeConnectors(station: any): Connector[] | null {
     }));
   }
 
-  // 3) Council dataset: NumberOfPoints if provided
+  // 3) Council dataset: NumberOfPoints (or variants)
   const npts =
     pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ?? null;
   if (typeof npts === "number" && npts > 0) {
     return [{ type: "Unknown", quantity: npts }];
   }
 
-  // 4) If explicitly council row and no info, assume one logical point
-  if (station?.isCouncil) {
-    return [{ type: "Unknown", quantity: 1 }];
-  }
+  // 4) Explicit council row → assume one logical point
+  if (station?.isCouncil) return [{ type: "Unknown", quantity: 1 }];
 
-  // 5) nothing
   return null;
 }
 
@@ -132,7 +130,8 @@ function sumConnectors(list: Connector[] | null): number | null {
   return total > 0 ? total : null;
 }
 
-/* ----------------------------- Component ----------------------------- */
+/* ───────────────────────────── Component ───────────────────────────── */
+
 type Props = {
   station: Station | null;
   onClose?: () => void;
@@ -152,7 +151,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
 
-  // outside click
+  // close on outside click
   useEffect(() => {
     if (!open) return;
     const overlay = overlayRef.current;
@@ -164,7 +163,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     return () => overlay?.removeEventListener("pointerdown", handler);
   }, [open, onClose]);
 
-  // telemetry (debounced)
+  // telemetry
   useEffect(() => {
     if (!open || !station) return;
     const id = setTimeout(
@@ -174,213 +173,161 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     return () => clearTimeout(id);
   }, [open, station]);
 
-  /* -------- normalized display fields (handles all shapes) -------- */
   const s: any = station || {};
   const isCouncil = Boolean(s.isCouncil);
-  const title = s.name || "Unknown location";
 
+  // Address fields (robust)
   const ai = s.AddressInfo || {};
-
-  // Address line candidates
-  const addressLine1 =
+  const line1 =
     pick<string>(s, ["address", "AddressLine1"]) ??
-    pick<string>(ai, ["AddressLine1", "Title"]) ??
-    undefined;
-
-  // Town candidates
+    pick<string>(ai, ["AddressLine1", "Title"]);
   const town =
     pick<string>(s, ["town", "city", "Town", "City"]) ??
-    pick<string>(ai, ["Town", "City"]) ??
-    undefined;
-
-  // Postcode candidates (handle different casings/keys)
+    pick<string>(ai, ["Town", "City"]);
   const postcode =
     pick<string>(s, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
-    pick<string>(ai, ["Postcode", "PostalCode"]) ??
-    undefined;
+    pick<string>(ai, ["Postcode", "PostalCode"]);
+  const fullAddress = [line1, town, postcode].filter(Boolean).join(", ") || "—";
 
-  // Full address string
-  const fullAddress = [addressLine1, town, postcode].filter(Boolean).join(", ") || "—";
+  // Title
+  const title = s.name || ai.Title || "Unknown location";
 
-  // Normalized connectors + total (never Unknown for council)
+  // Connectors (always numeric for council)
   const connectors = useMemo(() => normalizeConnectors(s), [s]);
   const totalNum = useMemo(() => {
-    const val = sumConnectors(connectors);
-    if (val !== null) return val;
+    const n = sumConnectors(connectors);
+    if (n !== null) return n;
     return isCouncil ? 1 : null;
   }, [connectors, isCouncil]);
   const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
 
-  const perLines = useMemo(() => {
-    if (!Array.isArray(connectors) || !connectors.length) return ["Unknown × 1"];
+  // Per-type lines; for council with no types → concise message
+  const allTypesUnknown =
+    Array.isArray(connectors) &&
+    connectors.length > 0 &&
+    connectors.every((c) => !c.type || c.type === "Unknown");
+
+  const perTypeLines = useMemo(() => {
+    if (!Array.isArray(connectors) || !connectors.length) return [];
+    if (isCouncil && allTypesUnknown) return [];
     return connectors.map((c) => {
       const t = c?.type ? String(c.type) : "Unknown";
       const q =
         typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1;
       return `${t} × ${q}`;
     });
-  }, [connectors]);
+  }, [connectors, isCouncil, allTypesUnknown]);
 
   if (!open) return null;
 
   return (
-    <div
-      ref={overlayRef}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 10000,
-        background: "transparent",
-        display: "flex",
-        justifyContent: "flex-end",
-      }}
-    >
+    <>
+      {/* transparent overlay to catch outside clicks */}
+      <div
+        ref={overlayRef}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 10000,
+          background: "transparent",
+        }}
+      />
+      {/* floating card (NOT full-height) */}
       <div
         ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         onPointerDown={(e) => e.stopPropagation()}
-        style={{
-          width: "min(288px, 92vw)", // **extra compact drawer**
-          height: "100%",
-          background: "#fff",
-          borderLeft: "1px solid rgba(0,0,0,0.06)",
-          boxShadow:
-            "0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)",
-          display: "flex",
-          flexDirection: "column",
-        }}
+        style={drawerStyle}
       >
-        {/* content (scrollable) */}
-        <div style={{ padding: "8px 9px", overflowY: "auto" }}>
-          {/* header */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <h3
-                  title={title}
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h3
+                title={title}
+                style={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                  margin: 0,
+                  color: "#111827",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {title}
+              </h3>
+              {isCouncil && (
+                <span
                   style={{
-                    fontSize: 15,
-                    fontWeight: 700,
-                    margin: 0,
-                    color: "#111827",
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    background: "#ede9fe",
+                    color: "#6d28d9",
+                    padding: "2px 6px",
+                    borderRadius: 999,
                     whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
                   }}
                 >
-                  {title}
-                </h3>
-                {isCouncil && (
-                  <span
-                    style={{
-                      fontSize: 10.5,
-                      fontWeight: 600,
-                      background: "#ede9fe",
-                      color: "#6d28d9",
-                      padding: "1px 6px",
-                      borderRadius: 999,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    Council dataset
-                  </span>
-                )}
-              </div>
+                  Council dataset
+                </span>
+              )}
             </div>
-
-            <button
-              aria-label="Close"
-              onClick={onClose}
-              style={{
-                appearance: "none",
-                border: 0,
-                background: "transparent",
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                display: "grid",
-                placeItems: "center",
-                cursor: "pointer",
-              }}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M6 6l12 12M18 6L6 18"
-                  stroke="#6b7280"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
           </div>
-
-          {/* address */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "auto 1fr auto",
-              alignItems: "center",
-              gap: 6,
-              padding: "7px 9px",
-              borderRadius: 10,
-              background: "#fafafa",
-              border: "1px solid #efefef",
-              marginTop: 8,
-            }}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={iconBtn}
           >
-            <div style={{ fontWeight: 600, color: "#374151", fontSize: 12 }}>Address:</div>
-            <div
-              title={fullAddress}
-              style={{
-                color: "#111827",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-                fontSize: 12,
-              }}
-            >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M6 6l12 12M18 6L6 18" stroke="#6b7280" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body (scrolls if needed) */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
+          {/* Address */}
+          <div style={cardRow}>
+            <div style={rowLabel}>Address:</div>
+            <div title={fullAddress} style={rowValue}>
               {fullAddress}
             </div>
             <button
               onClick={() => navigator.clipboard?.writeText(fullAddress)}
-              style={copyBtnStyle}
+              style={chipBtn}
             >
               Copy
             </button>
           </div>
 
-          {/* connectors */}
-          <div
-            style={{
-              padding: "7px 9px",
-              borderRadius: 10,
-              background: "#fafafa",
-              border: "1px solid #efefef",
-              display: "flex",
-              flexDirection: "column",
-              gap: 6,
-              marginTop: 8,
-            }}
-          >
-            <div style={{ fontWeight: 700, color: "#111827", fontSize: 13 }}>
+          {/* Connectors */}
+          <div style={cardRow}>
+            <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
               Connectors: {totalLabel}
             </div>
-            <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 12 }}>
-              {perLines.map((l, i) => (
-                <li key={i}>{l}</li>
-              ))}
-            </ul>
+            {perTypeLines.length > 0 ? (
+              <ul style={{ margin: "6px 0 0 16px", padding: 0, color: "#374151", fontSize: 12 }}>
+                {perTypeLines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Connector types not specified.
+              </div>
+            )}
             {isCouncil && (
-              <div style={{ fontSize: 10.5, color: "#6b7280" }}>
+              <div style={{ marginTop: 4, fontSize: 10.5, color: "#6b7280" }}>
                 Council feed may not include per-connector details.
               </div>
             )}
           </div>
 
-          {/* actions */}
-          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+          {/* Actions */}
+          <div style={{ display: "flex", gap: 6 }}>
             <a
               href={
                 station
@@ -391,7 +338,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
               }
               target="_blank"
               rel="noreferrer"
-              style={primaryBtnStyle}
+              style={primaryBtn}
             >
               ➤ Directions
             </a>
@@ -400,44 +347,86 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
                 const text = s.name || fullAddress || `${s.lat}, ${s.lng}`;
                 navigator.clipboard?.writeText(String(text));
               }}
-              style={secondaryBtnStyle}
+              style={secondaryBtn}
             >
               Copy
             </button>
           </div>
         </div>
 
-        {/* footer */}
-        <div style={{ padding: "8px 9px 9px", borderTop: "1px solid #f1f1f1" }}>
-          <div style={{ fontSize: 12, color: "#374151", marginBottom: 6 }}>Rate this location</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-            <button
-              style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
-            >
+        {/* Footer (sticks to bottom of the card, not the screen) */}
+        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button style={voteBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "up")}>
               👍 Good
             </button>
-            <button
-              style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.(s.id, "down")}
-            >
+            <button style={voteBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "down")}>
               👎 Bad
             </button>
           </div>
-          <button
-            style={footerSubmitStyle}
-            onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
-          >
+          <button style={primaryBtn} onClick={() => station && onFeedbackSubmit?.(s.id, "up")}>
             Submit feedback
           </button>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
-/* ------------------------------- styles ------------------------------- */
-const copyBtnStyle: CSSProperties = {
+/* ───────────────────────────── Styles ───────────────────────────── */
+
+const drawerStyle: CSSProperties = {
+  position: "fixed",
+  right: 12,
+  top: 84, // below the app bar
+  zIndex: 10001,
+  width: "min(286px, 92vw)",
+  maxHeight: "calc(100vh - 96px)",
+  background: "#fff",
+  border: "1px solid #eaeaea",
+  borderRadius: 14,
+  boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
+  padding: 10,
+  display: "flex",
+  flexDirection: "column",
+};
+
+const cardRow: CSSProperties = {
+  padding: "8px 10px",
+  border: "1px solid #efefef",
+  borderRadius: 10,
+  background: "#fafafa",
+};
+
+const rowLabel: CSSProperties = {
+  fontWeight: 700,
+  color: "#374151",
+  fontSize: 12,
+  marginBottom: 4,
+};
+
+const rowValue: CSSProperties = {
+  color: "#111827",
+  fontSize: 12,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const iconBtn: CSSProperties = {
+  appearance: "none",
+  border: 0,
+  background: "transparent",
+  width: 28,
+  height: 28,
+  borderRadius: 8,
+  display: "grid",
+  placeItems: "center",
+  cursor: "pointer",
+};
+
+const chipBtn: CSSProperties = {
   appearance: "none",
   border: "1px solid #e5e7eb",
   background: "#fff",
@@ -445,9 +434,10 @@ const copyBtnStyle: CSSProperties = {
   borderRadius: 8,
   fontSize: 12,
   cursor: "pointer",
+  marginLeft: 8,
 };
 
-const primaryBtnStyle: CSSProperties = {
+const primaryBtn: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -456,7 +446,7 @@ const primaryBtnStyle: CSSProperties = {
   border: 0,
   background: "#2563eb",
   color: "#fff",
-  padding: "9px 10px",
+  padding: "10px 12px",
   borderRadius: 10,
   fontWeight: 700,
   width: "100%",
@@ -465,21 +455,16 @@ const primaryBtnStyle: CSSProperties = {
   fontSize: 13,
 };
 
-const secondaryBtnStyle: CSSProperties = {
-  ...primaryBtnStyle,
+const secondaryBtn: CSSProperties = {
+  ...primaryBtn,
   background: "#fff",
   color: "#111827",
   border: "1px solid #e5e7eb",
 };
 
-const voteBtnStyle: CSSProperties = {
-  ...secondaryBtnStyle,
+const voteBtn: CSSProperties = {
+  ...secondaryBtn,
   padding: "8px 10px",
   fontWeight: 600,
   fontSize: 12,
-};
-
-const footerSubmitStyle: CSSProperties = {
-  ...primaryBtnStyle,
-  marginTop: 0,
 };
