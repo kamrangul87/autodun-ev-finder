@@ -4,9 +4,7 @@ import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
 
-/* ------------------------------------------------------------------ */
-/* Body scroll lock + keyboard/focus handling                          */
-/* ------------------------------------------------------------------ */
+/* ----------------------------- UX helpers ----------------------------- */
 function useBodyScrollLock(locked: boolean) {
   useEffect(() => {
     const body = typeof document !== "undefined" ? document.body : null;
@@ -22,9 +20,7 @@ function useBodyScrollLock(locked: boolean) {
 function useEscapeToClose(open: boolean, onClose?: () => void) {
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose?.();
-    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose?.();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
@@ -35,35 +31,34 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
     if (!enabled || !containerRef.current) return;
     const el = containerRef.current;
 
-    const focusable = el.querySelectorAll<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    const first = focusable[0] || el;
-    const prevActive = document.activeElement as HTMLElement | null;
+    const firstFocusable =
+      (el.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      ) as HTMLElement | null) || el;
 
-    const raf = requestAnimationFrame(() => first.focus({ preventScroll: true }));
+    const prevActive = document.activeElement as HTMLElement | null;
+    const raf = requestAnimationFrame(() => firstFocusable.focus({ preventScroll: true }));
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const list = Array.from(
+      const nodes = Array.from(
         el.querySelectorAll<HTMLElement>(
           'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
         )
       );
-      if (!list.length) return;
+      if (!nodes.length) return;
 
-      const current = document.activeElement as HTMLElement | null;
+      const current = (document.activeElement as HTMLElement) || nodes[0];
       if (!el.contains(current)) {
-        (e.shiftKey ? list[list.length - 1] : list[0]).focus({ preventScroll: true });
+        (e.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus({ preventScroll: true });
         e.preventDefault();
         return;
       }
 
-      const idx = Math.max(0, list.indexOf(current!));
-      const nextIdx = e.shiftKey ? (idx - 1 + list.length) % list.length : (idx + 1) % list.length;
-
-      if ((e.shiftKey && idx === 0) || (!e.shiftKey && idx === list.length - 1)) {
-        list[nextIdx].focus({ preventScroll: true });
+      const i = Math.max(0, nodes.indexOf(current));
+      const next = e.shiftKey ? (i - 1 + nodes.length) % nodes.length : (i + 1) % nodes.length;
+      if ((e.shiftKey && i === 0) || (!e.shiftKey && i === nodes.length - 1)) {
+        nodes[next].focus({ preventScroll: true });
         e.preventDefault();
       }
     };
@@ -77,15 +72,11 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
   }, [enabled, containerRef]);
 }
 
-/* ------------------------------------------------------------------ */
-/* Normalization helpers                                               */
-/* ------------------------------------------------------------------ */
-
-// Normalize into your Connector[] shape regardless of source.
+/* ------------------------ Normalization helpers ----------------------- */
+// → return your Connector[] shape regardless of source
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Already normalized (your app shape)
+  // 1) Already normalized
   if (Array.isArray(station?.connectors) && station.connectors.length) {
-    // coerce values safely
     return station.connectors.map((c: any) => ({
       type: c?.type ?? "Unknown",
       quantity:
@@ -93,76 +84,63 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
     }));
   }
-
-  // 2) OpenChargeMap shape: Connections[]
+  // 2) OpenChargeMap
   if (Array.isArray(station?.Connections) && station.Connections.length) {
     return station.Connections.map((c: any) => ({
       type:
         c?.ConnectionType?.Title ??
-        c?.Level?.Title ??
         c?.ConnectionType?.FormalName ??
+        c?.Level?.Title ??
         "Unknown",
       quantity: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
       powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined,
     }));
   }
-
-  // 3) Council dataset: NumberOfPoints (no breakdown)
+  // 3) Council feed (no per-connector detail)
   if (typeof station?.NumberOfPoints === "number" && station.NumberOfPoints > 0) {
-    return [
-      {
-        type: "Unknown",
-        quantity: station.NumberOfPoints,
-      },
-    ];
+    return [{ type: "Unknown", quantity: station.NumberOfPoints }];
   }
-
-  // 4) Nothing we can use
+  // 4) If explicitly a council row with nothing else, assume 1 logical point
+  if (station?.isCouncil) {
+    return [{ type: "Unknown", quantity: 1 }];
+  }
   return null;
 }
 
-function sumConnectors(connectors: Connector[] | null): number | null {
-  if (!Array.isArray(connectors) || connectors.length === 0) return null;
+function sumConnectors(list: Connector[] | null): number | null {
+  if (!Array.isArray(list) || !list.length) return null;
   let total = 0;
-  for (const c of connectors) {
+  for (const c of list) {
     const q = typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 0;
     total += q;
   }
   return total > 0 ? total : null;
 }
 
-function prettyConnectorLines(connectors: Connector[] | null): string[] {
-  if (!Array.isArray(connectors) || connectors.length === 0) return ["Unknown × 1"];
-  return connectors.map((c) => {
-    const t = c?.type ? String(c.type) : "Unknown";
-    const q = typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1;
-    return `${t} × ${q}`;
-  });
-}
-
-/* ------------------------------------------------------------------ */
-/* Props & Component                                                   */
-/* ------------------------------------------------------------------ */
+/* ----------------------------- Component ----------------------------- */
 type Props = {
-  station: Station | null; // null => closed
+  station: Station | null;
   onClose?: () => void;
-  onFeedbackSubmit?: (stationId: number | string, vote: "up" | "down", comment?: string) => void;
+  onFeedbackSubmit?: (
+    stationId: number | string,
+    vote: "up" | "down",
+    comment?: string
+  ) => void;
 };
 
 export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Props) {
   const open = Boolean(station);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // Hardened UX
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
 
-  // Outside click close
+  // outside click
   useEffect(() => {
     if (!open) return;
-    const overlay = containerRef.current;
+    const overlay = overlayRef.current;
     const handler = (e: PointerEvent) => {
       const card = cardRef.current;
       if (card && !card.contains(e.target as Node)) onClose?.();
@@ -171,56 +149,50 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
     return () => overlay?.removeEventListener("pointerdown", handler);
   }, [open, onClose]);
 
-  // Debounced telemetry
+  // telemetry (debounced)
   useEffect(() => {
     if (!open || !station) return;
-    const id = window.setTimeout(() => {
-      telemetry.drawerOpen((station as any).id, Boolean((station as any).isCouncil));
-    }, 60);
-    return () => window.clearTimeout(id);
+    const id = setTimeout(
+      () => telemetry.drawerOpen((station as any).id, Boolean((station as any).isCouncil)),
+      60
+    );
+    return () => clearTimeout(id);
   }, [open, station]);
 
-  /* ---------- Derived display fields (safe across feeds) ---------- */
-  const title = station?.name || "Unknown location";
-
-  const address =
-    (station as any)?.address ??
-    (station as any)?.AddressInfo?.AddressLine1 ??
-    "—";
-
-  const postcode =
-    (station as any)?.postcode ??
-    (station as any)?.AddressInfo?.Postcode ??
-    "—";
-
-  // Normalize town from both shapes
-  const town =
-    (station as any)?.town ??
-    (station as any)?.AddressInfo?.Town ??
-    undefined;
-
+  /* -------- normalized display fields (handles all shapes) -------- */
   const isCouncil = Boolean((station as any)?.isCouncil);
+  const title = (station as any)?.name || "Unknown location";
 
-  // Fully normalized connectors used for total + per-type lines
+  const ai = (station as any)?.AddressInfo || {};
+  const addressLine1: string | undefined =
+    (station as any)?.address ?? ai.AddressLine1 ?? undefined;
+  const town: string | undefined =
+    (station as any)?.town ?? ai.Town ?? undefined;
+  const postcode: string | undefined =
+    (station as any)?.postcode ?? ai.Postcode ?? undefined;
+
+  // Full address string (AddressLine1, Town, Postcode)
+  const fullAddress = [addressLine1, town, postcode].filter(Boolean).join(", ") || "—";
+
+  // Normalized connectors + total
   const connectors = useMemo(() => normalizeConnectors(station as any), [station]);
-  const totalConnectorsNumOrNull = useMemo(() => {
-    const s = sumConnectors(connectors);
-    if (s !== null) return s;
-    // last-chance: council with no details — show 1 rather than Unknown
-    if (isCouncil) return 1;
-    return null;
-  }, [connectors, isCouncil]);
-
-  const totalConnectorsLabel =
-    totalConnectorsNumOrNull !== null ? String(totalConnectorsNumOrNull) : "Unknown";
-  const perLines = useMemo(() => prettyConnectorLines(connectors), [connectors]);
+  const totalNum = useMemo(() => sumConnectors(connectors), [connectors]);
+  const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
+  const perLines = useMemo(() => {
+    if (!Array.isArray(connectors) || !connectors.length) return ["Unknown × 1"];
+    return connectors.map((c) => {
+      const t = c?.type ? String(c.type) : "Unknown";
+      const q =
+        typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1;
+      return `${t} × ${q}`;
+    });
+  }, [connectors]);
 
   if (!open) return null;
 
   return (
     <div
-      ref={containerRef}
-      aria-hidden={!open}
+      ref={overlayRef}
       style={{
         position: "fixed",
         inset: 0,
@@ -230,42 +202,40 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
         justifyContent: "flex-end",
       }}
     >
-      {/* Compact drawer card */}
       <div
         ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        onPointerDown={(e) => e.stopPropagation()}
         style={{
-          width: "min(328px, 88vw)",     // narrower
+          width: "min(304px, 86vw)", // compact
           height: "100%",
           background: "#fff",
+          borderLeft: "1px solid rgba(0,0,0,0.06)",
           boxShadow:
             "0 10px 15px -3px rgba(0,0,0,0.1), 0 4px 6px -2px rgba(0,0,0,0.05)",
-          borderLeft: "1px solid rgba(0,0,0,0.06)",
           display: "flex",
           flexDirection: "column",
         }}
-        onPointerDown={(e) => e.stopPropagation()}
       >
-        {/* Scrollable content so we don't leave big empty middle */}
-        <div style={{ padding: "10px 10px 8px", overflowY: "auto" }}>
-          {/* Header */}
+        {/* content (scrollable) */}
+        <div style={{ padding: "8px 10px 8px", overflowY: "auto" }}>
+          {/* header */}
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <h3
+                  title={title}
                   style={{
                     fontSize: 16,
                     fontWeight: 700,
-                    lineHeight: 1.2,
                     margin: 0,
                     color: "#111827",
                     whiteSpace: "nowrap",
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                   }}
-                  title={title}
                 >
                   {title}
                 </h3>
@@ -285,20 +255,17 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
                   </span>
                 )}
               </div>
-              {town && (
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{town}</div>
-              )}
             </div>
 
             <button
-              onClick={onClose}
               aria-label="Close"
+              onClick={onClose}
               style={{
                 appearance: "none",
                 border: 0,
                 background: "transparent",
-                width: 30,
-                height: 30,
+                width: 28,
+                height: 28,
                 borderRadius: 8,
                 display: "grid",
                 placeItems: "center",
@@ -316,7 +283,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             </button>
           </div>
 
-          {/* Address */}
+          {/* address */}
           <div
             style={{
               display: "grid",
@@ -332,6 +299,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           >
             <div style={{ fontWeight: 600, color: "#374151", fontSize: 12.5 }}>Address:</div>
             <div
+              title={fullAddress}
               style={{
                 color: "#111827",
                 overflow: "hidden",
@@ -339,23 +307,18 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
                 whiteSpace: "nowrap",
                 fontSize: 12.5,
               }}
-              title={`${address}${postcode ? `, ${postcode}` : ""}`}
             >
-              {address}
-              {postcode ? `, ${postcode}` : ""}
+              {fullAddress}
             </div>
             <button
-              onClick={() => {
-                const text = `${address}${postcode ? `, ${postcode}` : ""}`;
-                navigator.clipboard?.writeText(text);
-              }}
+              onClick={() => navigator.clipboard?.writeText(fullAddress)}
               style={copyBtnStyle}
             >
               Copy
             </button>
           </div>
 
-          {/* Connectors */}
+          {/* connectors */}
           <div
             style={{
               padding: "8px 10px",
@@ -369,7 +332,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             }}
           >
             <div style={{ fontWeight: 700, color: "#111827", fontSize: 13.5 }}>
-              Connectors: {totalConnectorsLabel}
+              Connectors: {totalLabel}
             </div>
             <ul style={{ margin: 0, paddingLeft: 18, color: "#374151", fontSize: 12.5 }}>
               {perLines.map((l, i) => (
@@ -383,7 +346,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             )}
           </div>
 
-          {/* CTA row */}
+          {/* actions */}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <a
               href={
@@ -399,14 +362,12 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
             >
               ➤ Directions
             </a>
-
             <button
               onClick={() => {
                 if (!station) return;
                 const text =
                   (station as any).name ||
-                  (station as any).address ||
-                  (station as any).postcode ||
+                  fullAddress ||
                   `${(station as any).lat}, ${(station as any).lng}`;
                 navigator.clipboard?.writeText(String(text));
               }}
@@ -417,7 +378,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           </div>
         </div>
 
-        {/* Footer (sticks to bottom, no extra empty space above) */}
+        {/* footer */}
         <div style={{ padding: "8px 10px 10px", borderTop: "1px solid #f1f1f1" }}>
           <div style={{ fontSize: 12.5, color: "#374151", marginBottom: 6 }}>
             Rate this location
@@ -438,10 +399,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
           </div>
           <button
             style={footerSubmitStyle}
-            onClick={() => {
-              if (!station) return;
-              onFeedbackSubmit?.((station as any).id, "up");
-            }}
+            onClick={() => station && onFeedbackSubmit?.((station as any).id, "up")}
           >
             Submit feedback
           </button>
@@ -451,7 +409,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   );
 }
 
-/* ------------------------------ styles ------------------------------ */
+/* ------------------------------- styles ------------------------------- */
 const copyBtnStyle: CSSProperties = {
   appearance: "none",
   border: "1px solid #e5e7eb",
