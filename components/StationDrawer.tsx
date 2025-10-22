@@ -1,16 +1,16 @@
 // components/StationDrawer.tsx
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Station } from "../types/stations";
+import type { Station, Connector } from "../types/stations";
 
 type Vote = "good" | "bad" | null;
 
-/** the map can pass two shapes:
+/** The map can pass two shapes into the drawer:
  *  - regular OCM station: connectors = Connector[]
  *  - council marker:      connectors = number and isCouncil = true
  */
 type AnyStation = Station & {
-  connectors?: number | Array<{ type: string; quantity?: number; count?: number; powerKW?: number }>;
+  connectors?: number | Array<Connector & { count?: number }>;
   isCouncil?: boolean;
   network?: string;
 };
@@ -38,16 +38,21 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return 2 * R * Math.asin(Math.sqrt(x));
 }
 
+function qty(c: Connector & { count?: number }) {
+  // tolerate both quantity (your type) and count (some feeds)
+  return (typeof c.quantity === "number" ? c.quantity : undefined) ??
+         (typeof c.count === "number" ? c.count : undefined) ??
+         1;
+}
+
 function getConnectorTotal(conn: AnyStation["connectors"]): number {
   if (!conn && conn !== 0) return 0;
   if (typeof conn === "number") return conn;
-  if (Array.isArray(conn)) {
-    return conn.reduce((sum, c) => sum + (c?.quantity ?? c?.count ?? 1), 0);
-  }
+  if (Array.isArray(conn)) return conn.reduce((sum, c) => sum + qty(c), 0);
   return 0;
 }
 
-export function StationDrawer({
+export default function StationDrawer({
   station,
   onClose,
   onFeedbackSubmit,
@@ -96,10 +101,7 @@ export function StationDrawer({
     const base = "https://www.google.com/maps/dir/?api=1";
     const dest = `&destination=${station.lat},${station.lng}`;
     const name = station.name ? `&destination_place_id=&travelmode=driving&destination_name=${encodeURIComponent(station.name)}` : "";
-    const origin =
-      userLocation
-        ? `&origin=${userLocation.lat},${userLocation.lng}`
-        : "";
+    const origin = userLocation ? `&origin=${userLocation.lat},${userLocation.lng}` : "";
     window.open(`${base}${origin}${dest}${name}`, "_blank", "noopener,noreferrer");
   };
 
@@ -179,24 +181,21 @@ export function StationDrawer({
           </div>
 
           {/* full breakdown when we have an array (OCM) */}
-          {hasArrayConnectors && (station.connectors as NonNullable<AnyStation["connectors"]> as Array<any>).length > 0 && (
+          {hasArrayConnectors && (station.connectors as Array<Connector & { count?: number }>).length > 0 && (
             <div className="sd-connlist">
-              {(station.connectors as Array<any>).slice(0, 6).map((c, i) => {
-                const qty = c?.quantity ?? c?.count ?? 1;
-                return (
-                  <div key={`${c.type}-${i}`} className="sd-chip" title={`${c.type}${c.powerKW ? ` • ${c.powerKW}kW` : ""}`}>
-                    <span className="sd-chip-type">{c.type}</span>
-                    <span className="sd-dot">•</span>
-                    <span className="sd-chip-qty">×{qty}</span>
-                    {typeof c.powerKW === "number" && (
-                      <>
-                        <span className="sd-dot">•</span>
-                        <span className="sd-chip-kw">{clamp(c.powerKW, 1, 999)}kW</span>
-                      </>
-                    )}
-                  </div>
-                );
-              })}
+              {(station.connectors as Array<Connector & { count?: number }>).slice(0, 6).map((c, i) => (
+                <div key={`${c.type}-${i}`} className="sd-chip" title={`${c.type}${c.powerKW ? ` • ${c.powerKW}kW` : ""}`}>
+                  <span className="sd-chip-type">{c.type}</span>
+                  <span className="sd-dot">•</span>
+                  <span className="sd-chip-qty">×{qty(c)}</span>
+                  {typeof c.powerKW === "number" && (
+                    <>
+                      <span className="sd-dot">•</span>
+                      <span className="sd-chip-kw">{clamp(c.powerKW, 1, 999)}kW</span>
+                    </>
+                  )}
+                </div>
+              ))}
               {(station.connectors as Array<any>).length > 6 && (
                 <div className="sd-chip sd-more">+{(station.connectors as Array<any>).length - 6} more</div>
               )}
@@ -315,5 +314,3 @@ export function StationDrawer({
 
   return createPortal(card, document.body);
 }
-
-export default StationDrawer;
