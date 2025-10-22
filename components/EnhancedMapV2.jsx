@@ -13,13 +13,11 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-
-import StationDrawer from './StationDrawer';
+import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
-import { mapOcmToStation } from "../utils/ocm"; // if you need to map raw OCM -> Station anywhere
 
 if (typeof window !== "undefined") {
   // @ts-ignore
@@ -89,13 +87,16 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         );
       }
 
+      const sumQty = (arr) =>
+        arr.reduce(
+          (sum, c) => sum + (typeof c?.quantity === "number" ? c.quantity : 1),
+          0
+        );
+
       const maxIntensity = Math.max(
         ...processedStations.map((s) =>
           Array.isArray(s.connectors) && s.connectors.length
-            ? s.connectors.reduce(
-                (sum, c) => sum + (typeof c.quantity === "number" ? c.quantity : 1),
-                0
-              )
+            ? sumQty(s.connectors)
             : 1
         )
       );
@@ -103,10 +104,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       const heatData = processedStations.map((s) => {
         const weight =
           Array.isArray(s.connectors) && s.connectors.length
-            ? s.connectors.reduce(
-                (sum, c) => sum + (typeof c.quantity === "number" ? c.quantity : 1),
-                0
-              )
+            ? sumQty(s.connectors)
             : 1;
         return [s.lat, s.lng, (weight / maxIntensity) * intensity];
       });
@@ -276,6 +274,9 @@ function ViewportFetcher({
       try {
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
+        thelimit: {
+          /* eslint-disable no-labels */
+        }
         const limitPerTile = isFirstLoad ? 500 : 750;
         const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
@@ -392,7 +393,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
-      // TODO: send to backend if/when ready
+      // TODO: post to /api/feedback if needed
     },
     [onToast]
   );
@@ -555,10 +556,9 @@ export default function EnhancedMap({
 
       {/* Drawer floats; map stays interactive outside it */}
       <StationDrawer
-   station={activeStation}
-   onClose={handleDrawerClose}
-   onFeedbackSubmit={handleFeedbackSubmit}
-
+        station={activeStation}
+        onClose={handleDrawerClose}
+        onFeedbackSubmit={handleFeedbackSubmit}
       />
 
       <style jsx global>{`
