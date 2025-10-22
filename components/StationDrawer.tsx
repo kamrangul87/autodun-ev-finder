@@ -99,35 +99,63 @@ const pick = <T,>(obj: any, keys: string[]): T | undefined => {
   return undefined;
 };
 
+// NEW: canonicalize raw connector titles to your legend labels
+function canonicalizeConnectorLabel(raw?: string): string {
+  if (!raw) return "Unknown";
+  const t = raw.toLowerCase().trim();
+
+  if (t.includes("ccs") || t.includes("combo 2") || t.includes("combo type 2"))
+    return "CCS";
+  if (t.includes("chademo")) return "CHAdeMO";
+  if (t.includes("type 2") || t.includes("type-2")) return "Type 2";
+  if (t.includes("iec 62196") && t.includes("type 2")) return "Type 2";
+  if (t.includes("tesla") && t.includes("type 2")) return "Type 2"; // older Tesla AC
+  return raw.trim();
+}
+
+// NEW: safe number parser for PowerKW, etc.
+function safeNumber(n: any, dflt = undefined as number | undefined) {
+  const v = typeof n === "string" ? Number(n) : n;
+  return typeof v === "number" && Number.isFinite(v) ? v : dflt;
+}
+
 function normalizeConnectors(station: any): Connector[] | null {
   // 1) Preferred: already-normalized station.connectors
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
-      type: c?.type ?? "Unknown",
+      type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
       quantity:
         typeof c?.quantity === "number" && !Number.isNaN(c.quantity)
           ? c.quantity
           : 1,
-      powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
+      powerKW: safeNumber(c?.powerKW),
     }));
   }
   // 2) OpenChargeMap: Connections[]
-  if (Array.isArray(station?.Connections) && station.Connections.length) {
-    return station.Connections.map((c: any) => ({
-      type:
+  const raw = Array.isArray(station?.Connections) ? station.Connections : null;
+  if (raw && raw.length) {
+    return raw.map((c: any) => {
+      // Priority: ConnectionType.Title → ConnectionType.FormalName → CurrentType.Title → Level.Title → Unknown
+      const rawType =
         c?.ConnectionType?.Title ??
         c?.ConnectionType?.FormalName ??
+        c?.CurrentType?.Title ??
         c?.Level?.Title ??
-        "Unknown",
-      quantity: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
-      powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined,
-    }));
+        "Unknown";
+      return {
+        type: canonicalizeConnectorLabel(rawType),
+        quantity:
+          typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
+        powerKW: safeNumber(c?.PowerKW),
+      };
+    });
   }
   // 3) Council: NumberOfPoints, etc.
   const npts =
     pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
     null;
-  if (typeof npts === "number" && npts > 0) return [{ type: "Unknown", quantity: npts }];
+  if (typeof npts === "number" && npts > 0)
+    return [{ type: "Unknown", quantity: npts }];
 
   return null;
 }
@@ -229,7 +257,8 @@ export default function StationDrawer({
       pick<number>(s, ["NumberOfPoints", "numberOfPoints"]),
       Array.isArray(s?.Connections)
         ? s.Connections.reduce(
-            (acc: number, c: any) => acc + (typeof c?.Quantity === "number" ? c.Quantity : 1),
+            (acc: number, c: any) =>
+              acc + (typeof c?.Quantity === "number" ? c.Quantity : 1),
             0
           )
         : null,
