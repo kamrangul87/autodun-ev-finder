@@ -195,29 +195,35 @@ function StationMarker({ station, onClick }) {
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
+
   const showCouncilBool = toBool(showCouncil);
   const isDesktop = useMemo(() => isDesktopPointer(), []);
 
   // request coordination
   const debounceTimer = useRef(null);
-  const inflight = useRef(null as null | AbortController);
-  const lastBboxRef = useRef<string | null>(null);
-  const desiredBboxRef = useRef<string | null>(null);
+  /** @type {React.MutableRefObject<AbortController|null>} */
+  const inflight = useRef(null);
+  /** @type {React.MutableRefObject<string|null>} */
+  const lastBboxRef = useRef(null);
+  /** @type {React.MutableRefObject<string|null>} */
+  const desiredBboxRef = useRef(null);
   const lastFetchTsRef = useRef(0);
 
   const MIN_INTERVAL_MS = 1200; // throttle to avoid backend 500s
   const DEBOUNCE_MS = 400;
 
   const doFetch = useCallback(
-    async (reason: string) => {
+    async (reason) => {
       if (!showCouncilBool) return;
 
       // throttle
       const now = Date.now();
       if (now - lastFetchTsRef.current < MIN_INTERVAL_MS) {
-        // schedule a delayed attempt to coalesce calls
         if (debounceTimer.current) clearTimeout(debounceTimer.current);
-        debounceTimer.current = setTimeout(() => doFetch("throttled"), MIN_INTERVAL_MS);
+        debounceTimer.current = setTimeout(
+          () => doFetch("throttled"),
+          MIN_INTERVAL_MS
+        );
         return;
       }
 
@@ -227,10 +233,10 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
       if (lastBboxRef.current === bboxStr) return; // already fetched this bbox
 
-      // coalesce multiple triggers to the latest bbox via debounce
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
       debounceTimer.current = setTimeout(async () => {
-        const finalBbox = desiredBboxRef.current!;
+        const finalBbox = desiredBboxRef.current;
+
         // abort any in-flight request
         if (inflight.current) inflight.current.abort();
         const ac = new AbortController();
@@ -238,7 +244,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
         lastFetchTsRef.current = Date.now();
 
-        // use cache first
         const cacheKey = `council_${finalBbox}`;
         const cached = getCached(cacheKey);
         if (cached) {
@@ -302,8 +307,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       return;
     }
     map.whenReady(() => doFetch("ready"));
-    // also kick once immediately (handles already-ready map)
-    doFetch("mount");
+    doFetch("mount"); // kick once immediately
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, showCouncilBool]);
 
@@ -316,7 +320,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
   if (!showCouncilBool || councilStations.length === 0) return null;
 
-  // DESKTOP: render markers directly (no cluster) to avoid any pane quirks
+  // DESKTOP: render markers directly (no cluster)
   if (isDesktop) {
     return (
       <LayerGroup pane="council-pane" key={`council-desktop-${councilStations.length}`}>
