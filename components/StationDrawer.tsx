@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useMemo } from "react";
-import { telemetry } from "../utils/telemetry.ts";
+import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
 
 // ————————————————————————————————————————————————————————————————
