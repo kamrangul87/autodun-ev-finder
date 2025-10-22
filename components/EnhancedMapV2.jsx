@@ -20,7 +20,7 @@ import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 
-// ---------- helpers ----------
+/* ----------------- helpers ----------------- */
 const toBool = (v) => {
   if (typeof v === "boolean") return v;
   if (typeof v === "number") return v !== 0;
@@ -31,20 +31,21 @@ const toBool = (v) => {
 const isDesktopPointer = () => {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
   try {
-    return window.matchMedia("(pointer:fine)").matches; // desktops/laptops typically "fine"
+    return window.matchMedia("(pointer:fine)").matches;
   } catch {
     return true;
   }
 };
 
-// Normalize bbox to a stable string (prevents false "same bbox" on tiny float diffs)
+// Normalize bbox string to 4dp so equality checks are stable
 const bboxStrFromBounds = (bounds) => {
   const sw = bounds.getSouthWest();
   const ne = bounds.getNorthEast();
-  const r = (n) => Number(n).toFixed(4); //  ~11m precision; good enough for viewport fetch
+  const r = (n) => Number(n).toFixed(4);
   return `${r(sw.lng)},${r(sw.lat)},${r(ne.lng)},${r(ne.lat)}`;
 };
 
+/* ----------------- Leaflet defaults ----------------- */
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -77,6 +78,7 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
+/* ----------------- Small map helpers ----------------- */
 function MapInitializer() {
   const map = useMap();
   useEffect(() => {
@@ -86,20 +88,22 @@ function MapInitializer() {
   return null;
 }
 
-// Dedicated pane for council markers (sits above default markerPane=600)
+// Dedicated pane for council markers (above heat + normal markers)
 function EnsureCouncilPane() {
   const map = useMap();
   useEffect(() => {
     const name = "council-pane";
     if (!map.getPane(name)) {
       const pane = map.createPane(name);
-      pane.style.zIndex = "700"; // above markerPane(600) & overlayPane(400); below popup(800)
+      // Default panes: overlay 400, marker 600, tooltip 650, popup 700
+      pane.style.zIndex = "700"; // safely above heatmap/markers
       pane.style.pointerEvents = "auto";
     }
   }, [map]);
   return null;
 }
 
+/* ----------------- Heatmap Layer (unchanged) ----------------- */
 function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
   const heatLayerRef = useRef(null);
@@ -177,6 +181,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
   return null;
 }
 
+/* ----------------- Station marker (unchanged) ----------------- */
 function StationMarker({ station, onClick }) {
   return (
     <Marker
@@ -186,107 +191,132 @@ function StationMarker({ station, onClick }) {
   );
 }
 
-// Council markers layer:
-// - Desktop: NO clustering (LayerGroup in pane "council-pane")
-// - Mobile: clustered (MarkerClusterGroup) in pane "council-pane"
-// - Fetch on: load, moveend, zoomend (desktop was missing load/zoom refresh)
+/* ----------------- Council layer: desktop hardened ----------------- */
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
-  const fetchTimeoutRef = useRef(null);
-  const lastBboxRef = useRef(null);
-
   const showCouncilBool = toBool(showCouncil);
   const isDesktop = useMemo(() => isDesktopPointer(), []);
 
-  const fetchCouncilData = useCallback(async () => {
+  // request coordination
+  const debounceTimer = useRef(null);
+  const inflight = useRef(null as null | AbortController);
+  const lastBboxRef = useRef<string | null>(null);
+  const desiredBboxRef = useRef<string | null>(null);
+  const lastFetchTsRef = useRef(0);
+
+  const MIN_INTERVAL_MS = 1200; // throttle to avoid backend 500s
+  const DEBOUNCE_MS = 400;
+
+  const doFetch = useCallback(
+    async (reason: string) => {
+      if (!showCouncilBool) return;
+
+      // throttle
+      const now = Date.now();
+      if (now - lastFetchTsRef.current < MIN_INTERVAL_MS) {
+        // schedule a delayed attempt to coalesce calls
+        if (debounceTimer.current) clearTimeout(debounceTimer.current);
+        debounceTimer.current = setTimeout(() => doFetch("throttled"), MIN_INTERVAL_MS);
+        return;
+      }
+
+      const bounds = map.getBounds();
+      const bboxStr = bboxStrFromBounds(bounds);
+      desiredBboxRef.current = bboxStr;
+
+      if (lastBboxRef.current === bboxStr) return; // already fetched this bbox
+
+      // coalesce multiple triggers to the latest bbox via debounce
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      debounceTimer.current = setTimeout(async () => {
+        const finalBbox = desiredBboxRef.current!;
+        // abort any in-flight request
+        if (inflight.current) inflight.current.abort();
+        const ac = new AbortController();
+        inflight.current = ac;
+
+        lastFetchTsRef.current = Date.now();
+
+        // use cache first
+        const cacheKey = `council_${finalBbox}`;
+        const cached = getCached(cacheKey);
+        if (cached) {
+          setCouncilStations(cached.items || []);
+          lastBboxRef.current = finalBbox;
+          inflight.current = null;
+          return;
+        }
+
+        try {
+          const res = await fetch(`/api/council-stations?bbox=${finalBbox}`, {
+            cache: "no-store",
+            signal: ac.signal,
+          });
+          if (!res.ok) {
+            // mark this bbox as attempted to prevent hot-loop; don't spam
+            lastBboxRef.current = finalBbox;
+            inflight.current = null;
+            return;
+          }
+          const data = await res.json();
+          const items =
+            data?.features?.map((f) => ({
+              id: Number(f.properties.id),
+              name: f.properties.title || f.properties.AddressInfo?.Title,
+              lat: f.geometry.coordinates[1],
+              lng: f.geometry.coordinates[0],
+              address: f.properties.AddressInfo?.AddressLine1,
+              postcode: f.properties.AddressInfo?.Postcode,
+              connectors: [
+                {
+                  type: "Unknown",
+                  quantity:
+                    typeof f.properties.NumberOfPoints === "number"
+                      ? f.properties.NumberOfPoints
+                      : 1,
+                },
+              ],
+              isCouncil: true,
+            })) ?? [];
+
+          setCouncilStations(items);
+          setCache(cacheKey, { items, count: items.length });
+          lastBboxRef.current = finalBbox;
+          inflight.current = null;
+          telemetry.councilSelected("viewport", items.length);
+        } catch (err) {
+          // aborted or failed: mark and stop, but don't spam server
+          lastBboxRef.current = finalBbox;
+          inflight.current = null;
+        }
+      }, DEBOUNCE_MS);
+    },
+    [map, showCouncilBool]
+  );
+
+  // initial fetch when map ready + on toggle on
+  useEffect(() => {
     if (!showCouncilBool) {
       setCouncilStations([]);
       return;
     }
-    const bounds = map.getBounds();
-    const bboxStr = bboxStrFromBounds(bounds);
-
-    // Avoid refetch only if the normalized bbox truly didn't change
-    if (lastBboxRef.current === bboxStr) return;
-
-    const cacheKey = `council_${bboxStr}`;
-    const cached = getCached(cacheKey);
-    if (cached) {
-      setCouncilStations(cached.items || []);
-      lastBboxRef.current = bboxStr;
-      return;
-    }
-
-    try {
-      const url = `/api/council-stations?bbox=${bboxStr}`;
-      const response = await fetch(url, { cache: "no-store" });
-      const data = await response.json();
-      if (response.ok && data.features) {
-        const items = data.features.map((f) => ({
-          id: Number(f.properties.id),
-          name: f.properties.title || f.properties.AddressInfo?.Title,
-          lat: f.geometry.coordinates[1],
-          lng: f.geometry.coordinates[0],
-          address: f.properties.AddressInfo?.AddressLine1,
-          postcode: f.properties.AddressInfo?.Postcode,
-          connectors: [
-            {
-              type: "Unknown",
-              quantity:
-                typeof f.properties.NumberOfPoints === "number"
-                  ? f.properties.NumberOfPoints
-                  : 1,
-            },
-          ],
-          isCouncil: true,
-        }));
-        setCouncilStations(items);
-        setCache(cacheKey, { items, count: items.length });
-        lastBboxRef.current = bboxStr;
-        telemetry.councilSelected("viewport", items.length);
-      } else {
-        // even if empty, update the bbox guard so we don't spam
-        lastBboxRef.current = bboxStr;
-        setCouncilStations([]);
-      }
-    } catch (err) {
-      console.error("[CouncilMarkerLayer] Fetch error:", err);
-    }
+    map.whenReady(() => doFetch("ready"));
+    // also kick once immediately (handles already-ready map)
+    doFetch("mount");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, showCouncilBool]);
 
-  // Make sure we fetch on all the events desktop needs
-  useEffect(() => {
-    // initial fetch when map is ready (desktop needed this)
-    if (!showCouncilBool) return;
-    const onLoad = () => fetchCouncilData();
-    map.whenReady(onLoad);
-    return () => {
-      // nothing to detach from whenReady
-    };
-  }, [map, showCouncilBool, fetchCouncilData]);
-
+  // viewport events → coalesced fetch
   useMapEvents({
-    moveend: () => {
-      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 200);
-    },
-    zoomend: () => {
-      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 50);
-    },
+    moveend: () => doFetch("moveend"),
+    zoomend: () => doFetch("zoomend"),
+    load: () => doFetch("load"),
   });
-
-  useEffect(() => {
-    // react to explicit toggle changes too
-    if (showCouncilBool) fetchCouncilData();
-    else setCouncilStations([]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showCouncilBool]);
 
   if (!showCouncilBool || councilStations.length === 0) return null;
 
-  // DESKTOP (no cluster): render directly in pane
+  // DESKTOP: render markers directly (no cluster) to avoid any pane quirks
   if (isDesktop) {
     return (
       <LayerGroup pane="council-pane" key={`council-desktop-${councilStations.length}`}>
@@ -304,7 +334,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
     );
   }
 
-  // MOBILE (clustered)
+  // MOBILE: clustered
   return (
     <MarkerClusterGroup
       chunkedLoading
@@ -326,6 +356,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   );
 }
 
+/* ----------------- User location (unchanged) ----------------- */
 function UserLocationMarker({ location, accuracy }) {
   if (!location) return null;
   return (
@@ -345,6 +376,7 @@ function UserLocationMarker({ location, accuracy }) {
   );
 }
 
+/* ----------------- Station viewport fetcher (bbox normalized) ----------------- */
 function ViewportFetcher({
   onFetchStations,
   onLoadingChange,
@@ -411,7 +443,7 @@ function ViewportFetcher({
 
   useEffect(() => {
     if (isFirstFetchRef.current && stations && stations.length > 0) {
-      const bboxStr = `-8.6490,49.8230,1.7630,60.8450`; // normalized
+      const bboxStr = `-8.6490,49.8230,1.7630,60.8450`; // normalized UK bounds
       lastFetchRef.current = bboxStr;
       isFirstFetchRef.current = false;
     }
@@ -435,6 +467,7 @@ function ViewportFetcher({
   return null;
 }
 
+/* ----------------- Locate Me control (unchanged) ----------------- */
 function LocateMeControl({ onLocationChange, onError }) {
   const handleLocationFound = (lat, lng, accuracy) => {
     onLocationChange({ lat, lng }, accuracy);
@@ -451,6 +484,7 @@ function LocateMeControl({ onLocationChange, onError }) {
   );
 }
 
+/* ----------------- Main map ----------------- */
 export default function EnhancedMap({
   stations = [],
   showHeatmap = false,
@@ -469,7 +503,6 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // coerce council prop in case it's coming from URL as "1"/"true"
   const showCouncilBool = toBool(showCouncil);
 
   useEffect(() => {
@@ -494,7 +527,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
-      // (wire to /api/feedback later if needed)
+      // TODO: post to /api/feedback if needed
     },
     [onToast]
   );
