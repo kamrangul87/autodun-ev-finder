@@ -1,388 +1,623 @@
-"use client";
-
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+// components/StationDrawer.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
+import {
+  aggregateToCanonical,
+  CONNECTOR_COLORS,
+} from "../lib/connectorCatalog";
 
-// ------- helpers (no UI changes) -------
-const isNonEmpty = (s?: string | null) => typeof s === "string" && s.trim().length > 0;
+/* ─────────────── UX helpers ─────────────── */
 
-function normalizeLabel(raw: string): "CCS" | "CHAdeMO" | "Type 2" | null {
-  const t = raw.toLowerCase();
-  if (t.includes("ccs") || t.includes("combo")) return "CCS";
-  if (t.includes("chademo")) return "CHAdeMO";
-  if (t.includes("type 2") || t.includes("mennekes")) return "Type 2";
+function useBodyScrollLock(locked: boolean) {
+  useEffect(() => {
+    const b = typeof document !== "undefined" ? document.body : null;
+    if (!b) return;
+    const prev = b.style.overflow;
+    if (locked) b.style.overflow = "hidden";
+    return () => {
+      b.style.overflow = prev;
+    };
+  }, [locked]);
+}
+
+function useEscapeToClose(open: boolean, onClose?: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose?.();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+}
+
+function useFocusTrap(
+  enabled: boolean,
+  containerRef: React.RefObject<HTMLElement>
+) {
+  useEffect(() => {
+    if (!enabled || !containerRef.current) return;
+    const el = containerRef.current;
+
+    const firstFocusable =
+      (el.querySelector(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      ) as HTMLElement | null) || el;
+
+    const prevActive = document.activeElement as HTMLElement | null;
+    const raf = requestAnimationFrame(() =>
+      firstFocusable.focus({ preventScroll: true })
+    );
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const nodes = Array.from(
+        el.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        )
+      );
+      if (!nodes.length) return;
+
+      const cur = (document.activeElement as HTMLElement) || nodes[0];
+      if (!el.contains(cur)) {
+        (e.shiftKey ? nodes[nodes.length - 1] : nodes[0]).focus({
+          preventScroll: true,
+        });
+        e.preventDefault();
+        return;
+      }
+
+      const i = Math.max(0, nodes.indexOf(cur));
+      const next = e.shiftKey
+        ? (i - 1 + nodes.length) % nodes.length
+        : (i + 1) % nodes.length;
+
+      if ((e.shiftKey && i === 0) || (!e.shiftKey && i === nodes.length - 1)) {
+        nodes[next].focus({ preventScroll: true });
+        e.preventDefault();
+      }
+    };
+
+    document.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("keydown", onKey, {
+        capture: true,
+      } as any);
+      prevActive?.focus?.();
+    };
+  }, [enabled, containerRef]);
+}
+
+/* ─────────────── Normalizers ─────────────── */
+
+const pick = <T,>(obj: any, keys: string[]): T | undefined => {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && v !== "") return v as T;
+  }
+  return undefined;
+};
+
+function normalizeConnectors(station: any): Connector[] | null {
+  // 1) Preferred: already-normalized station.connectors
+  if (Array.isArray(station?.connectors) && station.connectors.length) {
+    return station.connectors.map((c: any) => ({
+      type: c?.type ?? "Unknown",
+      quantity:
+        typeof c?.quantity === "number" && !Number.isNaN(c.quantity)
+          ? c.quantity
+          : 1,
+      powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
+    }));
+  }
+  // 2) OpenChargeMap: Connections[]
+  if (Array.isArray(station?.Connections) && station.Connections.length) {
+    return station.Connections.map((c: any) => ({
+      type:
+        c?.ConnectionType?.Title ??
+        c?.ConnectionType?.FormalName ??
+        c?.Level?.Title ??
+        "Unknown",
+      quantity: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
+      powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined,
+    }));
+  }
+  // 3) Council: NumberOfPoints, etc.
+  const npts =
+    pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
+    null;
+  if (typeof npts === "number" && npts > 0) return [{ type: "Unknown", quantity: npts }];
+
   return null;
 }
 
-function ocConnToLabel(conn: any): "CCS" | "CHAdeMO" | "Type 2" | null {
-  const title: string | undefined = conn?.ConnectionType?.Title || conn?.ConnectionTypeTitle;
-  if (isNonEmpty(title)) {
-    const byTitle = normalizeLabel(title!);
-    if (byTitle) return byTitle;
+function sumConnectors(list: Connector[] | null): number | null {
+  if (!Array.isArray(list) || !list.length) return null;
+  let total = 0;
+  for (const c of list) {
+    const q =
+      typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 0;
+    total += q;
   }
-  const id: number | undefined =
-    typeof conn?.ConnectionTypeID === "number" ? conn.ConnectionTypeID : undefined;
-  switch (id) {
-    case 33: // CCS (Combo Type 2)
-    case 32: // CCS (Combo Type 1)
-      return "CCS";
-    case 2: // CHAdeMO
-      return "CHAdeMO";
-    case 25: // Type 2 (Mennekes)
-    case 30: // Tesla (Type 2) → display as Type 2
-      return "Type 2";
-    default:
-      return null;
-  }
+  return total > 0 ? total : null;
 }
 
-function deriveConnectorsForDisplay(station: any): Array<{ label: string; quantity: number }> {
-  // Use normalized connectors if present
-  if (Array.isArray(station?.connectors) && station.connectors.length > 0) {
-    const byType: Record<string, number> = {};
-    (station.connectors as Connector[]).forEach((c) => {
-      const raw = (c as any)?.type || (c as any)?.label || "Unknown";
-      const q =
-        typeof (c as any)?.quantity === "number" && (c as any).quantity > 0 ? (c as any).quantity : 1;
-      const canon = normalizeLabel(String(raw)) || (String(raw).trim() || "Unknown");
-      byType[canon] = (byType[canon] || 0) + q;
-    });
-    return Object.entries(byType).map(([label, quantity]) => ({ label, quantity }));
-  }
-
-  // Fallback to OpenChargeMap shape
-  const oc = station?.Connections || station?.connections;
-  if (Array.isArray(oc) && oc.length > 0) {
-    const byType: Record<string, number> = {};
-    oc.forEach((conn: any) => {
-      const canon = ocConnToLabel(conn) || normalizeLabel(conn?.ConnectionType?.Title || "") || "Unknown";
-      const qty = typeof conn?.Quantity === "number" && conn.Quantity > 0 ? conn.Quantity : 1;
-      byType[canon] = (byType[canon] || 0) + qty;
-    });
-    return Object.entries(byType).map(([label, quantity]) => ({ label, quantity }));
-  }
-
-  return [];
-}
+/* ─────────────── Component ─────────────── */
 
 type Props = {
   station: Station | null;
-  onClose: () => void;
-  onFeedbackSubmit?: (stationId: number | string, vote: "good" | "bad" | null, comment?: string) => void;
+  onClose?: () => void;
+  onFeedbackSubmit?: (
+    stationId: number | string,
+    vote: "up" | "down",
+    comment?: string
+  ) => void;
 };
 
-export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Props) {
-  const backdropRef = useRef<HTMLDivElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const [vote, setVote] = useState<"good" | "bad" | null>(null);
+export default function StationDrawer({
+  station,
+  onClose,
+  onFeedbackSubmit,
+}: Props) {
+  const open = Boolean(station);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // feedback state
+  const [vote, setVote] = useState<"up" | "down" | null>(null);
   const [comment, setComment] = useState("");
 
+  useBodyScrollLock(open);
+  useEscapeToClose(open, onClose);
+  useFocusTrap(open, cardRef);
+
+  // reset feedback when the station changes
   useEffect(() => {
+    if (!open) return;
     setVote(null);
     setComment("");
-  }, [station?.id]);
+  }, [open, station?.id]);
 
-  // Hardened focus/scroll/outside-click behavior
+  // outside click (on transparent overlay)
   useEffect(() => {
-    if (!station) return;
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    if (!open) return;
+    const overlay = overlayRef.current;
+    const handler = (e: PointerEvent) => {
+      const card = cardRef.current;
+      if (card && !card.contains(e.target as Node)) onClose?.();
     };
-    const onDown = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (panelRef.current && !panelRef.current.contains(target)) onClose();
-    };
+    overlay?.addEventListener("pointerdown", handler);
+    return () => overlay?.removeEventListener("pointerdown", handler);
+  }, [open, onClose]);
 
-    document.addEventListener("keydown", onKey);
-    backdropRef.current?.addEventListener("mousedown", onDown);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+  // telemetry
+  useEffect(() => {
+    if (!open || !station) return;
+    const id = setTimeout(
+      () => telemetry.drawerOpen((station as any).id, Boolean((station as any).isCouncil)),
+      60
+    );
+    return () => clearTimeout(id);
+  }, [open, station]);
 
-    return () => {
-      document.removeEventListener("keydown", onKey);
-      backdropRef.current?.removeEventListener("mousedown", onDown);
-      document.body.style.overflow = prevOverflow;
-    };
-  }, [station, onClose]);
+  const s: any = station || {};
+  const isCouncil = Boolean(s.isCouncil);
 
-  if (!station) return null;
-
-  const isCouncil = Boolean((station as any)?.isCouncil);
-
-  const title =
-    (station as any)?.name ||
-    (station as any)?.AddressInfo?.Title ||
-    (station as any)?.title ||
-    "Unknown location";
-
-  const address =
-    (station as any)?.address ||
-    (station as any)?.AddressInfo?.AddressLine1 ||
-    (station as any)?.AddressInfo?.Title ||
-    (station as any)?.AddressInfo?.Town ||
-    (station as any)?.AddressInfo?.Place ||
-    "—";
-
+  // Address build (line1, town/city, postcode)
+  const ai = s.AddressInfo || {};
+  const line1 =
+    pick<string>(s, ["address", "AddressLine1"]) ??
+    pick<string>(ai, ["AddressLine1", "Title"]);
+  const town =
+    pick<string>(s, ["town", "city", "Town", "City"]) ??
+    pick<string>(ai, ["Town", "City"]);
   const postcode =
-    (station as any)?.postcode ||
-    (station as any)?.AddressInfo?.Postcode ||
-    (station as any)?.AddressInfo?.PostCode ||
-    "";
+    pick<string>(s, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
+    pick<string>(ai, ["Postcode", "PostalCode"]);
+  const fullAddress = [line1, town, postcode].filter(Boolean).join(", ") || "—";
 
-  const connectors = useMemo(() => deriveConnectorsForDisplay(station), [station]);
-  const total = useMemo(
-    () => connectors.reduce((s, c) => s + (typeof c.quantity === "number" ? c.quantity : 1), 0),
-    [connectors]
-  );
+  const title = s.name || ai.Title || "Unknown location";
 
-  const handleSubmit = useCallback(() => {
-    onFeedbackSubmit?.(station.id, vote, comment.trim() || undefined);
-  }, [onFeedbackSubmit, station?.id, vote, comment]);
+  // Connectors (with robust fallbacks)
+  const connectors = useMemo(() => normalizeConnectors(s), [s]);
+
+  // total count label: try explicit sums, then known OCM fields, then council fallback
+  const totalNum = useMemo(() => {
+    const totals = [
+      sumConnectors(connectors),
+      pick<number>(s, ["NumberOfPoints", "numberOfPoints"]),
+      Array.isArray(s?.Connections)
+        ? s.Connections.reduce(
+            (acc: number, c: any) => acc + (typeof c?.Quantity === "number" ? c.Quantity : 1),
+            0
+          )
+        : null,
+    ].filter((n) => typeof n === "number" && !Number.isNaN(n)) as number[];
+    if (totals.length) return totals[0]!;
+    return isCouncil ? 1 : null;
+  }, [connectors, s, isCouncil]);
+
+  const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
+
+  // canonical breakdown (CCS / CHAdeMO / Type 2), if we can map types
+  const canonical = useMemo(() => {
+    if (!Array.isArray(connectors) || !connectors.length) return [];
+    return aggregateToCanonical(
+      connectors.map((c) => ({
+        type: c?.type,
+        quantity: c?.quantity,
+        powerKW: (c as any)?.powerKW,
+      }))
+    );
+  }, [connectors]);
+
+  const showUnknownBreakdown =
+    (!canonical || canonical.length === 0) && totalNum !== null;
+
+  if (!open) return null;
 
   return (
-    <div
-      ref={backdropRef}
-      style={{ position: "fixed", inset: 0, zIndex: 2000, background: "transparent" }}
-    >
+    <>
+      {/* transparent overlay (outside click catcher) */}
       <div
-        ref={panelRef}
+        ref={overlayRef}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 10000,
+          background: "transparent",
+        }}
+      />
+      {/* floating compact card (kept as you approved) */}
+      <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
-        style={{
-          position: "absolute",
-          right: 16,
-          top: 16,
-          bottom: 16,
-          width: 380,
-          maxWidth: "92vw",
-          background: "#fff",
-          borderRadius: 12,
-          boxShadow: "0 10px 20px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.08)",
-          display: "flex",
-          flexDirection: "column",
-          overflow: "hidden",
-        }}
+        aria-label={title}
+        onPointerDown={(e) => e.stopPropagation()}
+        style={drawerStyle}
       >
-        {/* header */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "14px 16px",
-            borderBottom: "1px solid #f1f5f9",
-          }}
-        >
-          <div style={{ fontWeight: 700, fontSize: 16, lineHeight: 1.2, flex: 1 }}>{title}</div>
-          {isCouncil && (
-            <span
-              style={{
-                fontSize: 12,
-                background: "#f3e8ff",
-                color: "#7c3aed",
-                padding: "2px 8px",
-                borderRadius: 999,
-                fontWeight: 600,
-              }}
-            >
-              Council dataset
-            </span>
-          )}
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            style={{ border: 0, background: "transparent", padding: 6, borderRadius: 8, cursor: "pointer" }}
-          >
-            ✕
+        {/* Header */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <h3
+                title={title}
+                style={{
+                  fontSize: 15,
+                  fontWeight: 800,
+                  margin: 0,
+                  color: "#111827",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {title}
+              </h3>
+              {isCouncil && (
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 600,
+                    background: "#ede9fe",
+                    color: "#6d28d9",
+                    padding: "2px 6px",
+                    borderRadius: 999,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Council dataset
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onClose} aria-label="Close" style={iconBtn}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                stroke="#6b7280"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
         </div>
 
-        {/* body */}
-        <div style={{ padding: 16, overflowY: "auto" }}>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Address:</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 14, color: "#111827" }}>
-                {address}
-                {isNonEmpty(postcode) ? `, ${postcode}` : ""}
-              </div>
-              <button
-                onClick={() =>
-                  navigator.clipboard?.writeText(
-                    isNonEmpty(postcode) ? `${address}, ${postcode}` : address
-                  )
-                }
-                style={{
-                  marginLeft: "auto",
-                  fontSize: 12,
-                  border: "1px solid #e5e7eb",
-                  padding: "4px 8px",
-                  borderRadius: 8,
-                  background: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Copy
-              </button>
+        {/* Body */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            overflowY: "auto",
+          }}
+        >
+          {/* Address */}
+          <div style={cardRow}>
+            <div style={rowLabel}>Address:</div>
+            <div title={fullAddress} style={rowValue}>
+              {fullAddress}
             </div>
-          </div>
-
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
-              Connectors:{" "}
-              <span style={{ color: "#111827", fontWeight: 600 }}>
-                {total > 0 ? total : "Unknown"}
-              </span>
-            </div>
-
-            {connectors.length > 0 ? (
-              <div
-                style={{
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 10,
-                  padding: 10,
-                  display: "grid",
-                  rowGap: 6,
-                }}
-              >
-                {connectors.map((c) => (
-                  <div key={c.label} style={{ fontSize: 14, color: "#111827" }}>
-                    • {c.label} × {c.quantity}
-                  </div>
-                ))}
-                {isCouncil && (
-                  <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
-                    Council feed may not include per-connector details.
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div
-                style={{
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 10,
-                  padding: 10,
-                  fontSize: 14,
-                  color: "#6b7280",
-                }}
-              >
-                Connector types not specified.
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-            <a
-              href={
-                isNonEmpty(postcode)
-                  ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                      `${address}, ${postcode}`
-                    )}`
-                  : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`
-              }
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                flex: 1,
-                textAlign: "center",
-                background: "#2563eb",
-                color: "#fff",
-                padding: "10px 12px",
-                borderRadius: 10,
-                fontWeight: 600,
-                textDecoration: "none",
-              }}
-            >
-              ➤ Directions
-            </a>
             <button
-              onClick={() =>
-                navigator.clipboard?.writeText(
-                  isNonEmpty(postcode) ? `${address}, ${postcode}` : address
-                )
-              }
-              style={{
-                width: 96,
-                background: "#f8fafc",
-                border: "1px solid #e5e7eb",
-                borderRadius: 10,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
+              onClick={() => navigator.clipboard?.writeText(fullAddress)}
+              style={chipBtn}
             >
               Copy
             </button>
           </div>
 
-          <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>Rate this location</div>
-          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
-            <button
-              onClick={() => setVote((v) => (v === "good" ? null : "good"))}
-              style={{
-                flex: 1,
-                background: vote === "good" ? "#dcfce7" : "#f8fafc",
-                border: "1px solid #e5e7eb",
-                borderRadius: 10,
-                padding: "8px 10px",
-                cursor: "pointer",
-              }}
-              disabled={isCouncil}
+          {/* Connectors */}
+          <div style={cardRow}>
+            <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
+              Connectors: {totalLabel}
+            </div>
+
+            {canonical.length > 0 ? (
+              <ul
+                style={{
+                  margin: "6px 0 0 0",
+                  padding: 0,
+                  listStyle: "none",
+                }}
+              >
+                {canonical.map((c) => (
+                  <li
+                    key={c.label}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 12,
+                      color: "#374151",
+                      marginBottom: 4,
+                    }}
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: CONNECTOR_COLORS[c.label],
+                        display: "inline-block",
+                        flex: "0 0 10px",
+                      }}
+                    />
+                    <span>
+                      {c.label} × {c.quantity}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : showUnknownBreakdown ? (
+              <ul
+                style={{
+                  margin: "6px 0 0 0",
+                  padding: 0,
+                  listStyle: "none",
+                }}
+              >
+                <li
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: "#374151",
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: "#9ca3af", // gray bullet for unknown
+                      display: "inline-block",
+                      flex: "0 0 10px",
+                    }}
+                  />
+                  <span>Unknown × {totalLabel}</span>
+                </li>
+              </ul>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Connector types not specified.
+              </div>
+            )}
+
+            {isCouncil && (
+              <div style={{ marginTop: 4, fontSize: 10.5, color: "#6b7280" }}>
+                Council feed may not include per-connector details.
+              </div>
+            )}
+          </div>
+
+          {/* Directions / copy */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <a
+              href={
+                station
+                  ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+                      `${(s.lat as number) ?? ""},${(s.lng as number) ?? ""}`
+                    )}`
+                  : "#"
+              }
+              target="_blank"
+              rel="noreferrer"
+              style={primaryBtn}
             >
-              👍 Good
-            </button>
+              ➤ Directions
+            </a>
             <button
-              onClick={() => setVote((v) => (v === "bad" ? null : "bad"))}
-              style={{
-                flex: 1,
-                background: vote === "bad" ? "#fee2e2" : "#f8fafc",
-                border: "1px solid #e5e7eb",
-                borderRadius: 10,
-                padding: "8px 10px",
-                cursor: "pointer",
+              onClick={() => {
+                const text = s.name || fullAddress || `${s.lat}, ${s.lng}`;
+                navigator.clipboard?.writeText(String(text));
               }}
-              disabled={isCouncil}
+              style={secondaryBtn}
             >
-              👎 Bad
+              Copy
             </button>
           </div>
 
-          <textarea
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="Optional comment (e.g., price, access, reliability)…"
-            rows={3}
-            style={{
-              width: "100%",
-              resize: "vertical",
-              minHeight: 72,
-              border: "1px solid #e5e7eb",
-              borderRadius: 10,
-              padding: 10,
-              fontSize: 14,
-              outline: "none",
-              marginBottom: 12,
-            }}
-            disabled={isCouncil}
-          />
+          {/* Feedback */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                style={{
+                  ...voteBtn,
+                  borderColor: vote === "up" ? "#22c55e" : "#e5e7eb",
+                  background: vote === "up" ? "#dcfce7" : "#fff",
+                }}
+                onClick={() => setVote("up")}
+              >
+                👍 Good
+              </button>
+              <button
+                style={{
+                  ...voteBtn,
+                  borderColor: vote === "down" ? "#f59e0b" : "#e5e7eb",
+                  background: vote === "down" ? "#fffbeb" : "#fff",
+                }}
+                onClick={() => setVote("down")}
+              >
+                👎 Bad
+              </button>
+            </div>
 
-          <button
-            onClick={handleSubmit}
-            disabled={!vote || isCouncil}
-            style={{
-              width: "100%",
-              background: !vote || isCouncil ? "#e5e7eb" : "#2563eb",
-              color: !vote || isCouncil ? "#6b7280" : "#fff",
-              padding: "10px 12px",
-              borderRadius: 10,
-              fontWeight: 700,
-              cursor: !vote || isCouncil ? "not-allowed" : "pointer",
-            }}
-          >
-            Submit feedback
-          </button>
+            {/* NEW: comment box */}
+            <textarea
+              placeholder="Optional comment (e.g., price, access, reliability)…"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              rows={3}
+              style={textarea}
+            />
+
+            <button
+              style={primaryBtn}
+              onClick={() => {
+                if (!station) return;
+                const chosen = vote ?? "up";
+                onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
+              }}
+            >
+              Submit feedback
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
+
+/* ─────────────── Styles ─────────────── */
+
+const drawerStyle: CSSProperties = {
+  position: "fixed",
+  right: 12,
+  top: 84, // below the app bar
+  zIndex: 10001,
+  width: "min(286px, 92vw)",
+  maxHeight: "calc(100vh - 96px)",
+  background: "#fff",
+  border: "1px solid #eaeaea",
+  borderRadius: 14,
+  boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
+  padding: 10,
+  display: "flex",
+  flexDirection: "column",
+};
+
+const cardRow: CSSProperties = {
+  padding: "8px 10px",
+  border: "1px solid #efefef",
+  borderRadius: 10,
+  background: "#fafafa",
+};
+
+const rowLabel: CSSProperties = {
+  fontWeight: 700,
+  color: "#374151",
+  fontSize: 12,
+  marginBottom: 4,
+};
+
+const rowValue: CSSProperties = {
+  color: "#111827",
+  fontSize: 12,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+};
+
+const iconBtn: CSSProperties = {
+  appearance: "none",
+  border: 0,
+  background: "transparent",
+  width: 28,
+  height: 28,
+  borderRadius: 8,
+  display: "grid",
+  placeItems: "center",
+  cursor: "pointer",
+};
+
+const chipBtn: CSSProperties = {
+  appearance: "none",
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  padding: "6px 9px",
+  borderRadius: 8,
+  fontSize: 12,
+  cursor: "pointer",
+  marginLeft: 8,
+};
+
+const primaryBtn: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  appearance: "none",
+  textDecoration: "none",
+  border: 0,
+  background: "#2563eb",
+  color: "#fff",
+  padding: "10px 12px",
+  borderRadius: 10,
+  fontWeight: 700,
+  width: "100%",
+  cursor: "pointer",
+  boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
+  fontSize: 13,
+};
+
+const secondaryBtn: CSSProperties = {
+  ...primaryBtn,
+  background: "#fff",
+  color: "#111827",
+  border: "1px solid #e5e7eb",
+};
+
+const voteBtn: CSSProperties = {
+  ...secondaryBtn,
+  padding: "8px 10px",
+  fontWeight: 600,
+  fontSize: 12,
+};
+
+const textarea: CSSProperties = {
+  width: "100%",
+  resize: "vertical",
+  minHeight: 70,
+  fontSize: 12,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  outline: "none",
+  color: "#111827",
+  background: "#fff",
+};
