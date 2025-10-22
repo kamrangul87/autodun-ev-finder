@@ -1,19 +1,20 @@
 // components/EnhancedMapV2.jsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
   Marker,
   Circle,
+  LayerGroup,
   useMap,
   useMapEvents,
 } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer handles council vs normal
+import StationDrawer from "./StationDrawer";
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
@@ -25,6 +26,15 @@ const toBool = (v) => {
   if (typeof v === "number") return v !== 0;
   if (typeof v === "string") return v === "1" || v.toLowerCase() === "true";
   return false;
+};
+
+const isDesktopPointer = () => {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return true;
+  try {
+    return window.matchMedia("(pointer:fine)").matches; // desktops/laptops typically "fine"
+  } catch {
+    return true;
+  }
 };
 
 if (typeof window !== "undefined") {
@@ -39,7 +49,15 @@ if (typeof window !== "undefined") {
 }
 
 const councilIcon = L.divIcon({
-  html: '<div style="background:#9333ea;width:14px;height:14px;transform:rotate(45deg);border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4)"></div>',
+  html: `
+    <div style="
+      width:14px;height:14px;
+      background:#9333ea;
+      transform:rotate(45deg);
+      border:2px solid #fff;
+      box-shadow:0 0 4px rgba(0,0,0,0.45);
+      opacity:1; filter:none;
+    "></div>`,
   className: "",
   iconSize: [14, 14],
   iconAnchor: [7, 7],
@@ -61,14 +79,14 @@ function MapInitializer() {
   return null;
 }
 
-// Ensure a dedicated pane for council markers (fixes desktop z-order)
+// Dedicated pane for council markers (sits above default markerPane=600)
 function EnsureCouncilPane() {
   const map = useMap();
   useEffect(() => {
     const name = "council-pane";
     if (!map.getPane(name)) {
       const pane = map.createPane(name);
-      pane.style.zIndex = "650"; // ABOVE markerPane(600) & overlayPane(400); still below your drawer
+      pane.style.zIndex = "650"; // above markerPane(600), overlayPane(400); below your drawer
       pane.style.pointerEvents = "auto";
     }
   }, [map]);
@@ -141,7 +159,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       }).addTo(map);
     });
 
-  return () => {
+    return () => {
       if (heatLayerRef.current) {
         map.removeLayer(heatLayerRef.current);
         heatLayerRef.current = null;
@@ -161,6 +179,9 @@ function StationMarker({ station, onClick }) {
   );
 }
 
+// Council markers layer:
+// - Desktop: NO clustering (LayerGroup in pane "council-pane")
+// - Mobile: cluster (MarkerClusterGroup) in pane "council-pane"
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
@@ -168,6 +189,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const lastBboxRef = useRef(null);
 
   const showCouncilBool = toBool(showCouncil);
+  const isDesktop = useMemo(() => isDesktopPointer(), []);
 
   const fetchCouncilData = useCallback(async () => {
     if (!showCouncilBool) {
@@ -234,12 +256,31 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
   if (!showCouncilBool || councilStations.length === 0) return null;
 
+  // DESKTOP (no cluster): render directly in pane
+  if (isDesktop) {
+    return (
+      <LayerGroup pane="council-pane" key={`council-desktop-${councilStations.length}`}>
+        {councilStations.map((station) => (
+          <Marker
+            key={`council-${station.id}`}
+            position={[station.lat, station.lng]}
+            icon={councilIcon}
+            pane="council-pane"
+            zIndexOffset={1000}
+            eventHandlers={{ click: () => onMarkerClick(station) }}
+          />
+        ))}
+      </LayerGroup>
+    );
+  }
+
+  // MOBILE (clustered): same as before
   return (
     <MarkerClusterGroup
       chunkedLoading
-      pane="council-pane"                               // <-- important for desktop
-      key={`council-${showCouncilBool ? "on" : "off"}`} // remount on toggle
-      disableClusteringAtZoom={13}                      // optional UX
+      pane="council-pane"
+      key={`council-mobile-${councilStations.length}`}
+      disableClusteringAtZoom={13}
     >
       {councilStations.map((station) => (
         <Marker
@@ -425,7 +466,7 @@ export default function EnhancedMap({
   const handleFeedbackSubmit = useCallback(
     (stationId, vote, comment) => {
       onToast?.({ message: "✓ Thanks for your feedback!", type: "success" });
-      // (wire to /api/feedback if needed later)
+      // (wire to /api/feedback later if needed)
     },
     [onToast]
   );
