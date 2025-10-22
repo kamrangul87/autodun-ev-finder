@@ -1,13 +1,15 @@
+// components/StationDrawer.tsx
 import { useEffect, useRef, useCallback, useMemo } from "react";
+import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
 
-// ————————————————————————————————————————————————————————————————
-// Small, dependency-free body scroll lock + focus management
-// ————————————————————————————————————————————————————————————————
+/* ------------------------------------------------------------------ */
+/* Body scroll lock + keyboard/focus handling                          */
+/* ------------------------------------------------------------------ */
 function useBodyScrollLock(locked: boolean) {
   useEffect(() => {
-    const { body } = document;
+    const body = typeof document !== "undefined" ? document.body : null;
     if (!body) return;
     const prev = body.style.overflow;
     if (locked) body.style.overflow = "hidden";
@@ -28,37 +30,35 @@ function useEscapeToClose(open: boolean, onClose?: () => void) {
   }, [open, onClose]);
 }
 
-// Trap focus within the drawer when open (no deps)
 function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElement>) {
   useEffect(() => {
     if (!enabled || !containerRef.current) return;
     const el = containerRef.current;
 
-    // focus first focusable on open
     const focusable = el.querySelectorAll<HTMLElement>(
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
     );
     const first = focusable[0] || el;
     const prevActive = document.activeElement as HTMLElement | null;
-    // Delay to avoid racing with map marker click
-    const id = requestAnimationFrame(() => first.focus({ preventScroll: true }));
+
+    const raf = requestAnimationFrame(() => first.focus({ preventScroll: true }));
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const list = Array.from(focusable);
+      const list = Array.from(el.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      ));
       if (!list.length) return;
 
       const current = document.activeElement as HTMLElement | null;
-      const idx = Math.max(0, list.indexOf(current || first));
-      const nextIdx =
-        e.shiftKey ? (idx - 1 + list.length) % list.length : (idx + 1) % list.length;
-
       if (!el.contains(current)) {
-        // if focus escaped somehow, bring it back
         (e.shiftKey ? list[list.length - 1] : list[0]).focus({ preventScroll: true });
         e.preventDefault();
         return;
       }
+
+      const idx = Math.max(0, list.indexOf(current!));
+      const nextIdx = e.shiftKey ? (idx - 1 + list.length) % list.length : (idx + 1) % list.length;
 
       if ((e.shiftKey && idx === 0) || (!e.shiftKey && idx === list.length - 1)) {
         list[nextIdx].focus({ preventScroll: true });
@@ -68,16 +68,16 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
 
     document.addEventListener("keydown", onKey, { capture: true });
     return () => {
-      cancelAnimationFrame(id);
+      cancelAnimationFrame(raf);
       document.removeEventListener("keydown", onKey, { capture: true } as any);
       prevActive?.focus?.();
     };
   }, [enabled, containerRef]);
 }
 
-// ————————————————————————————————————————————————————————————————
-// Utilities
-// ————————————————————————————————————————————————————————————————
+/* ------------------------------------------------------------------ */
+/* Utilities                                                           */
+/* ------------------------------------------------------------------ */
 const sumConnectors = (connectors?: Connector[]) => {
   if (!Array.isArray(connectors) || connectors.length === 0) return null;
   let total = 0;
@@ -101,11 +101,11 @@ const prettyConnectorLines = (connectors?: Connector[]) => {
   return lines;
 };
 
-// ————————————————————————————————————————————————————————————————
-// Component
-// ————————————————————————————————————————————————————————————————
+/* ------------------------------------------------------------------ */
+/* Props & Component                                                   */
+/* ------------------------------------------------------------------ */
 type Props = {
-  station: Station | null; // when null => closed
+  station: Station | null; // null => closed
   onClose?: () => void;
   onFeedbackSubmit?: (stationId: number | string, vote: "up" | "down", comment?: string) => void;
 };
@@ -115,47 +115,53 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit }: Pr
   const containerRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
-  // Hardened: lock body scroll only when open
+  // Hardened UX
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
 
-  // Outside click (pointerdown to catch before focus happens)
+  // Outside click close
   useEffect(() => {
     if (!open) return;
-    const onPointer = (e: PointerEvent) => {
-      const card = cardRef.current;
-      if (!card) return;
-      if (!card.contains(e.target as Node)) {
-        onClose?.();
-      }
-    };
-    // Only when clicking our overlay; prevent interfering with the map when closed
     const overlay = containerRef.current;
-    overlay?.addEventListener("pointerdown", onPointer);
-    return () => overlay?.removeEventListener("pointerdown", onPointer);
+    const handler = (e: PointerEvent) => {
+      const card = cardRef.current;
+      if (card && !card.contains(e.target as Node)) onClose?.();
+    };
+    overlay?.addEventListener("pointerdown", handler);
+    return () => overlay?.removeEventListener("pointerdown", handler);
   }, [open, onClose]);
 
-  // Debounce telemetry for rapid marker taps (prevents stuck focus race)
+  // Debounced telemetry (prevents race when tapping multiple markers quickly)
   useEffect(() => {
     if (!open || !station) return;
     const id = window.setTimeout(() => {
-      telemetry.drawerOpen(station.id as any, Boolean((station as any).isCouncil));
+      telemetry.drawerOpen((station as any).id, Boolean((station as any).isCouncil));
     }, 60);
     return () => window.clearTimeout(id);
   }, [open, station]);
 
-  // Derived display fields (safe against missing data)
+  /* ---------- Derived display fields (safe across feeds) ---------- */
   const title = station?.name || "Unknown location";
-  const address =
-  station?.address ??
-  (station as unknown as { AddressInfo?: { AddressLine1?: string } })?.AddressInfo?.AddressLine1 ??
-  "—";
 
-const postcode =
-  station?.postcode ??
-  (station as unknown as { AddressInfo?: { Postcode?: string } })?.AddressInfo?.Postcode ??
-  "—";
+  const address =
+    station?.address ??
+    (station as unknown as { AddressInfo?: { AddressLine1?: string } })?.AddressInfo
+      ?.AddressLine1 ??
+    "—";
+
+  const postcode =
+    station?.postcode ??
+    (station as unknown as { AddressInfo?: { Postcode?: string } })?.AddressInfo
+      ?.Postcode ??
+    "—";
+
+  // Normalize town from both shapes
+  const town =
+    (station as unknown as { town?: string })?.town ??
+    (station as unknown as { AddressInfo?: { Town?: string } })?.AddressInfo?.Town ??
+    undefined;
+
   const totalConnectors = useMemo(() => sumConnectors(station?.connectors), [station]);
   const perLines = useMemo(() => prettyConnectorLines(station?.connectors), [station]);
   const isCouncil = Boolean((station as any)?.isCouncil);
@@ -170,8 +176,7 @@ const postcode =
         position: "fixed",
         inset: 0,
         zIndex: 10000,
-        // transparent overlay that still receives pointer events for outside-click close
-        background: "transparent",
+        background: "transparent", // overlay catches outside clicks
         display: "flex",
         justifyContent: "flex-end",
       }}
@@ -194,7 +199,6 @@ const postcode =
           flexDirection: "column",
           gap: "10px",
         }}
-        // stop outside-click handler when interacting inside
         onPointerDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -232,8 +236,8 @@ const postcode =
                 </span>
               )}
             </div>
-            {station?.town && (
-              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{station.town}</div>
+            {town && (
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>{town}</div>
             )}
           </div>
 
@@ -291,7 +295,8 @@ const postcode =
           </div>
           <button
             onClick={() => {
-              navigator.clipboard?.writeText(`${address}${postcode ? `, ${postcode}` : ""}`);
+              const text = `${address}${postcode ? `, ${postcode}` : ""}`;
+              navigator.clipboard?.writeText(text);
             }}
             style={copyBtnStyle}
           >
@@ -332,7 +337,7 @@ const postcode =
             href={
               station
                 ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                    `${station.lat},${station.lng}`
+                    `${(station as any).lat},${(station as any).lng}`
                   )}`
                 : "#"
             }
@@ -343,14 +348,14 @@ const postcode =
             ➤ Directions
           </a>
 
-          <button
+        <button
             onClick={() => {
               if (!station) return;
               const text =
                 station.name ||
-                station.address ||
-                station.postcode ||
-                `${station.lat}, ${station.lng}`;
+                (station as any).address ||
+                (station as any).postcode ||
+                `${(station as any).lat}, ${(station as any).lng}`;
               navigator.clipboard?.writeText(String(text));
             }}
             style={secondaryBtnStyle}
@@ -359,19 +364,19 @@ const postcode =
           </button>
         </div>
 
-        {/* Feedback (unchanged API; better tap targets) */}
+        {/* Feedback */}
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontSize: 13, color: "#374151" }}>Rate this location</div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
               style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.(station.id as any, "up")}
+              onClick={() => station && onFeedbackSubmit?.((station as any).id, "up")}
             >
               👍 Good
             </button>
             <button
               style={voteBtnStyle}
-              onClick={() => station && onFeedbackSubmit?.(station.id as any, "down")}
+              onClick={() => station && onFeedbackSubmit?.((station as any).id, "down")}
             >
               👎 Bad
             </button>
@@ -380,7 +385,7 @@ const postcode =
             style={footerSubmitStyle}
             onClick={() => {
               if (!station) return;
-              onFeedbackSubmit?.(station.id as any, "up");
+              onFeedbackSubmit?.((station as any).id, "up");
             }}
           >
             Submit feedback
@@ -391,8 +396,8 @@ const postcode =
   );
 }
 
-/* ——— styles ——— */
-const copyBtnStyle: React.CSSProperties = {
+/* ------------------------------ styles ------------------------------ */
+const copyBtnStyle: CSSProperties = {
   appearance: "none",
   border: "1px solid #e5e7eb",
   background: "#fff",
@@ -402,7 +407,7 @@ const copyBtnStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const primaryBtnStyle: React.CSSProperties = {
+const primaryBtnStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
@@ -419,20 +424,20 @@ const primaryBtnStyle: React.CSSProperties = {
   boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
 };
 
-const secondaryBtnStyle: React.CSSProperties = {
+const secondaryBtnStyle: CSSProperties = {
   ...primaryBtnStyle,
   background: "#fff",
   color: "#111827",
   border: "1px solid #e5e7eb",
 };
 
-const voteBtnStyle: React.CSSProperties = {
+const voteBtnStyle: CSSProperties = {
   ...secondaryBtnStyle,
   padding: "10px 12px",
   fontWeight: 600,
 };
 
-const footerSubmitStyle: React.CSSProperties = {
+const footerSubmitStyle: CSSProperties = {
   ...primaryBtnStyle,
   marginTop: 4,
 };
