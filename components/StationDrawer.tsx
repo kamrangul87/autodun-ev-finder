@@ -1,5 +1,5 @@
 // components/StationDrawer.tsx
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { telemetry } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
@@ -8,7 +8,7 @@ import {
   CONNECTOR_COLORS,
 } from "../lib/connectorCatalog";
 
-/* ───────────────────────────── UX helpers ───────────────────────────── */
+/* ─────────────── UX helpers ─────────────── */
 
 function useBodyScrollLock(locked: boolean) {
   useEffect(() => {
@@ -89,7 +89,7 @@ function useFocusTrap(
   }, [enabled, containerRef]);
 }
 
-/* ───────────────────────────── Normalizers ───────────────────────────── */
+/* ─────────────── Normalizers ─────────────── */
 
 const pick = <T,>(obj: any, keys: string[]): T | undefined => {
   for (const k of keys) {
@@ -100,7 +100,7 @@ const pick = <T,>(obj: any, keys: string[]): T | undefined => {
 };
 
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Already normalized in app
+  // 1) Preferred: already-normalized station.connectors
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
       type: c?.type ?? "Unknown",
@@ -111,8 +111,7 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: typeof c?.powerKW === "number" ? c.powerKW : undefined,
     }));
   }
-
-  // 2) OpenChargeMap (Connections[])
+  // 2) OpenChargeMap: Connections[]
   if (Array.isArray(station?.Connections) && station.Connections.length) {
     return station.Connections.map((c: any) => ({
       type:
@@ -124,15 +123,11 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined,
     }));
   }
-
-  // 3) Council dataset: NumberOfPoints
+  // 3) Council: NumberOfPoints, etc.
   const npts =
     pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
     null;
   if (typeof npts === "number" && npts > 0) return [{ type: "Unknown", quantity: npts }];
-
-  // 4) Explicit council row fallback
-  if (station?.isCouncil) return [{ type: "Unknown", quantity: 1 }];
 
   return null;
 }
@@ -148,7 +143,7 @@ function sumConnectors(list: Connector[] | null): number | null {
   return total > 0 ? total : null;
 }
 
-/* ───────────────────────────── Component ───────────────────────────── */
+/* ─────────────── Component ─────────────── */
 
 type Props = {
   station: Station | null;
@@ -169,11 +164,22 @@ export default function StationDrawer({
   const overlayRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
 
+  // feedback state
+  const [vote, setVote] = useState<"up" | "down" | null>(null);
+  const [comment, setComment] = useState("");
+
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
 
-  // close on outside click
+  // reset feedback when the station changes
+  useEffect(() => {
+    if (!open) return;
+    setVote(null);
+    setComment("");
+  }, [open, station?.id]);
+
+  // outside click (on transparent overlay)
   useEffect(() => {
     if (!open) return;
     const overlay = overlayRef.current;
@@ -198,7 +204,7 @@ export default function StationDrawer({
   const s: any = station || {};
   const isCouncil = Boolean(s.isCouncil);
 
-  // Address fields (robust join of line1, town/city, postcode)
+  // Address build (line1, town/city, postcode)
   const ai = s.AddressInfo || {};
   const line1 =
     pick<string>(s, ["address", "AddressLine1"]) ??
@@ -213,15 +219,28 @@ export default function StationDrawer({
 
   const title = s.name || ai.Title || "Unknown location";
 
-  // Connectors (aggregate into CCS / CHAdeMO / Type 2)
+  // Connectors (with robust fallbacks)
   const connectors = useMemo(() => normalizeConnectors(s), [s]);
+
+  // total count label: try explicit sums, then known OCM fields, then council fallback
   const totalNum = useMemo(() => {
-    const n = sumConnectors(connectors);
-    if (n !== null) return n;
+    const totals = [
+      sumConnectors(connectors),
+      pick<number>(s, ["NumberOfPoints", "numberOfPoints"]),
+      Array.isArray(s?.Connections)
+        ? s.Connections.reduce(
+            (acc: number, c: any) => acc + (typeof c?.Quantity === "number" ? c.Quantity : 1),
+            0
+          )
+        : null,
+    ].filter((n) => typeof n === "number" && !Number.isNaN(n)) as number[];
+    if (totals.length) return totals[0]!;
     return isCouncil ? 1 : null;
-  }, [connectors, isCouncil]);
+  }, [connectors, s, isCouncil]);
+
   const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
 
+  // canonical breakdown (CCS / CHAdeMO / Type 2), if we can map types
   const canonical = useMemo(() => {
     if (!Array.isArray(connectors) || !connectors.length) return [];
     return aggregateToCanonical(
@@ -233,9 +252,8 @@ export default function StationDrawer({
     );
   }, [connectors]);
 
-  const showTypesMessage =
-    isCouncil &&
-    (!Array.isArray(connectors) || !connectors.length || canonical.length === 0);
+  const showUnknownBreakdown =
+    (!canonical || canonical.length === 0) && totalNum !== null;
 
   if (!open) return null;
 
@@ -251,7 +269,7 @@ export default function StationDrawer({
           background: "transparent",
         }}
       />
-      {/* floating compact card (keep as-is) */}
+      {/* floating compact card (kept as you approved) */}
       <div
         ref={cardRef}
         role="dialog"
@@ -336,11 +354,7 @@ export default function StationDrawer({
               Connectors: {totalLabel}
             </div>
 
-            {showTypesMessage ? (
-              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
-                Connector types not specified.
-              </div>
-            ) : (
+            {canonical.length > 0 ? (
               <ul
                 style={{
                   margin: "6px 0 0 0",
@@ -377,6 +391,41 @@ export default function StationDrawer({
                   </li>
                 ))}
               </ul>
+            ) : showUnknownBreakdown ? (
+              <ul
+                style={{
+                  margin: "6px 0 0 0",
+                  padding: 0,
+                  listStyle: "none",
+                }}
+              >
+                <li
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12,
+                    color: "#374151",
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 10,
+                      height: 10,
+                      borderRadius: 999,
+                      background: "#9ca3af", // gray bullet for unknown
+                      display: "inline-block",
+                      flex: "0 0 10px",
+                    }}
+                  />
+                  <span>Unknown × {totalLabel}</span>
+                </li>
+              </ul>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                Connector types not specified.
+              </div>
             )}
 
             {isCouncil && (
@@ -386,7 +435,7 @@ export default function StationDrawer({
             )}
           </div>
 
-          {/* Actions */}
+          {/* Directions / copy */}
           <div style={{ display: "flex", gap: 6 }}>
             <a
               href={
@@ -412,38 +461,60 @@ export default function StationDrawer({
               Copy
             </button>
           </div>
-        </div>
 
-        {/* Footer inside the card */}
-        <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-          <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
-          <div style={{ display: "flex", gap: 6 }}>
+          {/* Feedback */}
+          <div style={{ display: "grid", gap: 8 }}>
+            <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <button
+                style={{
+                  ...voteBtn,
+                  borderColor: vote === "up" ? "#22c55e" : "#e5e7eb",
+                  background: vote === "up" ? "#dcfce7" : "#fff",
+                }}
+                onClick={() => setVote("up")}
+              >
+                👍 Good
+              </button>
+              <button
+                style={{
+                  ...voteBtn,
+                  borderColor: vote === "down" ? "#f59e0b" : "#e5e7eb",
+                  background: vote === "down" ? "#fffbeb" : "#fff",
+                }}
+                onClick={() => setVote("down")}
+              >
+                👎 Bad
+              </button>
+            </div>
+
+            {/* NEW: comment box */}
+            <textarea
+              placeholder="Optional comment (e.g., price, access, reliability)…"
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              rows={3}
+              style={textarea}
+            />
+
             <button
-              style={voteBtn}
-              onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
+              style={primaryBtn}
+              onClick={() => {
+                if (!station) return;
+                const chosen = vote ?? "up";
+                onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
+              }}
             >
-              👍 Good
-            </button>
-            <button
-              style={voteBtn}
-              onClick={() => station && onFeedbackSubmit?.(s.id, "down")}
-            >
-              👎 Bad
+              Submit feedback
             </button>
           </div>
-          <button
-            style={primaryBtn}
-            onClick={() => station && onFeedbackSubmit?.(s.id, "up")}
-          >
-            Submit feedback
-          </button>
         </div>
       </div>
     </>
   );
 }
 
-/* ───────────────────────────── Styles ───────────────────────────── */
+/* ─────────────── Styles ─────────────── */
 
 const drawerStyle: CSSProperties = {
   position: "fixed",
@@ -536,4 +607,17 @@ const voteBtn: CSSProperties = {
   padding: "8px 10px",
   fontWeight: 600,
   fontSize: 12,
+};
+
+const textarea: CSSProperties = {
+  width: "100%",
+  resize: "vertical",
+  minHeight: 70,
+  fontSize: 12,
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  outline: "none",
+  color: "#111827",
+  background: "#fff",
 };
