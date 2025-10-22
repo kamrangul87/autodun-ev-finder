@@ -224,7 +224,8 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
-            findPostcode({ ...p, ...ai }) ||
+            // cover PostCode / PostalCode / nested variants + a regex fallback
+            findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
             // sometimes people smuggle postcode into the "title"
             (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
@@ -250,7 +251,8 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
-            address: addressLine,
+            // Compose a single address line so the drawer shows full address incl. postcode.
+            address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
             town,
             postcode,
             connectors,
