@@ -14,7 +14,7 @@ import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
 
-import { StationDrawer } from './StationDrawer';
+import StationDrawer from './StationDrawer';
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
