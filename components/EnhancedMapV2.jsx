@@ -37,6 +37,14 @@ const isDesktopPointer = () => {
   }
 };
 
+// Normalize bbox to a stable string (prevents false "same bbox" on tiny float diffs)
+const bboxStrFromBounds = (bounds) => {
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  const r = (n) => Number(n).toFixed(4); //  ~11m precision; good enough for viewport fetch
+  return `${r(sw.lng)},${r(sw.lat)},${r(ne.lng)},${r(ne.lat)}`;
+};
+
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -51,16 +59,15 @@ if (typeof window !== "undefined") {
 const councilIcon = L.divIcon({
   html: `
     <div style="
-      width:14px;height:14px;
+      width:16px;height:16px;
       background:#9333ea;
       transform:rotate(45deg);
       border:2px solid #fff;
       box-shadow:0 0 4px rgba(0,0,0,0.45);
-      opacity:1; filter:none;
     "></div>`,
   className: "",
-  iconSize: [14, 14],
-  iconAnchor: [7, 7],
+  iconSize: [16, 16],
+  iconAnchor: [8, 8],
 });
 
 const userLocationIcon = L.divIcon({
@@ -86,7 +93,7 @@ function EnsureCouncilPane() {
     const name = "council-pane";
     if (!map.getPane(name)) {
       const pane = map.createPane(name);
-      pane.style.zIndex = "650"; // above markerPane(600), overlayPane(400); below your drawer
+      pane.style.zIndex = "700"; // above markerPane(600) & overlayPane(400); below popup(800)
       pane.style.pointerEvents = "auto";
     }
   }, [map]);
@@ -181,7 +188,8 @@ function StationMarker({ station, onClick }) {
 
 // Council markers layer:
 // - Desktop: NO clustering (LayerGroup in pane "council-pane")
-// - Mobile: cluster (MarkerClusterGroup) in pane "council-pane"
+// - Mobile: clustered (MarkerClusterGroup) in pane "council-pane"
+// - Fetch on: load, moveend, zoomend (desktop was missing load/zoom refresh)
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
@@ -197,9 +205,9 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       return;
     }
     const bounds = map.getBounds();
-    const sw = bounds.getSouthWest();
-    const ne = bounds.getNorthEast();
-    const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+    const bboxStr = bboxStrFromBounds(bounds);
+
+    // Avoid refetch only if the normalized bbox truly didn't change
     if (lastBboxRef.current === bboxStr) return;
 
     const cacheKey = `council_${bboxStr}`;
@@ -237,22 +245,44 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
         setCache(cacheKey, { items, count: items.length });
         lastBboxRef.current = bboxStr;
         telemetry.councilSelected("viewport", items.length);
+      } else {
+        // even if empty, update the bbox guard so we don't spam
+        lastBboxRef.current = bboxStr;
+        setCouncilStations([]);
       }
     } catch (err) {
       console.error("[CouncilMarkerLayer] Fetch error:", err);
     }
   }, [map, showCouncilBool]);
 
+  // Make sure we fetch on all the events desktop needs
+  useEffect(() => {
+    // initial fetch when map is ready (desktop needed this)
+    if (!showCouncilBool) return;
+    const onLoad = () => fetchCouncilData();
+    map.whenReady(onLoad);
+    return () => {
+      // nothing to detach from whenReady
+    };
+  }, [map, showCouncilBool, fetchCouncilData]);
+
   useMapEvents({
     moveend: () => {
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 250);
+      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 200);
+    },
+    zoomend: () => {
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 50);
     },
   });
 
   useEffect(() => {
-    fetchCouncilData();
-  }, [fetchCouncilData, showCouncilBool]);
+    // react to explicit toggle changes too
+    if (showCouncilBool) fetchCouncilData();
+    else setCouncilStations([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCouncilBool]);
 
   if (!showCouncilBool || councilStations.length === 0) return null;
 
@@ -274,7 +304,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
     );
   }
 
-  // MOBILE (clustered): same as before
+  // MOBILE (clustered)
   return (
     <MarkerClusterGroup
       chunkedLoading
@@ -330,9 +360,7 @@ function ViewportFetcher({
   const fetchForViewport = useCallback(
     async (isFirstLoad = false) => {
       const bounds = map.getBounds();
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+      const bboxStr = bboxStrFromBounds(bounds);
       if (lastFetchRef.current === bboxStr) return;
 
       const cacheKey = `bbox_${bboxStr}`;
@@ -383,7 +411,7 @@ function ViewportFetcher({
 
   useEffect(() => {
     if (isFirstFetchRef.current && stations && stations.length > 0) {
-      const bboxStr = `-8.649,49.823,1.763,60.845`;
+      const bboxStr = `-8.6490,49.8230,1.7630,60.8450`; // normalized
       lastFetchRef.current = bboxStr;
       isFirstFetchRef.current = false;
     }
