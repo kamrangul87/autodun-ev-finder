@@ -13,7 +13,7 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
+import StationDrawer from "./StationDrawer";
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
@@ -143,7 +143,6 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
-/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -165,7 +164,6 @@ function findPostcode(obj) {
   return undefined;
 }
 
-/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -215,7 +213,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
-          // Title / address bits
           const name =
             p.title ||
             ai.Title ||
@@ -229,7 +226,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             ai.Title ||
             undefined;
 
-          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
@@ -239,19 +235,12 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
               p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
-          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          // Default council connectors to "Type 2"
-          const connectors = [
-            {
-              type: "Type 2",
-              quantity: qty,
-            },
-          ];
+          const connectors = [{ type: "Type 2", quantity: qty }];
 
           return {
             id: Number(p.id),
@@ -355,7 +344,6 @@ function ViewportFetcher({
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
         const limitPerTile = isFirstLoad ? 500 : 750;
-        // IMPORTANT: always pass explicit OpenCharge source if your API expects it
         const url = `/api/stations?source=opencharge&bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
         const data = await response.json();
@@ -449,40 +437,46 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // NEW: connector filters (all on by default)
+  // Connector filters
   const [filters, setFilters] = useState({
     ccs: true,
     chademo: true,
     type2: true,
   });
 
-  // Helper to detect what a station actually has (uses API booleans if present)
+  // CHANGE #1 — robust flag extractor (falls back to false; we detect “no info” later)
   const stationHas = useCallback((s) => {
     const hasCCS =
       s.hasCCS ??
       (Array.isArray(s.connectorsDetailed) &&
-        s.connectorsDetailed.some((c) => c?.type === "CCS"));
+        s.connectorsDetailed.some((c) => c?.type === "CCS")) ??
+      false;
     const hasCHAdeMO =
       s.hasCHAdeMO ??
       (Array.isArray(s.connectorsDetailed) &&
-        s.connectorsDetailed.some((c) => c?.type === "CHAdeMO"));
+        s.connectorsDetailed.some((c) => c?.type === "CHAdeMO")) ??
+      false;
     const hasType2 =
       s.hasType2 ??
       (Array.isArray(s.connectorsDetailed) &&
-        s.connectorsDetailed.some((c) => c?.type === "Type 2"));
-    return {
-      hasCCS: !!hasCCS,
-      hasCHAdeMO: !!hasCHAdeMO,
-      hasType2: !!hasType2,
-    };
+        s.connectorsDetailed.some((c) => c?.type === "Type 2")) ??
+      false;
+    return { hasCCS, hasCHAdeMO, hasType2 };
   }, []);
 
-  // Apply filter to stations for markers & heatmap
+  // CHANGE #2 — preserve legacy behavior: if station has **no** connector info, DO NOT filter it out
   const filteredStations = useMemo(() => {
-    const any = filters.ccs || filters.chademo || filters.type2;
-    if (!any) return [];
+    const anyFilterOn = filters.ccs || filters.chademo || filters.type2;
+    if (!anyFilterOn) return []; // user turned everything off intentionally
+
     return (stations || []).filter((s) => {
       const f = stationHas(s);
+      const hasAnyInfo = f.hasCCS || f.hasCHAdeMO || f.hasType2;
+
+      // No connector metadata? Keep it (so markers/heatmap behave like before).
+      if (!hasAnyInfo) return true;
+
+      // Has explicit info -> apply filters
       return (
         (filters.ccs && f.hasCCS) ||
         (filters.chademo && f.hasCHAdeMO) ||
@@ -577,7 +571,7 @@ export default function EnhancedMap({
         </div>
       )}
 
-      {/* Filter & legend box (bottom-right) */}
+      {/* Filter + legend */}
       <div
         style={{
           position: "absolute",
