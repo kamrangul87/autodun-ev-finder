@@ -45,7 +45,7 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-/* ─────────────── Connector filter helpers ─────────────── */
+/* ─────────────── Connector filter helpers (updated) ─────────────── */
 
 // Canonicalize to our legend labels
 const canonicalize = (raw) => {
@@ -53,11 +53,17 @@ const canonicalize = (raw) => {
   const t = raw.toLowerCase();
   if (t.includes("ccs") || t.includes("combo")) return "CCS";
   if (t.includes("chademo")) return "CHAdeMO";
-  if (t.includes("type 2") || t.includes("type-2") || (t.includes("iec 62196") && t.includes("type 2"))) return "Type 2";
+  if (
+    t.includes("type 2") ||
+    t.includes("type-2") ||
+    (t.includes("iec 62196") && t.includes("type 2")) ||
+    t.includes("mennekes")
+  )
+    return "Type 2";
   return raw.trim();
 };
 
-// Robustly extract connector labels from different station shapes
+// Read connector labels no matter which shape the station uses
 function extractConnectorLabels(station) {
   const arr =
     (Array.isArray(station?.connectors) && station.connectors) ||
@@ -68,6 +74,7 @@ function extractConnectorLabels(station) {
     null;
 
   if (!Array.isArray(arr) || arr.length === 0) return [];
+
   return arr.map((c) => {
     const title =
       c?.type ||
@@ -80,22 +87,32 @@ function extractConnectorLabels(station) {
   });
 }
 
-// IMPORTANT: Unknowns remain visible when any filter is off
+/**
+ * Filter logic:
+ * - If ALL toggles are off → hide everything.
+ * - If ALL toggles are on → no filtering.
+ * - If SOME are on → keep stations that match OR have unknown labels
+ *   (so the map doesn't suddenly empty due to messy OCM data).
+ */
 function stationMatchesFilter(station, filter) {
-  // if all enabled, no filtering
-  if (filter.type2 && filter.ccs && filter.chademo) return true;
+  const anyOn = filter.type2 || filter.ccs || filter.chademo;
+  const allOn = filter.type2 && filter.ccs && filter.chademo;
+  if (!anyOn) return false; // user turned them all off → show nothing
+  if (allOn) return true;   // no filtering
 
   const labels = extractConnectorLabels(station);
 
-  // Keep unknowns visible so map doesn't clear until OCM mapping is perfect
+  // Keep unknowns visible during partial filtering
   if (!labels || labels.length === 0) return true;
 
-  const hasType2 = labels.some((l) => l === "Type 2");
-  const hasCCS = labels.some((l) => l === "CCS");
-  const hasCHA = labels.some((l) => l === "CHAdeMO");
-
-  return (filter.type2 && hasType2) || (filter.ccs && hasCCS) || (filter.chademo && hasCHA);
+  const s = new Set(labels);
+  return (
+    (filter.type2 && s.has("Type 2")) ||
+    (filter.ccs && s.has("CCS")) ||
+    (filter.chademo && s.has("CHAdeMO"))
+  );
 }
+/* ─────────────── end helper block ─────────────── */
 
 function MapInitializer() {
   const map = useMap();
@@ -245,6 +262,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       return;
     }
     const bounds = map.getBounds();
+    the:
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
     const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
