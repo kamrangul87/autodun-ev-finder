@@ -47,7 +47,6 @@ const userLocationIcon = L.divIcon({
 
 /* ─────────────── Connector filter helpers ─────────────── */
 
-// Canonicalize to our legend labels
 const canonicalize = (raw) => {
   if (!raw || typeof raw !== "string") return "Unknown";
   const t = raw.toLowerCase();
@@ -63,7 +62,6 @@ const canonicalize = (raw) => {
   return raw.trim();
 };
 
-// Read connector labels no matter which shape the station uses
 function extractConnectorLabels(station) {
   const arr =
     (Array.isArray(station?.connectors) && station.connectors) ||
@@ -74,7 +72,6 @@ function extractConnectorLabels(station) {
     null;
 
   if (!Array.isArray(arr) || arr.length === 0) return [];
-
   return arr.map((c) => {
     const title =
       c?.type ||
@@ -88,20 +85,20 @@ function extractConnectorLabels(station) {
 }
 
 /**
- * Filter logic (UPDATED):
- * - If ALL toggles are off → hide everything.
- * - If ALL toggles are on → no filtering.
- * - If SOME are on → keep only stations that match those types.
- *   Unknown-only stations are **hidden** in this mode so the effect is obvious.
+ * FINAL behavior:
+ * - If ALL boxes off → hide everything.
+ * - If ALL boxes on → no filtering.
+ * - If SOME on → keep stations that match selected types.
+ *   If a station has **no known label(s)** (unknown), KEEP it visible.
  */
 function stationMatchesFilter(station, filter) {
   const anyOn = filter.type2 || filter.ccs || filter.chademo;
   const allOn = filter.type2 && filter.ccs && filter.chademo;
-  if (!anyOn) return false; // user turned them all off → show nothing
-  if (allOn) return true;   // no filtering
+  if (!anyOn) return false;
+  if (allOn) return true;
 
   const labels = extractConnectorLabels(station);
-  if (!labels || labels.length === 0) return false; // hide unknowns when partially filtering
+  if (!labels || labels.length === 0) return true; // <— keep unknowns visible
 
   const s = new Set(labels);
   return (
@@ -210,7 +207,6 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
-/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -232,7 +228,6 @@ function findPostcode(obj) {
   return undefined;
 }
 
-/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -282,13 +277,11 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
-          // Title / address bits
           const name =
             p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
           const addressLine =
             p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
 
-          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
@@ -296,16 +289,12 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
-          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          // Default **council** connectors to "Type 2"
-          const connectors = [
-            { type: "Type 2", quantity: qty },
-          ];
+          const connectors = [{ type: "Type 2", quantity: qty }];
 
           return {
             id: Number(p.id),
@@ -500,7 +489,6 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // Connector filters
   const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
 
   const filteredStations = useMemo(() => {
@@ -594,7 +582,6 @@ export default function EnhancedMap({
         </div>
       )}
 
-      {/* Bottom-right stack: Filter + Legend */}
       <div
         style={{
           position: "absolute",
@@ -607,7 +594,6 @@ export default function EnhancedMap({
           maxWidth: 240,
         }}
       >
-        {/* Filter panel */}
         <div
           style={{
             background: "white",
@@ -646,7 +632,6 @@ export default function EnhancedMap({
           </label>
         </div>
 
-        {/* Legend panel */}
         <div
           style={{
             background: "white",
