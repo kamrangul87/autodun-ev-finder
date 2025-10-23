@@ -99,7 +99,7 @@ const pick = <T,>(obj: any, keys: string[]): T | undefined => {
   return undefined;
 };
 
-// NEW: canonicalize raw connector titles to your legend labels
+// canonicalize raw connector titles to your legend labels
 function canonicalizeConnectorLabel(raw?: string): string {
   if (!raw) return "Unknown";
   const t = raw.toLowerCase().trim();
@@ -113,11 +113,24 @@ function canonicalizeConnectorLabel(raw?: string): string {
   return raw.trim();
 }
 
-// NEW: safe number parser for PowerKW, etc.
+// safe number parser for PowerKW, etc.
 function safeNumber(n: any, dflt = undefined as number | undefined) {
   const v = typeof n === "string" ? Number(n) : n;
   return typeof v === "number" && Number.isFinite(v) ? v : dflt;
 }
+
+// helper to read nested paths safely
+function oget(obj: any, path: string[]): any {
+  return path.reduce((a, k) => (a && a[k] != null ? a[k] : undefined), obj);
+}
+
+// minimal OCM ID → label fallback when titles are missing
+const OCM_TYPE_BY_ID: Record<number, string> = {
+  25: "Type 2",   // Type 2 (Socket Only)
+  33: "CCS",      // CCS (Type 2 Combo)
+  2:  "CHAdeMO",  // CHAdeMO
+  // add more if you encounter them frequently
+};
 
 function normalizeConnectors(station: any): Connector[] | null {
   // 1) Preferred: already-normalized station.connectors
@@ -131,17 +144,28 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: safeNumber(c?.powerKW),
     }));
   }
-  // 2) OpenChargeMap: Connections[]
-  const raw = Array.isArray(station?.Connections) ? station.Connections : null;
-  if (raw && raw.length) {
-    return raw.map((c: any) => {
-      // Priority: ConnectionType.Title → ConnectionType.FormalName → CurrentType.Title → Level.Title → Unknown
+
+  // 2) OpenChargeMap: try all common locations for Connections
+  const candidates =
+    oget(station, ["Connections"]) ||
+    oget(station, ["properties", "Connections"]) ||
+    oget(station, ["connections"]) ||
+    oget(station, ["properties", "connections"]) ||
+    null;
+
+  if (Array.isArray(candidates) && candidates.length) {
+    return candidates.map((c: any) => {
+      // Priority: explicit titles → fall back to IDs if needed
       const rawType =
         c?.ConnectionType?.Title ??
         c?.ConnectionType?.FormalName ??
         c?.CurrentType?.Title ??
         c?.Level?.Title ??
+        (typeof c?.ConnectionTypeID === "number"
+          ? OCM_TYPE_BY_ID[c.ConnectionTypeID]
+          : undefined) ??
         "Unknown";
+
       return {
         type: canonicalizeConnectorLabel(rawType),
         quantity:
@@ -150,6 +174,7 @@ function normalizeConnectors(station: any): Connector[] | null {
       };
     });
   }
+
   // 3) Council: NumberOfPoints, etc.
   const npts =
     pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
@@ -553,7 +578,7 @@ const drawerStyle: CSSProperties = {
   width: "min(286px, 92vw)",
   maxHeight: "calc(100vh - 96px)",
   background: "#fff",
-  border: "1px solid #eaeaea",
+  border: "1px solid "#eaeaea",
   borderRadius: 14,
   boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
   padding: 10,
