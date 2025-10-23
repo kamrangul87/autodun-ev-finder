@@ -13,16 +13,13 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer handles council vs normal
+import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 import { CONNECTOR_COLORS } from "../lib/connectorCatalog";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Leaflet default marker icons
-// ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -47,66 +44,6 @@ const userLocationIcon = L.divIcon({
   iconSize: [16, 16],
   iconAnchor: [8, 8],
 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Small helpers (canonize labels + derive connectors for filtering)
-// ─────────────────────────────────────────────────────────────────────────────
-const canonLabel = (raw) => {
-  if (!raw) return "Unknown";
-  const t = String(raw).toLowerCase();
-  if (t.includes("ccs") || t.includes("combo 2") || t.includes("combo type 2"))
-    return "CCS";
-  if (t.includes("chademo")) return "CHAdeMO";
-  if (t.includes("type 2")) return "Type 2";
-  if (t.includes("iec 62196") && t.includes("type 2")) return "Type 2";
-  if (t.includes("tesla") && t.includes("type 2")) return "Type 2";
-  return raw;
-};
-
-function connectorsForFilter(station) {
-  // Prefer pre-normalized station.connectors
-  if (Array.isArray(station?.connectors) && station.connectors.length) {
-    return station.connectors.map((c) => ({
-      label: canonLabel(c?.type),
-      qty:
-        typeof c?.quantity === "number" && c.quantity > 0 ? c.quantity : 1,
-    }));
-  }
-  // OpenChargeMap Connections[]
-  if (Array.isArray(station?.Connections) && station.Connections.length) {
-    return station.Connections.map((c) => ({
-      label: canonLabel(
-        c?.ConnectionType?.Title ??
-          c?.ConnectionType?.FormalName ??
-          c?.CurrentType?.Title ??
-          c?.Level?.Title ??
-          "Unknown"
-      ),
-      qty: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
-    }));
-  }
-  // Council fallback (if we placed Type 2 in the builder, this won’t run)
-  if (station?.isCouncil && typeof station?.NumberOfPoints === "number") {
-    return [{ label: "Type 2", qty: station.NumberOfPoints || 1 }];
-  }
-  // Unknown
-  return [];
-}
-
-function stationPassesFilter(station, allowedSet) {
-  // If no selection at all, treat as “show nothing”
-  if (!allowedSet || allowedSet.size === 0) return false;
-
-  const list = connectorsForFilter(station);
-
-  // If a station has no connector info, keep it visible (don’t punish missing data)
-  if (!list.length) return true;
-
-  // Keep if ANY connector is allowed
-  return list.some((c) => allowedSet.has(c.label));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 function MapInitializer() {
   const map = useMap();
@@ -143,6 +80,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       const currentZoom = map.getZoom();
       const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
 
+      let processedStations = stations;
+      if (stations.length > 25000) {
+        processedStations = stations.filter((_, idx) => idx % 3 === 0);
+        console.log(
+          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
+        );
+      }
+
       const sumQty = (arr) =>
         arr.reduce(
           (sum, c) => sum + (typeof c?.quantity === "number" ? c.quantity : 1),
@@ -150,14 +95,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         );
 
       const maxIntensity = Math.max(
-        ...stations.map((s) =>
+        ...processedStations.map((s) =>
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
             : 1
         )
       );
 
-      const heatData = stations.map((s) => {
+      const heatData = processedStations.map((s) => {
         const weight =
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
@@ -270,6 +215,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
+          // Title / address bits
           const name =
             p.title ||
             ai.Title ||
@@ -283,6 +229,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             ai.Title ||
             undefined;
 
+          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
@@ -292,11 +239,13 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
               p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
+          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
+          // Default council connectors to "Type 2"
           const connectors = [
             {
               type: "Type 2",
@@ -406,7 +355,8 @@ function ViewportFetcher({
         onLoadingChange?.(true);
         const tiles = isFirstLoad ? 4 : 2;
         const limitPerTile = isFirstLoad ? 500 : 750;
-        const url = `/api/stations?bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
+        // IMPORTANT: always pass explicit OpenCharge source if your API expects it
+        const url = `/api/stations?source=opencharge&bbox=${bboxStr}&tiles=${tiles}&limitPerTile=${limitPerTile}`;
         const response = await fetch(url, { cache: "no-store" });
         const data = await response.json();
         if (response.ok) {
@@ -475,10 +425,7 @@ function LocateMeControl({ onLocationChange, onError }) {
       style={{ marginTop: "80px", marginRight: "10px" }}
     >
       <div className="leaflet-control">
-        <LocateMeButton
-          onLocationFound={handleLocationFound}
-          onError={onError}
-        />
+        <LocateMeButton onLocationFound={handleLocationFound} onError={onError} />
       </div>
     </div>
   );
@@ -502,26 +449,47 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // NEW: local filter state for connector checkboxes
+  // NEW: connector filters (all on by default)
   const [filters, setFilters] = useState({
-    CCS: true,
-    CHAdeMO: true,
-    "Type 2": true,
+    ccs: true,
+    chademo: true,
+    type2: true,
   });
 
-  const allowedSet = useMemo(() => {
-    const s = new Set();
-    if (filters.CCS) s.add("CCS");
-    if (filters.CHAdeMO) s.add("CHAdeMO");
-    if (filters["Type 2"]) s.add("Type 2");
-    return s;
-  }, [filters]);
+  // Helper to detect what a station actually has (uses API booleans if present)
+  const stationHas = useCallback((s) => {
+    const hasCCS =
+      s.hasCCS ??
+      (Array.isArray(s.connectorsDetailed) &&
+        s.connectorsDetailed.some((c) => c?.type === "CCS"));
+    const hasCHAdeMO =
+      s.hasCHAdeMO ??
+      (Array.isArray(s.connectorsDetailed) &&
+        s.connectorsDetailed.some((c) => c?.type === "CHAdeMO"));
+    const hasType2 =
+      s.hasType2 ??
+      (Array.isArray(s.connectorsDetailed) &&
+        s.connectorsDetailed.some((c) => c?.type === "Type 2"));
+    return {
+      hasCCS: !!hasCCS,
+      hasCHAdeMO: !!hasCHAdeMO,
+      hasType2: !!hasType2,
+    };
+  }, []);
 
-  // Apply filter to incoming stations
+  // Apply filter to stations for markers & heatmap
   const filteredStations = useMemo(() => {
-    if (!Array.isArray(stations) || stations.length === 0) return [];
-    return stations.filter((st) => stationPassesFilter(st, allowedSet));
-  }, [stations, allowedSet]);
+    const any = filters.ccs || filters.chademo || filters.type2;
+    if (!any) return [];
+    return (stations || []).filter((s) => {
+      const f = stationHas(s);
+      return (
+        (filters.ccs && f.hasCCS) ||
+        (filters.chademo && f.hasCHAdeMO) ||
+        (filters.type2 && f.hasType2)
+      );
+    });
+  }, [stations, filters, stationHas]);
 
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
@@ -555,7 +523,7 @@ export default function EnhancedMap({
       setLocationAccuracy(accuracy);
       if (mapRef.current && location) {
         mapRef.current.setView([location.lat, location.lng], 14);
-        const nearest = findNearestStation(location, filteredStations);
+        const nearest = findNearestStation(location, stations);
         if (nearest) {
           console.log(
             `[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(
@@ -565,7 +533,7 @@ export default function EnhancedMap({
         }
       }
     },
-    [filteredStations]
+    [stations]
   );
 
   const handleLocationError = useCallback(
@@ -603,15 +571,13 @@ export default function EnhancedMap({
               animation: "spin 0.6s linear infinite",
             }}
           />
-          <span
-            style={{ fontSize: "11px", fontWeight: "500", color: "#374151" }}
-          >
+          <span style={{ fontSize: "11px", fontWeight: "500", color: "#374151" }}>
             Loading…
           </span>
         </div>
       )}
 
-      {/* Filter panel + legend (unchanged visuals) */}
+      {/* Filter & legend box (bottom-right) */}
       <div
         style={{
           position: "absolute",
@@ -623,64 +589,50 @@ export default function EnhancedMap({
           borderRadius: "8px",
           boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
           fontSize: "11px",
-          minWidth: 160,
+          minWidth: 180,
+          maxWidth: 240,
         }}
       >
         <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
           Filter connectors
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <input
             type="checkbox"
-            checked={filters.CCS}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, CCS: e.target.checked }))
-            }
+            checked={filters.ccs}
+            onChange={(e) => setFilters((f) => ({ ...f, ccs: e.target.checked }))}
           />
           <span>CCS</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <input
             type="checkbox"
-            checked={filters.CHAdeMO}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, CHAdeMO: e.target.checked }))
-            }
+            checked={filters.chademo}
+            onChange={(e) => setFilters((f) => ({ ...f, chademo: e.target.checked }))}
           />
           <span>CHAdeMO</span>
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <input
             type="checkbox"
-            checked={filters["Type 2"]}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, "Type 2": e.target.checked }))
-            }
+            checked={filters.type2}
+            onChange={(e) => setFilters((f) => ({ ...f, type2: e.target.checked }))}
           />
           <span>Type 2</span>
         </label>
 
-        <div
-          style={{ fontWeight: 600, marginTop: 10, marginBottom: 6, color: "#1f2937" }}
-        >
+        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
           Legend
         </div>
         <div
           style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
         >
           <div
-            style={{
-              width: "12px",
-              height: "12px",
-              background: "#3b82f6",
-              borderRadius: "50%",
-            }}
+            style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
           />
           <span>Charging stations</span>
         </div>
-        <div
-          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
           <div
             style={{
               width: "12px",
