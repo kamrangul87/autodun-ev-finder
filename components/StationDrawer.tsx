@@ -578,7 +578,7 @@ const drawerStyle: CSSProperties = {
   width: "min(286px, 92vw)",
   maxHeight: "calc(100vh - 96px)",
   background: "#fff",
-  border: "1px solid "#eaeaea",
+  border: "1px solid #eaeaea",  // ← fixed
   borderRadius: 14,
   boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
   padding: 10,
