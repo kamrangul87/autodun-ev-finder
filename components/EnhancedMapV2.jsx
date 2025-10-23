@@ -86,19 +86,20 @@ function extractConnectorLabels(station) {
 
 /**
  * FINAL behavior:
- * - If ALL boxes off → hide everything.
- * - If ALL boxes on → no filtering.
- * - If SOME on → keep stations that match selected types.
- *   If a station has **no known label(s)** (unknown), KEEP it visible.
+ * - All three on  → show everything (including unknown).
+ * - Some subset   → show stations that declare a selected type; HIDE unknown.
+ * - All off       → show nothing.
  */
 function stationMatchesFilter(station, filter) {
   const anyOn = filter.type2 || filter.ccs || filter.chademo;
   const allOn = filter.type2 && filter.ccs && filter.chademo;
-  if (!anyOn) return false;
-  if (allOn) return true;
+  if (!anyOn) return false; // all off → nothing
+  if (allOn) return true;   // all on  → everything
 
   const labels = extractConnectorLabels(station);
-  if (!labels || labels.length === 0) return true; // <— keep unknowns visible
+
+  // STRICT: subset chosen → stations with no known labels are hidden
+  if (!labels || labels.length === 0) return false;
 
   const s = new Set(labels);
   return (
@@ -207,6 +208,7 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
+/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -228,6 +230,7 @@ function findPostcode(obj) {
   return undefined;
 }
 
+/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -277,11 +280,13 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
+          // Title / address bits
           const name =
             p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
           const addressLine =
             p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
 
+          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
@@ -289,18 +294,26 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
+          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          const connectors = [{ type: "Type 2", quantity: qty }];
+          // Per your request: default **council** connectors to "Type 2"
+          const connectors = [
+            {
+              type: "Type 2",
+              quantity: qty,
+            },
+          ];
 
           return {
             id: Number(p.id),
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
+            // Compose a single address line so the drawer shows full address incl. postcode.
             address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
             town,
             postcode,
@@ -582,6 +595,7 @@ export default function EnhancedMap({
         </div>
       )}
 
+      {/* Right-side stacks: Filters + Legend */}
       <div
         style={{
           position: "absolute",
@@ -594,6 +608,7 @@ export default function EnhancedMap({
           maxWidth: 240,
         }}
       >
+        {/* Filter */}
         <div
           style={{
             background: "white",
@@ -632,6 +647,7 @@ export default function EnhancedMap({
           </label>
         </div>
 
+        {/* Legend */}
         <div
           style={{
             background: "white",
