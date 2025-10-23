@@ -47,6 +47,15 @@ const userLocationIcon = L.divIcon({
 
 /* ─────────────── Connector filter helpers ─────────────── */
 
+const ID_TO_LABEL = {
+  // OpenChargeMap common IDs
+  33: "CCS", // IEC 62196-3 Type 2 Combo
+  32: "CCS", // IEC 62196-3 Type 1 Combo (treat as CCS for filtering)
+  2: "CHAdeMO",
+  25: "Type 2",
+  // some feeds use strings; coerce later
+};
+
 const canonicalize = (raw) => {
   if (!raw || typeof raw !== "string") return "Unknown";
   const t = raw.toLowerCase();
@@ -72,7 +81,23 @@ function extractConnectorLabels(station) {
     null;
 
   if (!Array.isArray(arr) || arr.length === 0) return [];
-  return arr.map((c) => {
+
+  const labels = [];
+  for (const c of arr) {
+    // 1) ID path (often present in OCM tiles)
+    const idRaw =
+      c?.ConnectionTypeID ??
+      c?.connectionTypeId ??
+      c?.connection_type_id ??
+      c?.ConnectionType?.ID;
+    if (idRaw !== undefined && idRaw !== null) {
+      const id = Number(idRaw);
+      if (Number.isFinite(id) && ID_TO_LABEL[id]) {
+        labels.push(ID_TO_LABEL[id]);
+        continue;
+      }
+    }
+    // 2) Title/formal names
     const title =
       c?.type ||
       c?.ConnectionType?.Title ||
@@ -80,8 +105,11 @@ function extractConnectorLabels(station) {
       c?.CurrentType?.Title ||
       c?.Level?.Title ||
       "Unknown";
-    return canonicalize(title);
-  });
+    labels.push(canonicalize(title));
+  }
+
+  // Deduplicate
+  return Array.from(new Set(labels));
 }
 
 /**
@@ -94,7 +122,7 @@ function stationMatchesFilter(station, filter) {
   const anyOn = filter.type2 || filter.ccs || filter.chademo;
   const allOn = filter.type2 && filter.ccs && filter.chademo;
   if (!anyOn) return false; // all off → nothing
-  if (allOn) return true;   // all on  → everything
+  if (allOn) return true; // all on  → everything
 
   const labels = extractConnectorLabels(station);
 
