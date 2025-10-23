@@ -13,7 +13,7 @@ import {
 import MarkerClusterGroup from "react-leaflet-cluster";
 import L from "leaflet";
 
-import StationDrawer from "./StationDrawer"; // drawer now handles council vs normal
+import StationDrawer from "./StationDrawer"; // drawer handles council vs normal
 import { LocateMeButton } from "./LocateMeButton.tsx";
 import { getCached, setCache } from "../lib/api-cache";
 import { telemetry } from "../utils/telemetry.ts";
@@ -45,15 +45,13 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-/* ─────────────── Connector filter helpers ─────────────── */
+/* ─────────────── Connector filter helpers (robust OCM) ─────────────── */
 
 const ID_TO_LABEL = {
-  // OpenChargeMap common IDs
   33: "CCS", // IEC 62196-3 Type 2 Combo
-  32: "CCS", // IEC 62196-3 Type 1 Combo (treat as CCS for filtering)
+  32: "CCS", // IEC 62196-3 Type 1 Combo → CCS bucket
   2: "CHAdeMO",
   25: "Type 2",
-  // some feeds use strings; coerce later
 };
 
 const canonicalize = (raw) => {
@@ -71,45 +69,104 @@ const canonicalize = (raw) => {
   return raw.trim();
 };
 
-function extractConnectorLabels(station) {
-  const arr =
-    (Array.isArray(station?.connectors) && station.connectors) ||
-    station?.Connections ||
-    station?.connections ||
-    station?.properties?.Connections ||
-    station?.properties?.connections ||
-    null;
+const num = (v) => {
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(+v)) return +v;
+  return undefined;
+};
 
-  if (!Array.isArray(arr) || arr.length === 0) return [];
-
-  const labels = [];
-  for (const c of arr) {
-    // 1) ID path (often present in OCM tiles)
-    const idRaw =
-      c?.ConnectionTypeID ??
-      c?.connectionTypeId ??
-      c?.connection_type_id ??
-      c?.ConnectionType?.ID;
-    if (idRaw !== undefined && idRaw !== null) {
-      const id = Number(idRaw);
-      if (Number.isFinite(id) && ID_TO_LABEL[id]) {
-        labels.push(ID_TO_LABEL[id]);
-        continue;
-      }
+function coerceArray(maybeArr) {
+  if (Array.isArray(maybeArr)) return maybeArr;
+  if (typeof maybeArr === "string") {
+    try {
+      const parsed = JSON.parse(maybeArr);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
     }
-    // 2) Title/formal names
-    const title =
-      c?.type ||
-      c?.ConnectionType?.Title ||
-      c?.ConnectionType?.FormalName ||
-      c?.CurrentType?.Title ||
-      c?.Level?.Title ||
-      "Unknown";
-    labels.push(canonicalize(title));
+  }
+  return [];
+}
+
+function extractConnectorLabels(station) {
+  // 0) already-normalized
+  if (Array.isArray(station?.connectors) && station.connectors.length) {
+    return Array.from(
+      new Set(
+        station.connectors
+          .map((c) => canonicalize(c?.type))
+          .filter((s) => s && s !== "Unknown")
+      )
+    );
   }
 
-  // Deduplicate
-  return Array.from(new Set(labels));
+  // 1) most common array homes
+  const arrays = [
+    station?.Connections,
+    station?.connections,
+    station?.properties?.Connections,
+    station?.properties?.connections,
+    station?.ConnectionsJSON, // sometimes stringified
+  ];
+  for (const arr of arrays) {
+    const items = coerceArray(arr);
+    if (items.length) {
+      const labels = [];
+      for (const c of items) {
+        // Prefer ID (present in many tiles)
+        const id =
+          num(c?.ConnectionTypeID) ??
+          num(c?.connectionTypeId) ??
+          num(c?.ConnectionType?.ID);
+        if (id !== undefined && ID_TO_LABEL[id]) {
+          labels.push(ID_TO_LABEL[id]);
+          continue;
+        }
+        // Else try titles/fallbacks
+        const title =
+          c?.type ??
+          c?.ConnectionType?.Title ??
+          c?.ConnectionType?.FormalName ??
+          c?.CurrentType?.Title ??
+          c?.Level?.Title ??
+          "";
+        const lab = canonicalize(title);
+        if (lab !== "Unknown") labels.push(lab);
+      }
+      if (labels.length) return Array.from(new Set(labels));
+    }
+  }
+
+  // 2) top-level hints
+  const topId =
+    num(station?.ConnectionTypeID) ??
+    num(station?.connectionTypeId) ??
+    num(station?.ConnectionType?.ID);
+  if (topId !== undefined && ID_TO_LABEL[topId]) return [ID_TO_LABEL[topId]];
+
+  const topTitle =
+    station?.ConnectionType ??
+    station?.connectionType ??
+    station?.properties?.ConnectionType ??
+    station?.properties?.connectionType;
+  if (typeof topTitle === "string") {
+    const lab = canonicalize(topTitle);
+    if (lab !== "Unknown") return [lab];
+  }
+
+  // 3) ad-hoc summary labels
+  const maybeLabels =
+    station?.connectorLabels ||
+    station?.properties?.connectorLabels ||
+    station?.labels;
+  if (Array.isArray(maybeLabels) && maybeLabels.length) {
+    return Array.from(
+      new Set(maybeLabels.map(canonicalize).filter((x) => x && x !== "Unknown"))
+    );
+  }
+
+  // nothing found
+  return [];
 }
 
 /**
@@ -121,13 +178,11 @@ function extractConnectorLabels(station) {
 function stationMatchesFilter(station, filter) {
   const anyOn = filter.type2 || filter.ccs || filter.chademo;
   const allOn = filter.type2 && filter.ccs && filter.chademo;
-  if (!anyOn) return false; // all off → nothing
-  if (allOn) return true; // all on  → everything
+  if (!anyOn) return false;
+  if (allOn) return true;
 
   const labels = extractConnectorLabels(station);
-
-  // STRICT: subset chosen → stations with no known labels are hidden
-  if (!labels || labels.length === 0) return false;
+  if (!labels || labels.length === 0) return false; // hide unknown when subset chosen
 
   const s = new Set(labels);
   return (
@@ -136,7 +191,7 @@ function stationMatchesFilter(station, filter) {
     (filter.chademo && s.has("CHAdeMO"))
   );
 }
-/* ─────────────── end helper block ─────────────── */
+/* ─────────────── end helpers ─────────────── */
 
 function MapInitializer() {
   const map = useMap();
@@ -236,7 +291,6 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
-/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -258,7 +312,6 @@ function findPostcode(obj) {
   return undefined;
 }
 
-/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -308,27 +361,29 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
-          // Title / address bits
           const name =
-            p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
+            p.title ||
+            ai.Title ||
+            p.AddressLine1 ||
+            ai.AddressLine1 ||
+            "Unknown location";
           const addressLine =
             p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
 
-          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
-            (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
-            (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
+            (typeof ai.Title === "string" &&
+              ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
+            (typeof p.title === "string" &&
+              p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
-          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          // Per your request: default **council** connectors to "Type 2"
           const connectors = [
             {
               type: "Type 2",
@@ -341,8 +396,9 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
-            // Compose a single address line so the drawer shows full address incl. postcode.
-            address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
+            address: [addressLine || name, town, postcode]
+              .filter(Boolean)
+              .join(", "),
             town,
             postcode,
             connectors,
@@ -506,7 +562,10 @@ function LocateMeControl({ onLocationChange, onError }) {
       style={{ marginTop: "80px", marginRight: "10px" }}
     >
       <div className="leaflet-control">
-        <LocateMeButton onLocationFound={handleLocationFound} onError={onError} />
+        <LocateMeButton
+          onLocationFound={handleLocationFound}
+          onError={onError}
+        />
       </div>
     </div>
   );
@@ -530,6 +589,7 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
+  // connector filter
   const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
 
   const filteredStations = useMemo(() => {
@@ -649,27 +709,56 @@ export default function EnhancedMap({
           <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
             Filter connectors
           </div>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 6,
+              cursor: "pointer",
+            }}
+          >
             <input
               type="checkbox"
               checked={filter.ccs}
-              onChange={(e) => setFilter((f) => ({ ...f, ccs: e.target.checked }))}
+              onChange={(e) =>
+                setFilter((f) => ({ ...f, ccs: e.target.checked }))
+              }
             />
             <span>CCS</span>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 6,
+              cursor: "pointer",
+            }}
+          >
             <input
               type="checkbox"
               checked={filter.chademo}
-              onChange={(e) => setFilter((f) => ({ ...f, chademo: e.target.checked }))}
+              onChange={(e) =>
+                setFilter((f) => ({ ...f, chademo: e.target.checked }))
+              }
             />
             <span>CHAdeMO</span>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              cursor: "pointer",
+            }}
+          >
             <input
               type="checkbox"
               checked={filter.type2}
-              onChange={(e) => setFilter((f) => ({ ...f, type2: e.target.checked }))}
+              onChange={(e) =>
+                setFilter((f) => ({ ...f, type2: e.target.checked }))
+              }
             />
             <span>Type 2</span>
           </label>
@@ -693,11 +782,18 @@ export default function EnhancedMap({
             style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
           >
             <div
-              style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
+              style={{
+                width: "12px",
+                height: "12px",
+                background: "#3b82f6",
+                borderRadius: "50%",
+              }}
             />
             <span>Charging stations</span>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
+          >
             <div
               style={{
                 width: "12px",
@@ -716,7 +812,12 @@ export default function EnhancedMap({
           {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
             <div
               key={label}
-              style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                marginBottom: 4,
+              }}
             >
               <div
                 style={{
@@ -783,7 +884,10 @@ export default function EnhancedMap({
           showCouncil={showCouncil}
           onMarkerClick={handleStationClick}
         />
-        <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
+        <UserLocationMarker
+          location={userLocation}
+          accuracy={locationAccuracy}
+        />
         <LocateMeControl
           onLocationChange={handleLocationChange}
           onError={handleLocationError}
