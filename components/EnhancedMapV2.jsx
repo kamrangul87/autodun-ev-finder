@@ -45,7 +45,7 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-/* ─────────────── Connector filter helpers (front-end only) ─────────────── */
+/* ─────────────── Connector filter helpers ─────────────── */
 
 const canonicalize = (raw) => {
   if (!raw || typeof raw !== "string") return "Unknown";
@@ -78,10 +78,9 @@ function extractConnectorLabels(station) {
 }
 
 function stationMatchesFilter(station, filter) {
-  // if all enabled, no filtering
   if (filter.type2 && filter.ccs && filter.chademo) return true;
   const labels = extractConnectorLabels(station);
-  if (labels.length === 0) return false; // hide unknowns only when filters are narrowed
+  if (labels.length === 0) return false; // hide unknowns only when filtering is narrowed
   const hasType2 = labels.some((l) => l === "Type 2");
   const hasCCS = labels.some((l) => l === "CCS");
   const hasCHA = labels.some((l) => l === "CHAdeMO");
@@ -186,7 +185,6 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
-/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -208,7 +206,6 @@ function findPostcode(obj) {
   return undefined;
 }
 
-/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -258,43 +255,30 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
-          // Title / address bits
           const name =
             p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
           const addressLine =
             p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
 
-          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
-            // cover PostCode / PostalCode / nested variants + a regex fallback
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
-            // sometimes people smuggle postcode into the "title"
             (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
-          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          // Per your request: default **council** connectors to "Type 2"
-          // so they wire into the legend + drawer instead of "Unknown".
-          const connectors = [
-            {
-              type: "Type 2",
-              quantity: qty,
-            },
-          ];
+          const connectors = [{ type: "Type 2", quantity: qty }];
 
           return {
             id: Number(p.id),
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
-            // Compose a single address line so the drawer shows full address incl. postcode.
             address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
             town,
             postcode,
@@ -483,7 +467,6 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // Connector filters
   const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
 
   const filteredStations = useMemo(() => {
@@ -577,108 +560,113 @@ export default function EnhancedMap({
         </div>
       )}
 
-      {/* Connector Filters Panel */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: "92px",
-          right: "10px",
-          zIndex: 1000,
-          background: "white",
-          padding: "8px",
-          borderRadius: "8px",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
-          fontSize: "11px",
-          minWidth: 160,
-        }}
-      >
-        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
-          Filter connectors
-        </div>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={filter.ccs}
-            onChange={(e) => setFilter((f) => ({ ...f, ccs: e.target.checked }))}
-          />
-          <span>CCS</span>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={filter.chademo}
-            onChange={(e) => setFilter((f) => ({ ...f, chademo: e.target.checked }))}
-          />
-          <span>CHAdeMO</span>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={filter.type2}
-            onChange={(e) => setFilter((f) => ({ ...f, type2: e.target.checked }))}
-          />
-          <span>Type 2</span>
-        </label>
-      </div>
-
-      {/* Legend */}
+      {/* Bottom-right stack container: Filter + Legend (no overlap) */}
       <div
         style={{
           position: "absolute",
           bottom: "10px",
           right: "10px",
           zIndex: 1000,
-          background: "white",
-          padding: "8px",
-          borderRadius: "8px",
-          boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
-          fontSize: "11px",
-          minWidth: 160,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          maxWidth: 240,
         }}
       >
-        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
-          Legend
-        </div>
+        {/* Filter panel */}
         <div
-          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+          style={{
+            background: "white",
+            padding: "8px",
+            borderRadius: "8px",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+            fontSize: "11px",
+          }}
         >
-          <div
-            style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
-          />
-          <span>Charging stations</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-          <div
-            style={{
-              width: "12px",
-              height: "12px",
-              background: "#9333ea",
-              transform: "rotate(45deg)",
-              border: "1px solid white",
-            }}
-          />
-          <span>Council markers</span>
+          <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+            Filter connectors
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={filter.ccs}
+              onChange={(e) => setFilter((f) => ({ ...f, ccs: e.target.checked }))}
+            />
+            <span>CCS</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={filter.chademo}
+              onChange={(e) => setFilter((f) => ({ ...f, chademo: e.target.checked }))}
+            />
+            <span>CHAdeMO</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={filter.type2}
+              onChange={(e) => setFilter((f) => ({ ...f, type2: e.target.checked }))}
+            />
+            <span>Type 2</span>
+          </label>
         </div>
 
-        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
-          Connector types
-        </div>
-        {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
+        {/* Legend panel */}
+        <div
+          style={{
+            background: "white",
+            padding: "8px",
+            borderRadius: "8px",
+            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+            fontSize: "11px",
+            minWidth: 160,
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+            Legend
+          </div>
           <div
-            key={label}
             style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
           >
             <div
+              style={{ width: "12px", height: "12px", background: "#3b82f6", borderRadius: "50%" }}
+            />
+            <span>Charging stations</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+            <div
               style={{
-                width: 10,
-                height: 10,
-                borderRadius: 999,
-                background: String(color),
+                width: "12px",
+                height: "12px",
+                background: "#9333ea",
+                transform: "rotate(45deg)",
+                border: "1px solid white",
               }}
             />
-            <span>{label}</span>
+            <span>Council markers</span>
           </div>
-        ))}
+
+          <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
+            Connector types
+          </div>
+          {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
+            <div
+              key={label}
+              style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+            >
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background: String(color),
+                }}
+              />
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <MapContainer
