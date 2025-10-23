@@ -1,7 +1,7 @@
 // components/EnhancedMapV2.jsx
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   MapContainer,
   TileLayer,
@@ -44,6 +44,49 @@ const userLocationIcon = L.divIcon({
   iconSize: [16, 16],
   iconAnchor: [8, 8],
 });
+
+/* ─────────────── Connector filter helpers (front-end only) ─────────────── */
+
+const canonicalize = (raw) => {
+  if (!raw || typeof raw !== "string") return "Unknown";
+  const t = raw.toLowerCase();
+  if (t.includes("ccs") || t.includes("combo")) return "CCS";
+  if (t.includes("chademo")) return "CHAdeMO";
+  if (t.includes("type 2") || t.includes("type-2") || (t.includes("iec 62196") && t.includes("type 2"))) return "Type 2";
+  return raw.trim();
+};
+
+function extractConnectorLabels(station) {
+  const arr =
+    (Array.isArray(station?.connectors) && station.connectors) ||
+    station?.Connections ||
+    station?.connections ||
+    station?.properties?.Connections ||
+    station?.properties?.connections ||
+    null;
+  if (!Array.isArray(arr) || arr.length === 0) return [];
+  return arr.map((c) => {
+    const title =
+      c?.type ||
+      c?.ConnectionType?.Title ||
+      c?.ConnectionType?.FormalName ||
+      c?.CurrentType?.Title ||
+      c?.Level?.Title ||
+      "Unknown";
+    return canonicalize(title);
+  });
+}
+
+function stationMatchesFilter(station, filter) {
+  // if all enabled, no filtering
+  if (filter.type2 && filter.ccs && filter.chademo) return true;
+  const labels = extractConnectorLabels(station);
+  if (labels.length === 0) return false; // hide unknowns only when filters are narrowed
+  const hasType2 = labels.some((l) => l === "Type 2");
+  const hasCCS = labels.some((l) => l === "CCS");
+  const hasCHA = labels.some((l) => l === "CHAdeMO");
+  return (filter.type2 && hasType2) || (filter.ccs && hasCCS) || (filter.chademo && hasCHA);
+}
 
 function MapInitializer() {
   const map = useMap();
@@ -440,6 +483,14 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
+  // Connector filters
+  const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
+
+  const filteredStations = useMemo(() => {
+    if (!Array.isArray(stations) || stations.length === 0) return stations;
+    return stations.filter((s) => stationMatchesFilter(s, filter));
+  }, [stations, filter]);
+
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
       setUserLocation(externalUserLocation);
@@ -526,6 +577,51 @@ export default function EnhancedMap({
         </div>
       )}
 
+      {/* Connector Filters Panel */}
+      <div
+        style={{
+          position: "absolute",
+          bottom: "92px",
+          right: "10px",
+          zIndex: 1000,
+          background: "white",
+          padding: "8px",
+          borderRadius: "8px",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+          fontSize: "11px",
+          minWidth: 160,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+          Filter connectors
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={filter.ccs}
+            onChange={(e) => setFilter((f) => ({ ...f, ccs: e.target.checked }))}
+          />
+          <span>CCS</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={filter.chademo}
+            onChange={(e) => setFilter((f) => ({ ...f, chademo: e.target.checked }))}
+          />
+          <span>CHAdeMO</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={filter.type2}
+            onChange={(e) => setFilter((f) => ({ ...f, type2: e.target.checked }))}
+          />
+          <span>Type 2</span>
+        </label>
+      </div>
+
+      {/* Legend */}
       <div
         style={{
           position: "absolute",
@@ -620,10 +716,10 @@ export default function EnhancedMap({
           shouldZoomToData={shouldZoomToData}
           stations={stations}
         />
-        {showHeatmap && <HeatmapLayer stations={stations} />}
+        {showHeatmap && <HeatmapLayer stations={filteredStations} />}
         {showMarkers && (
           <MarkerClusterGroup chunkedLoading>
-            {stations.map((station) => (
+            {filteredStations.map((station) => (
               <StationMarker
                 key={station.id}
                 station={station}
