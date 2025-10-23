@@ -47,6 +47,7 @@ const userLocationIcon = L.divIcon({
 
 /* ─────────────── Connector filter helpers ─────────────── */
 
+// Canonicalize to our legend labels
 const canonicalize = (raw) => {
   if (!raw || typeof raw !== "string") return "Unknown";
   const t = raw.toLowerCase();
@@ -56,6 +57,7 @@ const canonicalize = (raw) => {
   return raw.trim();
 };
 
+// Robustly extract connector labels from different station shapes
 function extractConnectorLabels(station) {
   const arr =
     (Array.isArray(station?.connectors) && station.connectors) ||
@@ -64,6 +66,7 @@ function extractConnectorLabels(station) {
     station?.properties?.Connections ||
     station?.properties?.connections ||
     null;
+
   if (!Array.isArray(arr) || arr.length === 0) return [];
   return arr.map((c) => {
     const title =
@@ -77,13 +80,20 @@ function extractConnectorLabels(station) {
   });
 }
 
+// IMPORTANT: Unknowns remain visible when any filter is off
 function stationMatchesFilter(station, filter) {
+  // if all enabled, no filtering
   if (filter.type2 && filter.ccs && filter.chademo) return true;
+
   const labels = extractConnectorLabels(station);
-  if (labels.length === 0) return false; // hide unknowns only when filtering is narrowed
+
+  // Keep unknowns visible so map doesn't clear until OCM mapping is perfect
+  if (!labels || labels.length === 0) return true;
+
   const hasType2 = labels.some((l) => l === "Type 2");
   const hasCCS = labels.some((l) => l === "CCS");
   const hasCHA = labels.some((l) => l === "CHAdeMO");
+
   return (filter.type2 && hasType2) || (filter.ccs && hasCCS) || (filter.chademo && hasCHA);
 }
 
@@ -185,6 +195,7 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
+/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -206,6 +217,7 @@ function findPostcode(obj) {
   return undefined;
 }
 
+/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -255,30 +267,42 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           const p = f.properties || {};
           const ai = p.AddressInfo || {};
 
+          // Title / address bits
           const name =
             p.title || ai.Title || p.AddressLine1 || ai.AddressLine1 || "Unknown location";
           const addressLine =
             p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
 
+          // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
+            // cover PostCode / PostalCode / nested variants + a regex fallback
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
+            // sometimes people smuggle postcode into the "title"
             (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
 
+          // Quantity
           const qty =
             typeof p.NumberOfPoints === "number" && p.NumberOfPoints > 0
               ? p.NumberOfPoints
               : 1;
 
-          const connectors = [{ type: "Type 2", quantity: qty }];
+          // Default **council** connectors to "Type 2"
+          const connectors = [
+            {
+              type: "Type 2",
+              quantity: qty,
+            },
+          ];
 
           return {
             id: Number(p.id),
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
+            // Compose a single address line so the drawer shows full address incl. postcode.
             address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
             town,
             postcode,
@@ -467,6 +491,7 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
+  // Connector filters
   const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
 
   const filteredStations = useMemo(() => {
@@ -560,7 +585,7 @@ export default function EnhancedMap({
         </div>
       )}
 
-      {/* Bottom-right stack container: Filter + Legend (no overlap) */}
+      {/* Bottom-right stack: Filter + Legend */}
       <div
         style={{
           position: "absolute",
