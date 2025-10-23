@@ -262,7 +262,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
       return;
     }
     const bounds = map.getBounds();
-    the:
     const sw = bounds.getSouthWest();
     const ne = bounds.getNorthEast();
     const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
