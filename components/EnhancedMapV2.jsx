@@ -45,7 +45,7 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-/* ─────────────── Connector filter helpers (updated) ─────────────── */
+/* ─────────────── Connector filter helpers ─────────────── */
 
 // Canonicalize to our legend labels
 const canonicalize = (raw) => {
@@ -88,11 +88,11 @@ function extractConnectorLabels(station) {
 }
 
 /**
- * Filter logic:
+ * Filter logic (UPDATED):
  * - If ALL toggles are off → hide everything.
  * - If ALL toggles are on → no filtering.
- * - If SOME are on → keep stations that match OR have unknown labels
- *   (so the map doesn't suddenly empty due to messy OCM data).
+ * - If SOME are on → keep only stations that match those types.
+ *   Unknown-only stations are **hidden** in this mode so the effect is obvious.
  */
 function stationMatchesFilter(station, filter) {
   const anyOn = filter.type2 || filter.ccs || filter.chademo;
@@ -101,9 +101,7 @@ function stationMatchesFilter(station, filter) {
   if (allOn) return true;   // no filtering
 
   const labels = extractConnectorLabels(station);
-
-  // Keep unknowns visible during partial filtering
-  if (!labels || labels.length === 0) return true;
+  if (!labels || labels.length === 0) return false; // hide unknowns when partially filtering
 
   const s = new Set(labels);
   return (
@@ -293,9 +291,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           // Robust extraction for town & postcode
           const town = findTown({ ...p, ...ai });
           const postcode =
-            // cover PostCode / PostalCode / nested variants + a regex fallback
             findPostcode({ ...p, ...ai, PostCode: ai?.PostCode }) ||
-            // sometimes people smuggle postcode into the "title"
             (typeof ai.Title === "string" && ai.Title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             (typeof p.title === "string" && p.title.match(/[A-Z]{1,2}\d[\dA-Z]?\s*\d[A-Z]{2}/)?.[0]) ||
             undefined;
@@ -308,10 +304,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
           // Default **council** connectors to "Type 2"
           const connectors = [
-            {
-              type: "Type 2",
-              quantity: qty,
-            },
+            { type: "Type 2", quantity: qty },
           ];
 
           return {
@@ -319,7 +312,6 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             name,
             lat: f.geometry.coordinates[1],
             lng: f.geometry.coordinates[0],
-            // Compose a single address line so the drawer shows full address incl. postcode.
             address: [addressLine || name, town, postcode].filter(Boolean).join(", "),
             town,
             postcode,
