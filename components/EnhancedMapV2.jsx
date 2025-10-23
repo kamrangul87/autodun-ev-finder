@@ -20,6 +20,9 @@ import { telemetry } from "../utils/telemetry.ts";
 import { findNearestStation } from "../utils/haversine.ts";
 import { CONNECTOR_COLORS } from "../lib/connectorCatalog";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Leaflet default marker icons
+// ─────────────────────────────────────────────────────────────────────────────
 if (typeof window !== "undefined") {
   // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
@@ -45,153 +48,65 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [8, 8],
 });
 
-/* ─────────────── Connector filter helpers (robust OCM) ─────────────── */
-
-const ID_TO_LABEL = {
-  33: "CCS", // IEC 62196-3 Type 2 Combo
-  32: "CCS", // IEC 62196-3 Type 1 Combo → CCS bucket
-  2: "CHAdeMO",
-  25: "Type 2",
-};
-
-const canonicalize = (raw) => {
-  if (!raw || typeof raw !== "string") return "Unknown";
-  const t = raw.toLowerCase();
-  if (t.includes("ccs") || t.includes("combo")) return "CCS";
+// ─────────────────────────────────────────────────────────────────────────────
+// Small helpers (canonize labels + derive connectors for filtering)
+// ─────────────────────────────────────────────────────────────────────────────
+const canonLabel = (raw) => {
+  if (!raw) return "Unknown";
+  const t = String(raw).toLowerCase();
+  if (t.includes("ccs") || t.includes("combo 2") || t.includes("combo type 2"))
+    return "CCS";
   if (t.includes("chademo")) return "CHAdeMO";
-  if (
-    t.includes("type 2") ||
-    t.includes("type-2") ||
-    (t.includes("iec 62196") && t.includes("type 2")) ||
-    t.includes("mennekes")
-  )
-    return "Type 2";
-  return raw.trim();
+  if (t.includes("type 2")) return "Type 2";
+  if (t.includes("iec 62196") && t.includes("type 2")) return "Type 2";
+  if (t.includes("tesla") && t.includes("type 2")) return "Type 2";
+  return raw;
 };
 
-const num = (v) => {
-  if (typeof v === "number") return v;
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(+v)) return +v;
-  return undefined;
-};
-
-function coerceArray(maybeArr) {
-  if (Array.isArray(maybeArr)) return maybeArr;
-  if (typeof maybeArr === "string") {
-    try {
-      const parsed = JSON.parse(maybeArr);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  }
-  return [];
-}
-
-function extractConnectorLabels(station) {
-  // 0) already-normalized
+function connectorsForFilter(station) {
+  // Prefer pre-normalized station.connectors
   if (Array.isArray(station?.connectors) && station.connectors.length) {
-    return Array.from(
-      new Set(
-        station.connectors
-          .map((c) => canonicalize(c?.type))
-          .filter((s) => s && s !== "Unknown")
-      )
-    );
+    return station.connectors.map((c) => ({
+      label: canonLabel(c?.type),
+      qty:
+        typeof c?.quantity === "number" && c.quantity > 0 ? c.quantity : 1,
+    }));
   }
-
-  // 1) most common array homes
-  const arrays = [
-    station?.Connections,
-    station?.connections,
-    station?.properties?.Connections,
-    station?.properties?.connections,
-    station?.ConnectionsJSON, // sometimes stringified
-  ];
-  for (const arr of arrays) {
-    const items = coerceArray(arr);
-    if (items.length) {
-      const labels = [];
-      for (const c of items) {
-        // Prefer ID (present in many tiles)
-        const id =
-          num(c?.ConnectionTypeID) ??
-          num(c?.connectionTypeId) ??
-          num(c?.ConnectionType?.ID);
-        if (id !== undefined && ID_TO_LABEL[id]) {
-          labels.push(ID_TO_LABEL[id]);
-          continue;
-        }
-        // Else try titles/fallbacks
-        const title =
-          c?.type ??
-          c?.ConnectionType?.Title ??
+  // OpenChargeMap Connections[]
+  if (Array.isArray(station?.Connections) && station.Connections.length) {
+    return station.Connections.map((c) => ({
+      label: canonLabel(
+        c?.ConnectionType?.Title ??
           c?.ConnectionType?.FormalName ??
           c?.CurrentType?.Title ??
           c?.Level?.Title ??
-          "";
-        const lab = canonicalize(title);
-        if (lab !== "Unknown") labels.push(lab);
-      }
-      if (labels.length) return Array.from(new Set(labels));
-    }
+          "Unknown"
+      ),
+      qty: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
+    }));
   }
-
-  // 2) top-level hints
-  const topId =
-    num(station?.ConnectionTypeID) ??
-    num(station?.connectionTypeId) ??
-    num(station?.ConnectionType?.ID);
-  if (topId !== undefined && ID_TO_LABEL[topId]) return [ID_TO_LABEL[topId]];
-
-  const topTitle =
-    station?.ConnectionType ??
-    station?.connectionType ??
-    station?.properties?.ConnectionType ??
-    station?.properties?.connectionType;
-  if (typeof topTitle === "string") {
-    const lab = canonicalize(topTitle);
-    if (lab !== "Unknown") return [lab];
+  // Council fallback (if we placed Type 2 in the builder, this won’t run)
+  if (station?.isCouncil && typeof station?.NumberOfPoints === "number") {
+    return [{ label: "Type 2", qty: station.NumberOfPoints || 1 }];
   }
-
-  // 3) ad-hoc summary labels
-  const maybeLabels =
-    station?.connectorLabels ||
-    station?.properties?.connectorLabels ||
-    station?.labels;
-  if (Array.isArray(maybeLabels) && maybeLabels.length) {
-    return Array.from(
-      new Set(maybeLabels.map(canonicalize).filter((x) => x && x !== "Unknown"))
-    );
-  }
-
-  // nothing found
+  // Unknown
   return [];
 }
 
-/**
- * FINAL behavior:
- * - All three on  → show everything (including unknown).
- * - Some subset   → show stations that declare a selected type; HIDE unknown.
- * - All off       → show nothing.
- */
-function stationMatchesFilter(station, filter) {
-  const anyOn = filter.type2 || filter.ccs || filter.chademo;
-  const allOn = filter.type2 && filter.ccs && filter.chademo;
-  if (!anyOn) return false;
-  if (allOn) return true;
+function stationPassesFilter(station, allowedSet) {
+  // If no selection at all, treat as “show nothing”
+  if (!allowedSet || allowedSet.size === 0) return false;
 
-  const labels = extractConnectorLabels(station);
-  if (!labels || labels.length === 0) return false; // hide unknown when subset chosen
+  const list = connectorsForFilter(station);
 
-  const s = new Set(labels);
-  return (
-    (filter.type2 && s.has("Type 2")) ||
-    (filter.ccs && s.has("CCS")) ||
-    (filter.chademo && s.has("CHAdeMO"))
-  );
+  // If a station has no connector info, keep it visible (don’t punish missing data)
+  if (!list.length) return true;
+
+  // Keep if ANY connector is allowed
+  return list.some((c) => allowedSet.has(c.label));
 }
-/* ─────────────── end helpers ─────────────── */
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function MapInitializer() {
   const map = useMap();
@@ -228,14 +143,6 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       const currentZoom = map.getZoom();
       const radius = Math.max(12, Math.min(35, 35 - (currentZoom - 10) * 2.3));
 
-      let processedStations = stations;
-      if (stations.length > 25000) {
-        processedStations = stations.filter((_, idx) => idx % 3 === 0);
-        console.log(
-          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
-        );
-      }
-
       const sumQty = (arr) =>
         arr.reduce(
           (sum, c) => sum + (typeof c?.quantity === "number" ? c.quantity : 1),
@@ -243,14 +150,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         );
 
       const maxIntensity = Math.max(
-        ...processedStations.map((s) =>
+        ...stations.map((s) =>
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
             : 1
         )
       );
 
-      const heatData = processedStations.map((s) => {
+      const heatData = stations.map((s) => {
         const weight =
           Array.isArray(s.connectors) && s.connectors.length
             ? sumQty(s.connectors)
@@ -291,6 +198,7 @@ function StationMarker({ station, onClick }) {
 /* ---------- Helpers just for Council layer ---------- */
 const ci = (v) => (typeof v === "string" ? v.toLowerCase() : v);
 
+/** Deep search for any key that *looks like* a postcode */
 function findPostcode(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -312,6 +220,7 @@ function findPostcode(obj) {
   return undefined;
 }
 
+/** Deep search for town/city */
 function findTown(obj) {
   if (!obj || typeof obj !== "object") return undefined;
   for (const [k, v] of Object.entries(obj)) {
@@ -368,7 +277,11 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
             ai.AddressLine1 ||
             "Unknown location";
           const addressLine =
-            p.AddressLine1 || ai.AddressLine1 || p.address || ai.Title || undefined;
+            p.AddressLine1 ||
+            ai.AddressLine1 ||
+            p.address ||
+            ai.Title ||
+            undefined;
 
           const town = findTown({ ...p, ...ai });
           const postcode =
@@ -589,13 +502,26 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // connector filter
-  const [filter, setFilter] = useState({ type2: true, ccs: true, chademo: true });
+  // NEW: local filter state for connector checkboxes
+  const [filters, setFilters] = useState({
+    CCS: true,
+    CHAdeMO: true,
+    "Type 2": true,
+  });
 
+  const allowedSet = useMemo(() => {
+    const s = new Set();
+    if (filters.CCS) s.add("CCS");
+    if (filters.CHAdeMO) s.add("CHAdeMO");
+    if (filters["Type 2"]) s.add("Type 2");
+    return s;
+  }, [filters]);
+
+  // Apply filter to incoming stations
   const filteredStations = useMemo(() => {
-    if (!Array.isArray(stations) || stations.length === 0) return stations;
-    return stations.filter((s) => stationMatchesFilter(s, filter));
-  }, [stations, filter]);
+    if (!Array.isArray(stations) || stations.length === 0) return [];
+    return stations.filter((st) => stationPassesFilter(st, allowedSet));
+  }, [stations, allowedSet]);
 
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
@@ -629,7 +555,7 @@ export default function EnhancedMap({
       setLocationAccuracy(accuracy);
       if (mapRef.current && location) {
         mapRef.current.setView([location.lat, location.lng], 14);
-        const nearest = findNearestStation(location, stations);
+        const nearest = findNearestStation(location, filteredStations);
         if (nearest) {
           console.log(
             `[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(
@@ -639,7 +565,7 @@ export default function EnhancedMap({
         }
       }
     },
-    [stations]
+    [filteredStations]
   );
 
   const handleLocationError = useCallback(
@@ -677,160 +603,115 @@ export default function EnhancedMap({
               animation: "spin 0.6s linear infinite",
             }}
           />
-          <span style={{ fontSize: "11px", fontWeight: "500", color: "#374151" }}>
+          <span
+            style={{ fontSize: "11px", fontWeight: "500", color: "#374151" }}
+          >
             Loading…
           </span>
         </div>
       )}
 
-      {/* Right-side stacks: Filters + Legend */}
+      {/* Filter panel + legend (unchanged visuals) */}
       <div
         style={{
           position: "absolute",
           bottom: "10px",
           right: "10px",
           zIndex: 1000,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          maxWidth: 240,
+          background: "white",
+          padding: "8px",
+          borderRadius: "8px",
+          boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+          fontSize: "11px",
+          minWidth: 160,
         }}
       >
-        {/* Filter */}
+        <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+          Filter connectors
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={filters.CCS}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, CCS: e.target.checked }))
+            }
+          />
+          <span>CCS</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={filters.CHAdeMO}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, CHAdeMO: e.target.checked }))
+            }
+          />
+          <span>CHAdeMO</span>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <input
+            type="checkbox"
+            checked={filters["Type 2"]}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, "Type 2": e.target.checked }))
+            }
+          />
+          <span>Type 2</span>
+        </label>
+
         <div
-          style={{
-            background: "white",
-            padding: "8px",
-            borderRadius: "8px",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
-            fontSize: "11px",
-          }}
+          style={{ fontWeight: 600, marginTop: 10, marginBottom: 6, color: "#1f2937" }}
         >
-          <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
-            Filter connectors
-          </div>
-          <label
+          Legend
+        </div>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
+        >
+          <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 6,
-              cursor: "pointer",
+              width: "12px",
+              height: "12px",
+              background: "#3b82f6",
+              borderRadius: "50%",
             }}
-          >
-            <input
-              type="checkbox"
-              checked={filter.ccs}
-              onChange={(e) =>
-                setFilter((f) => ({ ...f, ccs: e.target.checked }))
-              }
-            />
-            <span>CCS</span>
-          </label>
-          <label
+          />
+          <span>Charging stations</span>
+        </div>
+        <div
+          style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
+        >
+          <div
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              marginBottom: 6,
-              cursor: "pointer",
+              width: "12px",
+              height: "12px",
+              background: "#9333ea",
+              transform: "rotate(45deg)",
+              border: "1px solid white",
             }}
-          >
-            <input
-              type="checkbox"
-              checked={filter.chademo}
-              onChange={(e) =>
-                setFilter((f) => ({ ...f, chademo: e.target.checked }))
-              }
-            />
-            <span>CHAdeMO</span>
-          </label>
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              cursor: "pointer",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={filter.type2}
-              onChange={(e) =>
-                setFilter((f) => ({ ...f, type2: e.target.checked }))
-              }
-            />
-            <span>Type 2</span>
-          </label>
+          />
+          <span>Council markers</span>
         </div>
 
-        {/* Legend */}
-        <div
-          style={{
-            background: "white",
-            padding: "8px",
-            borderRadius: "8px",
-            boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
-            fontSize: "11px",
-            minWidth: 160,
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
-            Legend
-          </div>
+        <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
+          Connector types
+        </div>
+        {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
           <div
+            key={label}
             style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}
           >
             <div
               style={{
-                width: "12px",
-                height: "12px",
-                background: "#3b82f6",
-                borderRadius: "50%",
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                background: String(color),
               }}
             />
-            <span>Charging stations</span>
+            <span>{label}</span>
           </div>
-          <div
-            style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
-          >
-            <div
-              style={{
-                width: "12px",
-                height: "12px",
-                background: "#9333ea",
-                transform: "rotate(45deg)",
-                border: "1px solid white",
-              }}
-            />
-            <span>Council markers</span>
-          </div>
-
-          <div style={{ fontWeight: 600, color: "#1f2937", marginBottom: 4 }}>
-            Connector types
-          </div>
-          {Object.entries(CONNECTOR_COLORS).map(([label, color]) => (
-            <div
-              key={label}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                marginBottom: 4,
-              }}
-            >
-              <div
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: 999,
-                  background: String(color),
-                }}
-              />
-              <span>{label}</span>
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
 
       <MapContainer
@@ -884,10 +765,7 @@ export default function EnhancedMap({
           showCouncil={showCouncil}
           onMarkerClick={handleStationClick}
         />
-        <UserLocationMarker
-          location={userLocation}
-          accuracy={locationAccuracy}
-        />
+        <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
         <LocateMeControl
           onLocationChange={handleLocationChange}
           onError={handleLocationError}
