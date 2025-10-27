@@ -21,10 +21,11 @@ interface StationDrawerProps {
 
 // OCM connector ID mapping to canonical labels
 const OCM_ID_TO_LABEL: Record<number, string> = {
-  33: "CCS",
+  1: "Type 2",
+  2: "Type 2",
+  25: "Type 2",
   32: "CCS",
-  2: "CHAdeMO",
-  25: "Type 2"
+  33: "CHAdeMO"
 };
 
 const canonicalizeType = (raw?: string): string => {
@@ -67,6 +68,10 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
   // Normalize connectors from various formats
   const connectors = useMemo(() => {
     if (!station) return [];
+    // Prefer connectorsDetailed (added by EnhancedMapV2 normalization)
+    if (Array.isArray((station as any)?.connectorsDetailed) && (station as any).connectorsDetailed.length) {
+      return (station as any).connectorsDetailed;
+    }
     if (Array.isArray(station?.connectors) && station.connectors.length) return station.connectors;
     const conns = station?.Connections || station?.properties?.Connections;
     const mapped = mapOCMConnectors(conns);

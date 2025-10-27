@@ -9,7 +9,7 @@ import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
 
 // OCM connector normalization to fix "Unknown" connectors
-const ID2 = {33:"CCS",32:"CCS",2:"CHAdeMO",25:"Type 2"};
+const ID2 = {1:"Type 2",2:"Type 2",25:"Type 2",32:"CCS",33:"CHAdeMO"};
 const canon = (t="")=>{ 
   t=t.toLowerCase(); 
   if(t.includes("ccs")||t.includes("combo"))return "CCS"; 
@@ -360,11 +360,15 @@ export default function EnhancedMap({
   const mapRef = useRef(null);
 
   // Normalize stations to fix "Unknown" connectors before filtering/heatmap/markers
+  // Keep numeric connectors field for heatmap intensity, add connectorsDetailed for drawer
   const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
     if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
     const conns = s?.Connections || s?.properties?.Connections;
     const detailed = mapOCM(conns);
-    if (detailed.length) return { ...s, connectorsDetailed: detailed, connectors: detailed };
+    if (detailed.length) {
+      const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
+      return { ...s, connectorsDetailed: detailed, connectors: totalCount };
+    }
     return s;
   }), [stations]);
 
