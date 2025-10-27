@@ -484,7 +484,6 @@ export default function EnhancedMap({
 
       <StationDrawer
         station={activeStation}
-        userLocation={userLocation}
         onClose={handleDrawerClose}
         onFeedbackSubmit={handleFeedbackSubmit}
       />
