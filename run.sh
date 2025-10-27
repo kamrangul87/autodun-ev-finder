@@ -28,6 +28,6 @@ python serve/export_jobs.py || true
 # Start services
 echo "[run.sh] Starting services..."
 npx concurrently -k \
-  "next dev -p 3000" \
+  "next dev -p 3000 -H 0.0.0.0" \
   "uvicorn serve.app:app --host 0.0.0.0 --port 8000" \
   "node scripts/proxy-ml.js"

@@ -1,9 +1,25 @@
 # Autodun EV Finder - Replit Project
 
 ## Overview
-EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system.
+EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system. Includes Autodun Nexus data+ML pipeline for reliability predictions and advanced analytics.
 
 ## Recent Changes
+**2025-10-27: Autodun Nexus Data+ML Pipeline + Connector Normalization Fix ✅**
+- ✅ **Connector Normalization** - Fixed "Unknown connectors" issue in StationDrawer and map display
+  - OCM connector ID mapping: IDs 1,2,25→"Type 2", 32→"CCS", 33→"CHAdeMO"
+  - EnhancedMapV2 normalizes stations with `connectorsDetailed` array + numeric `connectors` count
+  - StationDrawer prefers `connectorsDetailed` for accurate connector display
+  - Heatmap intensity preserved (numeric connectors field maintained)
+- ✅ **Autodun Nexus Pipeline** - Complete data warehouse and ML infrastructure
+  - **Ingestion**: `ingest/ocm_pull.py` fetches OCM data to Parquet with bbox support
+  - **Warehouse**: DuckDB storage with dbt models (bronze/silver/gold layers)
+  - **ML Pipeline**: `ml/batch_infer.py` for reliability/utilization predictions (sklearn-based)
+  - **Serving**: FastAPI service (`serve/app.py`) with read-only endpoints
+  - **Integration**: `scripts/proxy-ml.js` routes `/api-ml/*` to FastAPI backend
+  - **Orchestration**: `run.sh` script manages Next.js + FastAPI concurrently
+- ✅ **Python Environment** - Python 3.11 with pandas, duckdb, dbt-core, fastapi, scikit-learn
+- ✅ **Architect Approved** - Connector normalization fixes verified and production-ready
+
 **2025-10-11: Rebuilt Drawer Following User Specifications ✅**
 - Complete drawer rebuild following exact user specifications
 - Desktop (≥1024px): Fixed right-side panel (380px wide, height: calc(100vh - 70px), top: 70px)
@@ -90,11 +106,48 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 - **Manual Setup Required**: Configure GitHub branch protection on `main` (requires PR, code owner review, CI checks)
 
 ## Project Architecture
+### Frontend
 - **Framework**: Next.js 14 (Pages Router)
 - **UI**: React with Tailwind CSS
 - **Maps**: Leaflet with react-leaflet, marker clustering, and heatmap support
 - **Data Source**: Open Charge Map API for EV station data
 - **Deployment**: Configured for Replit autoscale deployment
+
+### Autodun Nexus Data+ML Pipeline
+- **Ingestion Layer** (`ingest/`)
+  - `ocm_pull.py`: Fetches OCM data with bbox/distance parameters, outputs Parquet files
+  - Supports incremental updates and configurable geographical bounds
+  
+- **Data Warehouse** (`warehouse/`)
+  - **Storage**: DuckDB for fast analytical queries on structured data
+  - **Transformation**: dbt (data build tool) with bronze/silver/gold architecture
+  - **Bronze**: Raw OCM data from Parquet files
+  - **Silver**: Cleaned, deduplicated, type-safe station records
+  - **Gold**: Aggregated features for ML (site_daily metrics, reliability indicators)
+  
+- **ML Pipeline** (`ml/`)
+  - `batch_infer.py`: Batch inference for station reliability and utilization predictions
+  - Uses scikit-learn models (currently stub implementation for demo)
+  - Outputs predictions to DuckDB for serving layer
+  
+- **Serving Layer** (`serve/`)
+  - **FastAPI** service (`app.py`) with read-only endpoints:
+    - `/health`: Service health check
+    - `/stations/{id}`: Station details with predictions
+    - `/predictions/{id}`: ML predictions for specific station
+  - `export_jobs.py`: Background job management for data exports
+  - **Proxy**: `scripts/proxy-ml.js` routes `/api-ml/*` requests to FastAPI (port 8000)
+  
+- **Orchestration**
+  - `run.sh`: Orchestrates full pipeline (ingest → dbt → ML → export → serve)
+  - Uses `concurrently` to run 3 services in parallel:
+    - Next.js dev server (internal port 3000)
+    - FastAPI backend (internal port 8000)
+    - Gateway proxy (external port 5000)
+  - `scripts/proxy-ml.js`: HTTP proxy using `http-proxy` package
+    - Routes `/api-ml/*` requests to FastAPI (port 8000)
+    - Routes all other requests to Next.js (port 3000)
+    - Single public endpoint on port 5000 for both frontend and ML API
 
 ## Environment Configuration
 ### Required Secrets (configured in Replit Secrets)
@@ -105,15 +158,30 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 - `NEXT_PUBLIC_TILE_URL`: Custom map tile server URL (defaults to OpenStreetMap)
 - `COUNCIL_DATA_URL`: Custom URL for council boundary data
 
-### API Endpoint
-- `/api/stations` - Accepts query params: `lat`, `lng`, `distance` (km)
-- Defaults to London (51.5074, -0.1278) with 50km radius
-- Returns normalized station data with source, count, and fallback status
+### API Endpoints
+#### Next.js API Routes
+- `/api/stations` - Accepts query params: `lat`, `lng`, `distance` (km), `bbox`, `tiles`, `limitPerTile`
+  - Defaults to London (51.5074, -0.1278) with 50km radius
+  - Returns normalized station data with source, count, and fallback status
+- `/api/council-stations` - Server-side aggregation of council boundary markers
+- `/api/feedback` - Handles user feedback submission (Good/Bad votes + comments)
+
+#### Autodun Nexus ML API (FastAPI via /api-ml/* proxy)
+- `/api-ml/health` - Service health check for FastAPI backend
+- `/api-ml/stations/{id}` - Station details with ML predictions
+- `/api-ml/predictions/{id}` - Reliability and utilization predictions for station
 
 ## Development
+### Frontend Only (Current Default)
 - **Dev Server**: Runs on port 5000 via `npm run dev`
 - **Build**: `npm run build`
 - **Production**: `npm run start`
+
+### Full Stack with Autodun Nexus Pipeline
+- **Run**: `bash run.sh` - Runs complete pipeline + dual services on port 5000
+- **Services**: Next.js (3000) + FastAPI (8000) via gateway proxy (5000)
+- **Pipeline**: Executes ingest → dbt → ML → export before starting services
+- **Note**: Requires Python 3.11+ with all dependencies from requirements.txt
 
 ## Deployment
 Configured for Replit autoscale deployment:

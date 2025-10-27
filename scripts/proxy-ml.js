@@ -12,4 +12,4 @@ http.createServer((req, res) => {
   } else {
     proxy.web(req, res, { target: nextURL });
   }
-}).listen(8080, () => console.log('Gateway: http://localhost:8080'));
+}).listen(5000, '0.0.0.0', () => console.log('Gateway proxy: http://0.0.0.0:5000'));
