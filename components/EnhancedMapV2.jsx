@@ -375,11 +375,14 @@ export default function EnhancedMap({
   const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
     if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
     
-    // Try to get connectors from existing array first, then fall back to Connections
+    // Try to get connectors from existing array first (check both s.connectors and s.properties.connectors for GeoJSON)
     let detailed = [];
-    if (Array.isArray(s?.connectors) && s.connectors.length && typeof s.connectors[0] === 'object') {
+    const connectorsArray = s?.connectors || s?.properties?.connectors;
+    
+    if (Array.isArray(connectorsArray) && connectorsArray.length && typeof connectorsArray[0] === 'object') {
       // Already have normalized connectors array from API
-      detailed = s.connectors.map(c => ({
+      console.log('[EnhancedMapV2] Using connectors array for', s.id, connectorsArray);
+      detailed = connectorsArray.map(c => ({
         type: canon(c?.type || 'Unknown'),
         quantity: typeof c?.quantity === 'number' && c.quantity > 0 ? c.quantity : 1,
         powerKW: typeof c?.powerKW === 'number' ? c.powerKW : undefined
@@ -387,13 +390,16 @@ export default function EnhancedMap({
     } else {
       // Fall back to OCM Connections field
       const conns = s?.Connections || s?.properties?.Connections;
+      console.log('[EnhancedMapV2] Trying Connections for', s.id, 'conns:', conns);
       detailed = mapOCM(conns);
     }
     
     if (detailed.length) {
       const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
+      console.log('[EnhancedMapV2] Created connectorsDetailed for', s.id, detailed);
       return { ...s, connectorsDetailed: detailed, connectors: totalCount };
     }
+    console.log('[EnhancedMapV2] No detailed connectors for', s.id);
     return s;
   }), [stations]);
 

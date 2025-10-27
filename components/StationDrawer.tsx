@@ -133,7 +133,28 @@ const OCM_TYPE_BY_ID: Record<number, string> = {
 };
 
 function normalizeConnectors(station: any): Connector[] | null {
-  // 1) Preferred: already-normalized station.connectors
+  console.log('[normalizeConnectors] Input:', {
+    id: station?.id,
+    name: station?.name,
+    connectorsDetailed: station?.connectorsDetailed,
+    connectors: station?.connectors,
+    Connections: station?.Connections
+  });
+  
+  // 1) Preferred: connectorsDetailed from EnhancedMapV2 normalization
+  if (Array.isArray(station?.connectorsDetailed) && station.connectorsDetailed.length) {
+    console.log('[normalizeConnectors] Using connectorsDetailed');
+    return station.connectorsDetailed.map((c: any) => ({
+      type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
+      quantity:
+        typeof c?.quantity === "number" && !Number.isNaN(c.quantity)
+          ? c.quantity
+          : 1,
+      powerKW: safeNumber(c?.powerKW),
+    }));
+  }
+  
+  // 2) Fallback: already-normalized station.connectors array
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
       type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
