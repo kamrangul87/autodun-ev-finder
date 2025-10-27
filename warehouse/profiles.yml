@@ -1,0 +1,7 @@
+autodun_profile:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "data/autodun.duckdb"
+      threads: 4

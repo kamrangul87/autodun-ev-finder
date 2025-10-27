@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
@@ -7,6 +7,22 @@ import { LocateMeButton } from './LocateMeButton.tsx';
 import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
+
+// OCM connector normalization to fix "Unknown" connectors
+const ID2 = {33:"CCS",32:"CCS",2:"CHAdeMO",25:"Type 2"};
+const canon = (t="")=>{ 
+  t=t.toLowerCase(); 
+  if(t.includes("ccs")||t.includes("combo"))return "CCS"; 
+  if(t.includes("chademo"))return "CHAdeMO"; 
+  if(t.includes("type 2")||t.includes("type-2")||(t.includes("iec 62196")&&t.includes("type 2")))return "Type 2"; 
+  return "Unknown"; 
+};
+const mapOCM = (conns)=>Array.isArray(conns)?conns.reduce((acc,c)=>{ 
+  const id=Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID); 
+  const label=ID2[id] ?? canon(c?.ConnectionType?.Title || c?.ConnectionType?.FormalName || c?.CurrentType?.Title || c?.Level?.Title); 
+  if(label!=="Unknown") acc.push({type:label, quantity: typeof c?.Quantity==="number"&&c.Quantity>0?c.Quantity:1, powerKW: typeof c?.PowerKW==="number"?c.PowerKW:undefined}); 
+  return acc; 
+},[]):[];
 
 if (typeof window !== 'undefined') {
   delete L.Icon.Default.prototype._getIconUrl;
@@ -343,6 +359,15 @@ export default function EnhancedMap({
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
+  // Normalize stations to fix "Unknown" connectors before filtering/heatmap/markers
+  const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
+    if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
+    const conns = s?.Connections || s?.properties?.Connections;
+    const detailed = mapOCM(conns);
+    if (detailed.length) return { ...s, connectorsDetailed: detailed, connectors: detailed };
+    return s;
+  }), [stations]);
+
   // Handle external location updates from controls
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
@@ -374,12 +399,12 @@ export default function EnhancedMap({
     if (mapRef.current && location) {
       mapRef.current.setView([location.lat, location.lng], 14);
       
-      const nearest = findNearestStation(location, stations);
+      const nearest = findNearestStation(location, stationsNormalized);
       if (nearest) {
         console.log(`[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(2)} km)`);
       }
     }
-  }, [stations]);
+  }, [stationsNormalized]);
 
   const handleLocationError = useCallback((error) => {
     onToast?.({ 
@@ -428,12 +453,12 @@ export default function EnhancedMap({
           onLoadingChange={onLoadingChange}
           searchResult={searchResult} 
           shouldZoomToData={shouldZoomToData}
-          stations={stations}
+          stations={stationsNormalized}
         />
-        {showHeatmap && <HeatmapLayer stations={stations} />}
+        {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
         {showMarkers && (
           <MarkerClusterGroup chunkedLoading>
-            {stations.map(station => (
+            {stationsNormalized.map(station => (
               <StationMarker 
                 key={station.id} 
                 station={station} 

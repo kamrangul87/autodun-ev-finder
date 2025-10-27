@@ -1,0 +1,425 @@
+Project: Autodun Nexus — Data+ML pipeline + UI fixes (NO API CHANGES).
+Goal: Build a runnable Replit project that:
+
+Ingests OCM data → DuckDB via dbt (bronze→silver→gold).
+
+Generates stub ML predictions (reliability & utilization) → Parquet exports.
+
+Serves read-only FastAPI endpoints (proxied under /api-ml/*).
+
+Fixes “Unknown connectors” on the client without changing /pages/api/*.
+
+Keeps council markers unfiltered; preserves heatmap & clusters.
+
+Adds repo hygiene scripts.
+
+HARD CONSTRAINTS
+
+❌ Do NOT modify anything under /pages/api/*.
+
+✅ Only change client React files and add new pipeline/serve files.
+
+✅ Station filtering rule: items with no connector metadata stay visible; council markers never filtered.
+
+1) Environment & runners
+
+Create/overwrite these files:
+
+replit.nix
+
+{ pkgs }: {
+  deps = [
+    pkgs.nodejs_20
+    pkgs.python310
+    pkgs.python310Packages.pip
+    pkgs.duckdb
+  ];
+}
+
+
+.replit
+
+run = "bash run.sh"
+hidden = [".venv"]
+
+
+requirements.txt
+
+pandas==2.2.2
+pyarrow==16.1.0
+duckdb==1.0.0
+requests==2.32.3
+dbt-core==1.7.14
+dbt-duckdb==1.7.4
+fastapi==0.115.0
+uvicorn==0.30.6
+scikit-learn==1.5.2
+
+
+package.json (create or merge)
+
+{
+  "name": "autodun-replit",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .js,.jsx,.ts,.tsx || true"
+  },
+  "dependencies": {
+    "concurrently": "^8.2.2",
+    "http-proxy": "^1.18.1",
+    "next": "14.2.7",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}
+
+
+scripts/proxy-ml.js
+
+const httpProxy = require('http-proxy');
+const http = require('http');
+const proxy = httpProxy.createProxyServer({});
+const nextURL = 'http://127.0.0.1:3000';
+const mlURL   = 'http://127.0.0.1:8000';
+http.createServer((req, res) => {
+  if (req.url.startsWith('/api-ml/')) {
+    req.url = req.url.replace('/api-ml', '');
+    proxy.web(req, res, { target: mlURL });
+  } else {
+    proxy.web(req, res, { target: nextURL });
+  }
+}).listen(8080, () => console.log('Gateway: http://localhost:8080'));
+
+
+run.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -f package.json ]; then npm i --silent; fi
+python -m pip install --upgrade pip >/dev/null
+python -m pip install -r requirements.txt >/dev/null
+
+export DBT_PROFILES_DIR="$(pwd)/warehouse"
+
+mkdir -p data/bronze data/gold exports
+
+python ingest/ocm_pull.py || true
+dbt build --project-dir warehouse || true
+python ml/batch_infer.py || true
+python serve/export_jobs.py || true
+
+npx concurrently -k \
+  "next dev -p 3000" \
+  "uvicorn serve.app:app --host 0.0.0.0 --port 8000" \
+  "node scripts/proxy-ml.js"
+
+
+Make executable:
+
+chmod +x run.sh
+
+2) Ingest OCM → Parquet
+
+ingest/ocm_pull.py
+
+import os, json, pathlib, requests
+import pandas as pd
+from datetime import datetime, timezone
+
+OUT = pathlib.Path("data/bronze/ocm_poi.parquet"); OUT.parent.mkdir(parents=True, exist_ok=True)
+
+def fetch():
+    key = os.environ.get("OCM_API_KEY", "")
+    params = {
+        "countrycode":"GB",
+        "boundingbox":"(49.823,-8.649),(60.845,1.763)",
+        "maxresults":"4000","compact":"true","verbose":"false"
+    }
+    if key: params["key"]=key
+    r = requests.get("https://api.openchargemap.io/v3/poi/", params=params, timeout=60)
+    r.raise_for_status()
+    return r.json()
+
+def main():
+    data = fetch()
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [{"provider":"OCM","ext_id":str(d.get("ID") or ""), "raw":json.dumps(d),"ingested_at":now} for d in data]
+    pd.DataFrame(rows).to_parquet(OUT, index=False)
+    print(f"[ingest] wrote {len(rows)} → {OUT}")
+
+if __name__=="__main__": main()
+
+3) dbt (DuckDB) — bronze/silver/gold
+
+warehouse/dbt_project.yml
+
+name: "autodun"
+version: "1.0"
+config-version: 2
+profile: "autodun_profile"
+models:
+  autodun:
+    +materialized: table
+    bronze: { +schema: bronze }
+    silver: { +schema: silver }
+    gold:   { +schema: gold }
+
+
+warehouse/profiles.yml
+
+autodun_profile:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "data/autodun.duckdb"
+      threads: 4
+
+
+warehouse/models/bronze/bronze__ocm__poi.sql
+
+{{ config(materialized='view') }}
+select provider, ext_id, json(raw) as raw, ingested_at
+from read_parquet('data/bronze/ocm_poi.parquet');
+
+
+warehouse/models/silver/silver__stations.sql
+
+{{ config(materialized='table') }}
+
+with src as (select * from {{ ref('bronze__ocm__poi') }}),
+parsed as (
+  select
+    provider || ':' || json_extract_string(raw, '$.ID') as station_id,
+    provider,
+    json_extract_string(raw, '$.ID') as ext_id,
+    coalesce(json_extract_string(raw, '$.AddressInfo.Title'), 'Unknown') as name,
+    json_extract(raw, '$.AddressInfo.Latitude')::double  as lat,
+    json_extract(raw, '$.AddressInfo.Longitude')::double as lng,
+    json_extract_string(raw, '$.AddressInfo.Postcode')   as postcode,
+    json_extract_string(raw, '$.OperatorInfo.Title')     as operator,
+    json_extract(raw, '$.Connections')                   as connections_json,
+    ingested_at
+  from src
+),
+norm as (
+  select
+    station_id, provider, ext_id, name, lat, lng, postcode, operator, connections_json, ingested_at,
+    (select any(lower(json_extract_string(c,'$.ConnectionType.Title')) like '%ccs%' or lower(json_extract_string(c,'$.ConnectionType.FormalName')) like '%ccs%' or lower(json_extract_string(c,'$.ConnectionType.Title')) like '%combo%') from json_each(connections_json) t(c)) as has_ccs,
+    (select any(lower(json_extract_string(c,'$.ConnectionType.Title')) like '%chademo%') from json_each(connections_json) t(c)) as has_chademo,
+    (select any(lower(json_extract_string(c,'$.ConnectionType.Title')) like '%type 2%' or lower(json_extract_string(c,'$.ConnectionType.FormalName')) like '%type 2%') from json_each(connections_json) t(c)) as has_type2,
+    (select sum(coalesce(json_extract(c,'$.Quantity')::int,1)) from json_each(connections_json) t(c)) as n_connectors,
+    (select sum(coalesce(json_extract(c,'$.PowerKW')::double,0.0)) from json_each(connections_json) t(c)) as kw_sum
+  from parsed
+)
+select
+  station_id, provider, ext_id, name, lat, lng, postcode, operator,
+  connections_json as connectors,
+  coalesce(has_ccs,false) as has_ccs,
+  coalesce(has_chademo,false) as has_chademo,
+  coalesce(has_type2,false) as has_type2,
+  coalesce(n_connectors,0) as n_connectors,
+  coalesce(kw_sum,0.0) as kw_sum,
+  false as is_council,
+  ingested_at as last_seen
+from norm
+where lat is not null and lng is not null;
+
+
+warehouse/models/gold/gold__features_site_daily.sql
+
+{{ config(materialized='table') }}
+
+with s as (select * from {{ ref('silver__stations') }}),
+days as (select * from range(current_date - 90, current_date + 1, interval 1 day)),
+feat as (
+  select
+    s.station_id,
+    (days as d)::date as date,
+    s.n_connectors, s.kw_sum, s.has_ccs, s.has_chademo, s.has_type2,
+    extract(dow from (days as d)) as dow,
+    case when extract(month from (days as d)) in (12,1,2) then 'winter'
+         when extract(month from (days as d)) in (3,4,5)  then 'spring'
+         when extract(month from (days as d)) in (6,7,8)  then 'summer'
+         else 'autumn' end as season
+  from s, days
+)
+select * from feat;
+
+4) Stub ML + Exports + FastAPI
+
+ml/batch_infer.py
+
+import duckdb, pathlib, pandas as pd
+from datetime import date
+DB = "data/autodun.duckdb"; OUT = pathlib.Path("data/gold"); OUT.mkdir(parents=True, exist_ok=True)
+
+def main():
+    con = duckdb.connect(DB)
+    df = con.execute("select * from gold.features_site_daily").df()
+    con.close()
+    rel = (0.4 + 0.05*df["n_connectors"].clip(0,10) + 0.1*df["has_ccs"].astype(int) + 0.05*df["has_type2"].astype(int)).clip(0,1)
+    reliability = df[["station_id","date"]].copy(); reliability["reliability"]=rel
+    util = df[["station_id","date"]].copy()
+    util["util_mean"]=(df["n_connectors"].clip(0,12)/12.0).round(3); util["util_p10"]=(util["util_mean"]*0.7).round(3); util["util_p90"]=(util["util_mean"]*1.3).clip(0,1).round(3)
+    reliability.to_parquet(OUT/"reliability_daily.parquet", index=False)
+    util.to_parquet(OUT/"utilization_daily.parquet", index=False)
+    print("[ml] wrote data/gold/*.parquet")
+
+if __name__=="__main__": main()
+
+
+serve/export_jobs.py
+
+import pathlib, pandas as pd
+IN_REL = pathlib.Path("data/gold/reliability_daily.parquet")
+IN_UTIL = pathlib.Path("data/gold/utilization_daily.parquet")
+OUT = pathlib.Path("exports"); OUT.mkdir(parents=True, exist_ok=True)
+
+def main():
+    rel = pd.read_parquet(IN_REL); util = pd.read_parquet(IN_UTIL)
+    day = rel["date"].max()
+    rel = rel[rel["date"]==day][["station_id","reliability"]]
+    util = util[util["date"]==day][["station_id","util_mean","util_p10","util_p90"]]
+    rel.to_parquet(OUT/"reliability_scores.parquet", index=False); rel.to_csv(OUT/"reliability_scores.csv", index=False)
+    util.to_parquet(OUT/"utilization_forecast.parquet", index=False); util.to_csv(OUT/"utilization_forecast.csv", index=False)
+    print(f"[export] wrote exports/* for {day}")
+
+if __name__=="__main__": main()
+
+
+serve/app.py
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+import pandas as pd, pathlib
+
+app = FastAPI(title="Autodun Nexus – Read-only API")
+REL = pathlib.Path("exports/reliability_scores.parquet")
+UTIL = pathlib.Path("exports/utilization_forecast.parquet")
+
+def load(path: pathlib.Path):
+    if not path.exists(): raise HTTPException(503, f"{path.name} not ready")
+    return pd.read_parquet(path)
+
+@app.get("/scores")
+def scores(): return JSONResponse(load(REL).to_dict(orient="records"))
+
+@app.get("/forecast")
+def forecast(): return JSONResponse(load(UTIL).to_dict(orient="records"))
+
+@app.get("/health")
+def health(): return {"ok": REL.exists() and UTIL.exists()}
+
+5) Frontend fixes — do NOT touch /pages/api/*
+
+A) components/StationDrawer.tsx (map OCM → canonical client-side)
+
+Add near top:
+
+const OCM_ID_TO_LABEL: Record<number, string> = { 33: "CCS", 32: "CCS", 2: "CHAdeMO", 25: "Type 2" };
+const canon = (raw?: string) => {
+  const t = (raw||"").toLowerCase();
+  if (t.includes("ccs") || t.includes("combo")) return "CCS";
+  if (t.includes("chademo")) return "CHAdeMO";
+  if (t.includes("type 2") || t.includes("type-2") || (t.includes("iec 62196") && t.includes("type 2"))) return "Type 2";
+  return "Unknown";
+};
+const mapOCM = (conns?: any[]) => {
+  if (!Array.isArray(conns)) return [];
+  const out:any[] = [];
+  for (const c of conns) {
+    const id = Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID);
+    const t = OCM_ID_TO_LABEL[id] ?? canon(c?.ConnectionType?.Title || c?.ConnectionType?.FormalName || c?.CurrentType?.Title || c?.Level?.Title);
+    if (t !== "Unknown") out.push({ type: t, quantity: typeof c?.Quantity === "number" && c.Quantity>0 ? c.Quantity : 1, powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined });
+  }
+  return out;
+};
+
+
+Where you compute connectors, replace with:
+
+const connectors = useMemo(() => {
+  if (Array.isArray(s?.connectors) && s.connectors.length) return s.connectors;
+  const conns = s?.Connections || s?.properties?.Connections;
+  const mapped = mapOCM(conns);
+  if (mapped.length) return mapped;
+  const total =
+    (Array.isArray(conns) ? conns.reduce((a,c)=>a+(typeof c?.Quantity==="number"?c.Quantity:1),0) : 0) ||
+    (typeof s?.NumberOfPoints === "number" ? s.NumberOfPoints : 0);
+  return total > 0 ? [{ type: "Unknown", quantity: total }] : [];
+}, [s]);
+
+
+B) components/EnhancedMapV2.jsx (normalize before filters/heatmap)
+
+Add helpers:
+
+const ID2 = {33:"CCS",32:"CCS",2:"CHAdeMO",25:"Type 2"};
+const canon = (t="")=>{ t=t.toLowerCase(); if(t.includes("ccs")||t.includes("combo"))return "CCS"; if(t.includes("chademo"))return "CHAdeMO"; if(t.includes("type 2")||t.includes("type-2")||(t.includes("iec 62196")&&t.includes("type 2")))return "Type 2"; return "Unknown"; };
+const mapOCM = (conns)=>Array.isArray(conns)?conns.reduce((acc,c)=>{ const id=Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID); const label=ID2[id] ?? canon(c?.ConnectionType?.Title || c?.ConnectionType?.FormalName || c?.CurrentType?.Title || c?.Level?.Title); if(label!=="Unknown") acc.push({type:label, quantity: typeof c?.Quantity==="number"&&c.Quantity>0?c.Quantity:1, powerKW: typeof c?.PowerKW==="number"?c.PowerKW:undefined}); return acc; },[]):[];
+
+
+Before you compute filtered stations, normalize:
+
+const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
+  if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
+  const conns = s?.Connections || s?.properties?.Connections;
+  const detailed = mapOCM(conns);
+  if (detailed.length) return { ...s, connectorsDetailed: detailed, connectors: detailed };
+  return s;
+}), [stations]);
+
+
+Use stationsNormalized instead of stations in your filtering, markers, and heatmap.
+
+This preserves current heatmap/cluster behavior, keeps “unknown” stations visible, and never filters out council markers.
+
+6) Hygiene
+
+scripts/find-duplicates.sh
+
+#!/usr/bin/env bash
+git ls-files | awk -F/ '{print $NF}' | sort | uniq -d | while read f; do
+  echo "Duplicate filename: $f"
+  git ls-files | grep "/$f$"
+done
+
+7) Acceptance tests (what I expect to work)
+
+bash run.sh starts:
+
+Next.js on port 3000 (proxied to 8080 root /)
+
+FastAPI on 8000 (proxied to /api-ml/*)
+
+Open Replit web preview (port 8080):
+
+Map shows stations; cluster + heatmap work.
+
+Connector filters: unchecking one only hides stations that explicitly lack it; unknown stays visible.
+
+Council markers never filtered.
+
+ML API:
+
+GET /api-ml/health → { ok: true }
+
+GET /api-ml/scores and /api-ml/forecast return arrays from exports/*.parquet.
+
+8) Commands to run (agent can run them automatically)
+python ingest/ocm_pull.py
+export DBT_PROFILES_DIR=$(pwd)/warehouse
+dbt build --project-dir warehouse
+python ml/batch_infer.py
+python serve/export_jobs.py
+bash run.sh
+
+9) Future (don’t build now)
+
+RAG/Agent: agents/planning_agent.py that reads exports/* and drafts council siting plans.
+
+End of prompt. Implement exactly as specified. Do not modify /pages/api/*.

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState, useMemo } from 'react';
+import { createPortal} from 'react-dom';
 
 interface Station {
   id: string;
@@ -8,6 +8,9 @@ interface Station {
   lat: number;
   lng: number;
   connectors?: Array<{ type: string; count: number }>;
+  Connections?: any[];
+  properties?: any;
+  NumberOfPoints?: number;
 }
 
 interface StationDrawerProps {
@@ -16,12 +19,63 @@ interface StationDrawerProps {
   onFeedbackSubmit?: (stationId: string, vote: 'good' | 'bad', comment: string) => void;
 }
 
+// OCM connector ID mapping to canonical labels
+const OCM_ID_TO_LABEL: Record<number, string> = {
+  33: "CCS",
+  32: "CCS",
+  2: "CHAdeMO",
+  25: "Type 2"
+};
+
+const canonicalizeType = (raw?: string): string => {
+  const t = (raw || "").toLowerCase();
+  if (t.includes("ccs") || t.includes("combo")) return "CCS";
+  if (t.includes("chademo")) return "CHAdeMO";
+  if (t.includes("type 2") || t.includes("type-2") || (t.includes("iec 62196") && t.includes("type 2"))) return "Type 2";
+  return "Unknown";
+};
+
+const mapOCMConnectors = (conns?: any[]): Array<{ type: string; quantity: number; powerKW?: number }> => {
+  if (!Array.isArray(conns)) return [];
+  const out: Array<{ type: string; quantity: number; powerKW?: number }> = [];
+  for (const c of conns) {
+    const id = Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID);
+    const t = OCM_ID_TO_LABEL[id] ?? canonicalizeType(
+      c?.ConnectionType?.Title ||
+      c?.ConnectionType?.FormalName ||
+      c?.CurrentType?.Title ||
+      c?.Level?.Title
+    );
+    if (t !== "Unknown") {
+      out.push({
+        type: t,
+        quantity: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
+        powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined
+      });
+    }
+  }
+  return out;
+};
+
 export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDrawerProps) {
   const [vote, setVote] = useState<'good' | 'bad' | null>(null);
   const [comment, setComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Normalize connectors from various formats
+  const connectors = useMemo(() => {
+    if (!station) return [];
+    if (Array.isArray(station?.connectors) && station.connectors.length) return station.connectors;
+    const conns = station?.Connections || station?.properties?.Connections;
+    const mapped = mapOCMConnectors(conns);
+    if (mapped.length) return mapped;
+    const total =
+      (Array.isArray(conns) ? conns.reduce((a, c) => a + (typeof c?.Quantity === "number" ? c.Quantity : 1), 0) : 0) ||
+      (typeof station?.NumberOfPoints === "number" ? station.NumberOfPoints : 0);
+    return total > 0 ? [{ type: "Unknown", quantity: total }] : [];
+  }, [station]);
 
   useEffect(() => {
     if (station) {
@@ -114,11 +168,7 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
     window.open(url, '_blank');
   };
 
-  const totalConnectors = station?.connectors
-    ? Array.isArray(station.connectors)
-      ? station.connectors.reduce((sum, c) => sum + c.count, 0)
-      : 0
-    : 0;
+  const totalConnectors = connectors.reduce((sum, c) => sum + (c.quantity || 0), 0);
 
   if (!station) return null;
 
