@@ -8,8 +8,18 @@ import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
 
-// OCM connector normalization to fix "Unknown" connectors
-const ID2 = {1:"Type 2",2:"Type 2",25:"Type 2",32:"CCS",33:"CHAdeMO"};
+// OCM connector normalization - expanded ID mapping for common OCM connector types
+const ID2 = {
+  1:"Type 2",    // Type 2 (Tethered)
+  2:"CHAdeMO",   // CHAdeMO
+  25:"Type 2",   // Type 2 (Socket Only)
+  32:"CCS",      // CCS (Type 2 Combo) - Tethered
+  33:"CCS",      // CCS (Type 2 Combo) - Socket
+  1036:"Type 2", // Type 2 (Socketed, IEC 62196 Type 2)
+  8:"Type 2",    // Type 2 (Socket Only, IEC 62196-T2)
+  27:"Type 2",   // Type 2 (Tethered Cable)
+  30:"CHAdeMO"   // CHAdeMO (Tethered)
+};
 const canon = (t="")=>{ 
   t=t.toLowerCase(); 
   if(t.includes("ccs")||t.includes("combo"))return "CCS"; 
@@ -20,7 +30,8 @@ const canon = (t="")=>{
 const mapOCM = (conns)=>Array.isArray(conns)?conns.reduce((acc,c)=>{ 
   const id=Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID); 
   const label=ID2[id] ?? canon(c?.ConnectionType?.Title || c?.ConnectionType?.FormalName || c?.CurrentType?.Title || c?.Level?.Title); 
-  if(label!=="Unknown") acc.push({type:label, quantity: typeof c?.Quantity==="number"&&c.Quantity>0?c.Quantity:1, powerKW: typeof c?.PowerKW==="number"?c.PowerKW:undefined}); 
+  // ALWAYS push connectors, even if Unknown, so users see all connector info
+  acc.push({type:label, quantity: typeof c?.Quantity==="number"&&c.Quantity>0?c.Quantity:1, powerKW: typeof c?.PowerKW==="number"?c.PowerKW:undefined}); 
   return acc; 
 },[]):[];
 
@@ -363,8 +374,22 @@ export default function EnhancedMap({
   // Keep numeric connectors field for heatmap intensity, add connectorsDetailed for drawer
   const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
     if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
-    const conns = s?.Connections || s?.properties?.Connections;
-    const detailed = mapOCM(conns);
+    
+    // Try to get connectors from existing array first, then fall back to Connections
+    let detailed = [];
+    if (Array.isArray(s?.connectors) && s.connectors.length && typeof s.connectors[0] === 'object') {
+      // Already have normalized connectors array from API
+      detailed = s.connectors.map(c => ({
+        type: canon(c?.type || 'Unknown'),
+        quantity: typeof c?.quantity === 'number' && c.quantity > 0 ? c.quantity : 1,
+        powerKW: typeof c?.powerKW === 'number' ? c.powerKW : undefined
+      }));
+    } else {
+      // Fall back to OCM Connections field
+      const conns = s?.Connections || s?.properties?.Connections;
+      detailed = mapOCM(conns);
+    }
+    
     if (detailed.length) {
       const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
       return { ...s, connectorsDetailed: detailed, connectors: totalCount };

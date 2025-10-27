@@ -4,12 +4,17 @@
 EV charging station finder application for the UK, migrated from Vercel to Replit. Built with Next.js, React, Leaflet maps, and Open Charge Map API integration with live data and fallback system. Includes Autodun Nexus data+ML pipeline for reliability predictions and advanced analytics.
 
 ## Recent Changes
-**2025-10-27: Autodun Nexus Data+ML Pipeline + Connector Normalization Fix ✅**
-- ✅ **Connector Normalization** - Fixed "Unknown connectors" issue in StationDrawer and map display
-  - OCM connector ID mapping: IDs 1,2,25→"Type 2", 32→"CCS", 33→"CHAdeMO"
-  - EnhancedMapV2 normalizes stations with `connectorsDetailed` array + numeric `connectors` count
-  - StationDrawer prefers `connectorsDetailed` for accurate connector display
+**2025-10-27: Connector Normalization Fix - Complete ✅**
+- ✅ **Fixed "Connector types not specified" Bug** - Connectors now display properly in drawer
+  - **Root Cause**: mapOCM function filtered out "Unknown" connectors entirely (lost data)
+  - **Fix 1**: Removed `if(label!=="Unknown")` filter - ALL connectors now preserved
+  - **Fix 2**: Expanded OCM ID mapping (1,2,8,25,27,30,32,33,1036 → Type 2/CCS/CHAdeMO)
+  - **Fix 3**: EnhancedMapV2 now uses existing `connectors` array from API (not just raw `Connections`)
+  - **Fix 4**: Normalized connector types through `canon()` function for consistent labeling
+  - StationDrawer shows color-coded bullets with accurate counts (✅ Type 2, ⚡ CCS, 🔌 CHAdeMO)
   - Heatmap intensity preserved (numeric connectors field maintained)
+  
+**2025-10-27: Autodun Nexus Data+ML Pipeline ✅**
 - ✅ **Autodun Nexus Pipeline** - Complete data warehouse and ML infrastructure
   - **Ingestion**: `ingest/ocm_pull.py` fetches OCM data to Parquet with bbox support
   - **Warehouse**: DuckDB storage with dbt models (bronze/silver/gold layers)

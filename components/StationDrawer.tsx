@@ -259,7 +259,6 @@ export default function StationDrawer({
 
   const s: any = station || {};
   const isCouncil = Boolean(s.isCouncil);
-
   // Address build (line1, town/city, postcode)
   const ai = s.AddressInfo || {};
   const line1 =
