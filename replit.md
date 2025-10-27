@@ -20,17 +20,17 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 - ✅ **Python Environment** - Python 3.11 with pandas, duckdb, dbt-core, fastapi, scikit-learn
 - ✅ **Architect Approved** - Connector normalization fixes verified and production-ready
 
-**2025-10-27: Simplified Drawer to Match Domain Design ✅**
-- Complete rebuild to match production domain's simple design
-- Bottom sheet design (mobile-first, simple and clean)
-- Content order: Station name → Address → Good/Bad buttons → Optional comment → Submit/Cancel → Directions
-- Good button: 😊 emoji with green highlight when selected
-- Bad button: 😞 emoji with red highlight when selected
-- Comment textarea appears only after selecting Good/Bad
-- ESC key closes drawer
-- No connector display (simplified UX)
-- Removed duplicate components: PopupPanel.tsx, Map/Popup/StationPopup.tsx
-- Cleaned up unused files and folders for production deployment
+**2025-10-27: Domain-Matched Drawer Implementation ✅**
+- Complete drawer rebuild using exact domain code
+- Floating compact card (top-right, 286px wide, below navbar)
+- Content: Station name + Council badge → Address with copy → Connectors breakdown → Directions/Copy → Rate (👍/👎) → Comment → Submit
+- Robust connector normalization with OCM ID fallback (Type 2, CCS, CHAdeMO)
+- Color-coded connector types with quantity display
+- Address parsing from multiple OCM/Council fields
+- Focus trap, body scroll lock, ESC to close, outside click to dismiss
+- Telemetry integration for drawer events
+- Removed duplicates: PopupPanel.tsx, Map/Popup/StationPopup.tsx, EnhancedMap.jsx, FeedbackModal.tsx, StationPanel.tsx, etc.
+- Created lib/connectorCatalog.ts for canonical connector aggregation
 
 **2025-10-11: Geolocation + Telemetry + Initial Drawer ✅**
 

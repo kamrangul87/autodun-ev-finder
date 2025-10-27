@@ -32,7 +32,7 @@ function mapToStation(p: OcmPoi): Station | null {
     connectors: (p.Connections ?? []).map(c => ({
       type: c?.ConnectionType?.Title ?? 'Unknown',
       powerKW: c?.PowerKW ?? undefined,
-      quantity: c?.Quantity ?? undefined,
+      quantity: c?.Quantity ?? 1,
     })),
   };
 }

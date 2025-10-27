@@ -1,10 +1,27 @@
-export type Connector = { type: string; powerKW?: number; quantity?: number };
-export type Station = {
-  id: number;
-  name: string;
-  lat: number;
-  lng: number;
+export interface Connector {
+  type: string;
+  quantity: number;
+  powerKW?: number;
+}
+
+export interface Station {
+  id: string | number;
+  name?: string;
   address?: string;
   postcode?: string;
-  connectors: Connector[];
-};
+  lat?: number;
+  lng?: number;
+  connectors?: Connector[];
+  AddressInfo?: {
+    Title?: string;
+    AddressLine1?: string;
+    Town?: string;
+    City?: string;
+    Postcode?: string;
+    PostalCode?: string;
+  };
+  Connections?: any[];
+  properties?: any;
+  NumberOfPoints?: number;
+  isCouncil?: boolean;
+}
