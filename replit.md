@@ -20,24 +20,22 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 - ✅ **Python Environment** - Python 3.11 with pandas, duckdb, dbt-core, fastapi, scikit-learn
 - ✅ **Architect Approved** - Connector normalization fixes verified and production-ready
 
-**2025-10-11: Rebuilt Drawer Following User Specifications ✅**
-- Complete drawer rebuild following exact user specifications
-- Desktop (≥1024px): Fixed right-side panel (380px wide, height: calc(100vh - 70px), top: 70px)
-- Mobile (<1024px): Bottom sheet (55vh height, rounded top corners, drag handle)
-- Proper z-index layering: drawer at 9999, backdrop at 9998 (above map layers)
-- Opaque white panel with shadow (0 10px 30px rgba(0,0,0,0.12))
-- Sticky header (60px height, gray-50 background, border-bottom)
-- Content order: Station name → Address → Connectors → Good/Bad buttons → Comment → Submit/Cancel → Directions
-- Good button: green-50 bg, green-600 border; Bad button: red-50 bg, red-600 border
-- Primary button: solid blue-600; Secondary: white with gray border
-- Keyboard accessible: ESC closes, TAB cycles within drawer, focus trap
-- No map re-centering or behavior changes
-- Form resets on station change, closes after submission
+**2025-10-27: Simplified Drawer to Match Domain Design ✅**
+- Complete rebuild to match production domain's simple design
+- Bottom sheet design (mobile-first, simple and clean)
+- Content order: Station name → Address → Good/Bad buttons → Optional comment → Submit/Cancel → Directions
+- Good button: 😊 emoji with green highlight when selected
+- Bad button: 😞 emoji with red highlight when selected
+- Comment textarea appears only after selecting Good/Bad
+- ESC key closes drawer
+- No connector display (simplified UX)
+- Removed duplicate components: PopupPanel.tsx, Map/Popup/StationPopup.tsx
+- Cleaned up unused files and folders for production deployment
 
-**2025-10-11: Drawer UI + Geolocation + Telemetry Refactor ✅**
+**2025-10-11: Geolocation + Telemetry + Initial Drawer ✅**
 
 ### Major Architectural Upgrade - Production Ready
-- ✅ **Drawer UI System** - Replaced popups with StationDrawer (desktop: right-side panel at 380px, mobile: bottom sheet at 70vh)
+- ✅ **Drawer UI System** - Simple bottom sheet for station details and feedback
 - ✅ **Council Markers API** - /api/council-stations endpoint with bbox-based server-side aggregation, purple diamond markers
 - ✅ **Geolocation System** - useGeolocation hook + LocateMeButton (top-right), blue dot marker + accuracy circle, auto-pan to location
 - ✅ **Routing Integration** - "Get Directions" buttons in drawer (Google Maps on Android/Desktop, Apple Maps on iOS)

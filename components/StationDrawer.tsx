@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
-import { createPortal} from 'react-dom';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface Station {
   id: string;
@@ -7,10 +7,6 @@ interface Station {
   address?: string;
   lat: number;
   lng: number;
-  connectors?: Array<{ type: string; count: number }>;
-  Connections?: any[];
-  properties?: any;
-  NumberOfPoints?: number;
 }
 
 interface StationDrawerProps {
@@ -19,123 +15,29 @@ interface StationDrawerProps {
   onFeedbackSubmit?: (stationId: string, vote: 'good' | 'bad', comment: string) => void;
 }
 
-// OCM connector ID mapping to canonical labels
-const OCM_ID_TO_LABEL: Record<number, string> = {
-  1: "Type 2",
-  2: "Type 2",
-  25: "Type 2",
-  32: "CCS",
-  33: "CHAdeMO"
-};
-
-const canonicalizeType = (raw?: string): string => {
-  const t = (raw || "").toLowerCase();
-  if (t.includes("ccs") || t.includes("combo")) return "CCS";
-  if (t.includes("chademo")) return "CHAdeMO";
-  if (t.includes("type 2") || t.includes("type-2") || (t.includes("iec 62196") && t.includes("type 2"))) return "Type 2";
-  return "Unknown";
-};
-
-const mapOCMConnectors = (conns?: any[]): Array<{ type: string; quantity: number; powerKW?: number }> => {
-  if (!Array.isArray(conns)) return [];
-  const out: Array<{ type: string; quantity: number; powerKW?: number }> = [];
-  for (const c of conns) {
-    const id = Number(c?.ConnectionTypeID ?? c?.ConnectionType?.ID);
-    const t = OCM_ID_TO_LABEL[id] ?? canonicalizeType(
-      c?.ConnectionType?.Title ||
-      c?.ConnectionType?.FormalName ||
-      c?.CurrentType?.Title ||
-      c?.Level?.Title
-    );
-    if (t !== "Unknown") {
-      out.push({
-        type: t,
-        quantity: typeof c?.Quantity === "number" && c.Quantity > 0 ? c.Quantity : 1,
-        powerKW: typeof c?.PowerKW === "number" ? c.PowerKW : undefined
-      });
-    }
-  }
-  return out;
-};
-
 export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDrawerProps) {
   const [vote, setVote] = useState<'good' | 'bad' | null>(null);
   const [comment, setComment] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
-
-  // Normalize connectors from various formats
-  const connectors = useMemo(() => {
-    if (!station) return [];
-    // Prefer connectorsDetailed (added by EnhancedMapV2 normalization)
-    if (Array.isArray((station as any)?.connectorsDetailed) && (station as any).connectorsDetailed.length) {
-      return (station as any).connectorsDetailed;
-    }
-    if (Array.isArray(station?.connectors) && station.connectors.length) return station.connectors;
-    const conns = station?.Connections || station?.properties?.Connections;
-    const mapped = mapOCMConnectors(conns);
-    if (mapped.length) return mapped;
-    const total =
-      (Array.isArray(conns) ? conns.reduce((a, c) => a + (typeof c?.Quantity === "number" ? c.Quantity : 1), 0) : 0) ||
-      (typeof station?.NumberOfPoints === "number" ? station.NumberOfPoints : 0);
-    return total > 0 ? [{ type: "Unknown", quantity: total }] : [];
-  }, [station]);
 
   useEffect(() => {
     if (station) {
-      console.log('[StationDrawer] Opened with station:', station.name || station.id);
-      // Reset form on new station
       setVote(null);
       setComment('');
-      setIsSubmitting(false);
-      // Focus close button
-      setTimeout(() => closeButtonRef.current?.focus(), 100);
     }
   }, [station]);
 
-  // ESC key handler
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && station) {
-        onClose();
-      }
+      if (e.key === 'Escape' && station) onClose();
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [station, onClose]);
 
-  // Focus trap
-  useEffect(() => {
-    if (!station || !drawerRef.current) return;
-
-    const drawer = drawerRef.current;
-    const focusableElements = drawer.querySelectorAll(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    );
-    const firstElement = focusableElements[0] as HTMLElement;
-    const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
-
-      if (e.shiftKey && document.activeElement === firstElement) {
-        e.preventDefault();
-        lastElement?.focus();
-      } else if (!e.shiftKey && document.activeElement === lastElement) {
-        e.preventDefault();
-        firstElement?.focus();
-      }
-    };
-
-    drawer.addEventListener('keydown', handleTab as any);
-    return () => drawer.removeEventListener('keydown', handleTab as any);
-  }, [station]);
-
   const handleSubmit = async () => {
     if (!vote || !station) return;
-
-    setIsSubmitting(true);
+    
     try {
       await fetch('/api/feedback', {
         method: 'POST',
@@ -144,20 +46,16 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
           stationId: station.id,
           vote,
           comment: comment.trim(),
-          type: 'station'
+          timestamp: new Date().toISOString()
         })
       });
-
-      onFeedbackSubmit?.(station.id, vote, comment);
       
-      // Reset and close
+      onFeedbackSubmit?.(station.id, vote, comment);
       setVote(null);
       setComment('');
       onClose();
     } catch (error) {
-      console.error('Feedback error:', error);
-    } finally {
-      setIsSubmitting(false);
+      console.error('Failed to submit feedback:', error);
     }
   };
 
@@ -169,147 +67,168 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
 
   const handleDirections = () => {
     if (!station) return;
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}`;
-    window.open(url, '_blank');
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}`, '_blank');
   };
-
-  const totalConnectors = connectors.reduce((sum: number, c: { type: string; quantity: number; powerKW?: number }) => sum + (c.quantity || 0), 0);
 
   if (!station) return null;
 
   const drawer = (
     <>
-      {/* Mobile backdrop */}
       <div
-        className="fixed inset-0 bg-black bg-opacity-30 lg:hidden"
-        style={{ zIndex: 9998 }}
         onClick={onClose}
-        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0,0,0,0.3)',
+          zIndex: 9998
+        }}
       />
 
-      {/* Drawer */}
       <div
         ref={drawerRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="drawer-title"
-        className="fixed bg-white overflow-auto
-                   left-0 right-0 bottom-0 h-[55vh] rounded-t-2xl
-                   lg:top-[70px] lg:right-0 lg:left-auto lg:bottom-auto lg:w-[380px] lg:h-[calc(100vh-70px)] lg:rounded-none lg:border-l lg:border-gray-200"
         style={{
+          position: 'fixed',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: 'white',
+          borderRadius: '16px 16px 0 0',
+          boxShadow: '0 -2px 10px rgba(0,0,0,0.1)',
+          padding: '20px',
           zIndex: 9999,
-          boxShadow: '0 10px 30px rgba(0,0,0,0.12)'
+          maxHeight: '80vh',
+          overflow: 'auto'
         }}
       >
-        {/* Mobile drag handle */}
-        <div className="lg:hidden flex justify-center pt-3 pb-2">
-          <div className="w-12 h-1 bg-gray-300 rounded-full" />
-        </div>
-
-        {/* Header */}
-        <div 
-          className="sticky top-0 bg-gray-50 border-b border-gray-200 px-6 py-4 flex items-start justify-between gap-3"
-          style={{ height: '60px' }}
-        >
-          <h2 
-            id="drawer-title" 
-            className="text-lg font-semibold text-gray-900 flex-1"
-          >
+        <div style={{ marginBottom: '4px' }}>
+          <h2 style={{ fontSize: '18px', fontWeight: '600', margin: 0, color: '#111' }}>
             {station.name}
           </h2>
+        </div>
+
+        {station.address && (
+          <p style={{ fontSize: '14px', color: '#666', margin: '8px 0 16px 0' }}>
+            {station.address}
+          </p>
+        )}
+
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
           <button
-            ref={closeButtonRef}
-            onClick={onClose}
-            className="p-2 -m-2 hover:bg-gray-200 rounded-lg transition-colors"
-            aria-label="Close"
+            onClick={() => setVote('good')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              fontSize: '14px',
+              fontWeight: '500',
+              border: vote === 'good' ? '2px solid #10b981' : '1px solid #d1d5db',
+              borderRadius: '8px',
+              backgroundColor: vote === 'good' ? '#d1fae5' : 'white',
+              color: '#111',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px'
+            }}
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            😊 Good
+          </button>
+          <button
+            onClick={() => setVote('bad')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              fontSize: '14px',
+              fontWeight: '500',
+              border: vote === 'bad' ? '2px solid #ef4444' : '1px solid #d1d5db',
+              borderRadius: '8px',
+              backgroundColor: vote === 'bad' ? '#fee2e2' : 'white',
+              color: '#111',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '6px'
+            }}
+          >
+            😞 Bad
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 space-y-4">
-          {/* Address */}
-          {station.address && (
-            <div className="text-sm text-gray-600">
-              {station.address}
-            </div>
-          )}
+        {vote && (
+          <textarea
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="Optional comment (e.g., price, access, reliability)..."
+            maxLength={280}
+            style={{
+              width: '100%',
+              minHeight: '80px',
+              padding: '10px',
+              fontSize: '14px',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              marginBottom: '12px',
+              resize: 'vertical',
+              fontFamily: 'inherit'
+            }}
+          />
+        )}
 
-          {/* Connectors */}
-          {totalConnectors > 0 && (
-            <div className="text-sm text-gray-600">
-              Connectors: {totalConnectors}
-            </div>
-          )}
-
-          {/* Good/Bad buttons */}
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={() => setVote('good')}
-              className={`flex-1 px-4 py-2 rounded-full border transition-colors ${
-                vote === 'good'
-                  ? 'bg-green-50 border-green-600 text-green-700'
-                  : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-              }`}
-              aria-pressed={vote === 'good'}
-            >
-              👍 Good
-            </button>
-            <button
-              onClick={() => setVote('bad')}
-              className={`flex-1 px-4 py-2 rounded-full border transition-colors ${
-                vote === 'bad'
-                  ? 'bg-red-50 border-red-600 text-red-700'
-                  : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-              }`}
-              aria-pressed={vote === 'bad'}
-            >
-              👎 Bad
-            </button>
-          </div>
-
-          {/* Comment textarea */}
-          {vote && (
-            <textarea
-              value={comment}
-              onChange={(e) => setComment(e.target.value.slice(0, 280))}
-              placeholder="Optional comment… e.g., broken connector, blocked bay, pricing issue."
-              className="w-full rounded-lg border border-gray-300 p-3 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              rows={3}
-              maxLength={280}
-            />
-          )}
-
-          {/* Action buttons */}
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={handleSubmit}
-              disabled={!vote || isSubmitting}
-              className="flex-1 px-4 py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {isSubmitting ? 'Submitting...' : 'Submit feedback'}
-            </button>
-            <button
-              onClick={handleCancel}
-              className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-
-          {/* Get directions */}
-          <div className="pt-2">
-            <button
-              onClick={handleDirections}
-              className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-            >
-              Get directions →
-            </button>
-          </div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+          <button
+            onClick={handleSubmit}
+            disabled={!vote}
+            style={{
+              flex: 1,
+              padding: '12px',
+              fontSize: '15px',
+              fontWeight: '600',
+              border: 'none',
+              borderRadius: '8px',
+              backgroundColor: vote ? '#2563eb' : '#d1d5db',
+              color: 'white',
+              cursor: vote ? 'pointer' : 'not-allowed',
+              opacity: vote ? 1 : 0.6
+            }}
+          >
+            Submit feedback
+          </button>
+          <button
+            onClick={handleCancel}
+            style={{
+              flex: 1,
+              padding: '12px',
+              fontSize: '15px',
+              fontWeight: '600',
+              border: '1px solid #d1d5db',
+              borderRadius: '8px',
+              backgroundColor: 'white',
+              color: '#374151',
+              cursor: 'pointer'
+            }}
+          >
+            Cancel
+          </button>
         </div>
+
+        <button
+          onClick={handleDirections}
+          style={{
+            width: '100%',
+            padding: '0',
+            fontSize: '14px',
+            fontWeight: '500',
+            border: 'none',
+            background: 'none',
+            color: '#2563eb',
+            cursor: 'pointer',
+            textAlign: 'left',
+            textDecoration: 'none'
+          }}
+        >
+          Get directions →
+        </button>
       </div>
     </>
   );
