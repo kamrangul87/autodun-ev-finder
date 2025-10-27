@@ -6,13 +6,16 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 ## Recent Changes
 **2025-10-27: Connector Normalization Fix - Complete ✅**
 - ✅ **Fixed "Connector types not specified" Bug** - Connectors now display properly in drawer
-  - **Root Cause**: mapOCM function filtered out "Unknown" connectors entirely (lost data)
-  - **Fix 1**: Removed `if(label!=="Unknown")` filter - ALL connectors now preserved
-  - **Fix 2**: Expanded OCM ID mapping (1,2,8,25,27,30,32,33,1036 → Type 2/CCS/CHAdeMO)
-  - **Fix 3**: EnhancedMapV2 now uses existing `connectors` array from API (not just raw `Connections`)
-  - **Fix 4**: Normalized connector types through `canon()` function for consistent labeling
-  - StationDrawer shows color-coded bullets with accurate counts (✅ Type 2, ⚡ CCS, 🔌 CHAdeMO)
-  - Heatmap intensity preserved (numeric connectors field maintained)
+  - **Root Cause**: `lib/data-sources.js` `normalizeStation()` was only saving connector COUNT (`Connections?.length`) instead of detailed array
+  - **Solution**: Modified `normalizeStation()` to create `connectorsDetailed` array from OCM Connections with:
+    - Full type mapping from OCM ConnectionType.Title field
+    - OCM ID fallback mapping (1→Type 1, 2→CHAdeMO, 25/27/1036→Type 2, 32/33→CCS, etc.)
+    - Preserves quantity and powerKW for each connector
+  - **Data Flow**: OCM API → normalizeStation() → GeoJSON wrapper (properties.connectorsDetailed) → EnhancedMapV2 → StationDrawer
+  - **EnhancedMapV2**: Extracts from `properties.connectorsDetailed`, canonicalizes types, falls back to raw Connections if needed
+  - **StationDrawer**: Displays color-coded connector types with quantities (✅ Type 2, ⚡ CCS, 🔌 CHAdeMO, etc.)
+  - **Testing**: Verified with live OCM data - stations now show detailed connector breakdown
+  - **Architect Approved**: End-to-end connector propagation verified, no data loss
   
 **2025-10-27: Autodun Nexus Data+ML Pipeline ✅**
 - ✅ **Autodun Nexus Pipeline** - Complete data warehouse and ML infrastructure

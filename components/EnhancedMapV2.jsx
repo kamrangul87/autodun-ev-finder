@@ -373,33 +373,30 @@ export default function EnhancedMap({
   // Normalize stations to fix "Unknown" connectors before filtering/heatmap/markers
   // Keep numeric connectors field for heatmap intensity, add connectorsDetailed for drawer
   const stationsNormalized = useMemo(() => (stations||[]).map(s=>{
-    if (Array.isArray(s?.connectorsDetailed) && s.connectorsDetailed.length) return s;
-    
-    // Try to get connectors from existing array first (check both s.connectors and s.properties.connectors for GeoJSON)
-    let detailed = [];
-    const connectorsArray = s?.connectors || s?.properties?.connectors;
-    
-    if (Array.isArray(connectorsArray) && connectorsArray.length && typeof connectorsArray[0] === 'object') {
-      // Already have normalized connectors array from API
-      console.log('[EnhancedMapV2] Using connectors array for', s.id, connectorsArray);
-      detailed = connectorsArray.map(c => ({
+    // Check if connectors are already detailed (from API or previous normalization)
+    const existingDetailed = s?.connectorsDetailed || s?.properties?.connectorsDetailed;
+    if (Array.isArray(existingDetailed) && existingDetailed.length) {
+      // Use existing detailed connectors, ensure they're canonicalized
+      const detailed = existingDetailed.map(c => ({
         type: canon(c?.type || 'Unknown'),
         quantity: typeof c?.quantity === 'number' && c.quantity > 0 ? c.quantity : 1,
         powerKW: typeof c?.powerKW === 'number' ? c.powerKW : undefined
       }));
-    } else {
-      // Fall back to OCM Connections field
-      const conns = s?.Connections || s?.properties?.Connections;
-      console.log('[EnhancedMapV2] Trying Connections for', s.id, 'conns:', conns);
-      detailed = mapOCM(conns);
-    }
-    
-    if (detailed.length) {
       const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
-      console.log('[EnhancedMapV2] Created connectorsDetailed for', s.id, detailed);
       return { ...s, connectorsDetailed: detailed, connectors: totalCount };
     }
-    console.log('[EnhancedMapV2] No detailed connectors for', s.id);
+    
+    // Fall back to OCM Connections field if no detailed connectors
+    const conns = s?.Connections || s?.properties?.Connections;
+    if (Array.isArray(conns) && conns.length) {
+      const detailed = mapOCM(conns);
+      if (detailed.length) {
+        const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
+        return { ...s, connectorsDetailed: detailed, connectors: totalCount };
+      }
+    }
+    
+    // No connector details available
     return s;
   }), [stations]);
 
