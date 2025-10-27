@@ -1,3 +1,7 @@
+# Python dependencies for Autodun Nexus data+ML pipeline
+# Note: NOT required for standard Next.js deployment (npm run build / npm start)
+# Only needed when running the full stack pipeline locally with: bash run.sh
+
 pandas==2.2.2
 pyarrow==16.1.0
 duckdb==1.0.0

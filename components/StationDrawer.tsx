@@ -173,7 +173,7 @@ export function StationDrawer({ station, onClose, onFeedbackSubmit }: StationDra
     window.open(url, '_blank');
   };
 
-  const totalConnectors = connectors.reduce((sum, c) => sum + (c.quantity || 0), 0);
+  const totalConnectors = connectors.reduce((sum: number, c: { type: string; quantity: number; powerKW?: number }) => sum + (c.quantity || 0), 0);
 
   if (!station) return null;
 

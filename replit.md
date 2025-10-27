@@ -185,6 +185,9 @@ EV charging station finder application for the UK, migrated from Vercel to Repli
 
 ## Deployment
 Configured for Replit autoscale deployment:
-- Build command: `npm run build`
-- Start command: `npm run start`
-- Port: 5000 (automatically exposed by Replit)
+- **Build**: `npm run build` (TypeScript + Next.js production build)
+- **Start**: `npm run start` (Runs optimized Next.js server)
+- **Port**: 5000 (automatically exposed by Replit)
+- **Note**: Python dependencies (requirements.txt) are NOT needed for standard deployment
+  - requirements.txt only used for local full-stack development with `bash run.sh`
+  - Standard deployment runs Next.js frontend + API routes only
