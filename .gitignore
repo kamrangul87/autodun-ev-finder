@@ -16,3 +16,12 @@ data/*
 !data/README.md
 models/*
 !models/README.md
+
+# Build + deps
+node_modules/
+.next/
+out/
+dist/
+*.log
+.env*
+.vercel/
