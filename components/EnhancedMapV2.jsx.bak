@@ -1,0 +1,164 @@
+'use client';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import L from 'leaflet';
+import BottomSheet from './BottomSheet';
+
+const EnhancedMapV2 = ({ onStationSelected }) => {
+  const mapRef = useRef(null);
+  const [stations, setStations] = useState([]);
+  const [selectedStation, setSelectedStation] = useState(null);
+  const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const lastMapCenterRef = useRef(null);
+
+  useEffect(() => {
+    const fetchStations = async () => {
+      try {
+        const res = await fetch('/api/stations');
+        if (!res.ok) throw new Error('Failed to fetch stations');
+        const data = await res.json();
+        setStations(data.stations || []);
+      } catch (error) {
+        console.error('Error fetching stations:', error);
+      }
+    };
+    fetchStations();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || mapRef.current) return;
+
+    const map = L.map('map-container').setView([51.505, -0.09], 13);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    lastMapCenterRef.current = map.getCenter();
+
+    const handleMoveEnd = () => {
+      if (!selectedStation || !lastMapCenterRef.current) return;
+      const currentCenter = map.getCenter();
+      const distance = lastMapCenterRef.current.distanceTo(currentCenter);
+      if (distance > 400 && isSheetOpen) {
+        setIsSheetOpen(false);
+        setSelectedStation(null);
+      }
+      lastMapCenterRef.current = currentCenter;
+    };
+
+    map.on('moveend', handleMoveEnd);
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, [selectedStation, isSheetOpen]);
+
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    mapRef.current.eachLayer((layer) => {
+      if (layer instanceof L.Marker) {
+        mapRef.current.removeLayer(layer);
+      }
+    });
+
+    stations.forEach((station) => {
+      const marker = L.marker([station.latitude, station.longitude], {
+        title: station.title,
+      });
+
+      marker.on('click', () => {
+        setSelectedStation(station);
+        setIsSheetOpen(true);
+        onStationSelected?.(station);
+        if (mapRef.current) {
+          lastMapCenterRef.current = mapRef.current.getCenter();
+        }
+      });
+
+      marker.addTo(mapRef.current);
+    });
+  }, [stations, onStationSelected]);
+
+  const sheetContent = useMemo(() => {
+    if (!selectedStation) return null;
+    return (
+      <div>
+        {selectedStation.operator && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontWeight: 600, fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>
+              OPERATOR
+            </div>
+            <div>{selectedStation.operator}</div>
+          </div>
+        )}
+        {selectedStation.connectors && selectedStation.connectors.length > 0 && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontWeight: 600, fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>
+              CONNECTORS
+            </div>
+            <ul style={{ margin: 0, paddingLeft: '16px' }}>
+              {selectedStation.connectors.map((c, i) => (
+                <li key={i}>{c.type} (Qty: {c.quantity})</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {selectedStation.address && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ fontWeight: 600, fontSize: '12px', color: '#6b7280', marginBottom: '4px' }}>
+              ADDRESS
+            </div>
+            <div>{selectedStation.address}</div>
+          </div>
+        )}
+      </div>
+    );
+  }, [selectedStation]);
+
+  const sheetFooter = useMemo(() => {
+    if (!selectedStation || !selectedStation.latitude || !selectedStation.longitude) return null;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${selectedStation.latitude},${selectedStation.longitude}`;
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer">
+        Get Directions
+      </a>
+    );
+  }, [selectedStation]);
+
+  return (
+    <>
+      <div
+        id="map-container"
+        style={{
+          width: '100%',
+          height: '100%',
+          position: 'relative',
+        }}
+      />
+      {selectedStation && (
+        <BottomSheet
+          isOpen={isSheetOpen}
+          initialState="half"
+          onRequestClose={() => {
+            setIsSheetOpen(false);
+            setSelectedStation(null);
+            onStationSelected?.(null);
+          }}
+          header={selectedStation.title}
+          footer={sheetFooter}
+          ariaLabel={`Details for ${selectedStation.title}`}
+        >
+          {sheetContent}
+        </BottomSheet>
+      )}
+    </>
+  );
+};
+
+export default EnhancedMapV2;

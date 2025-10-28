@@ -47,10 +47,3 @@ html, body {
   align-items: center !important;
   justify-content: center !important;
 }
-
-/* --- EV Finder overlay fixes --- */
-.leaflet-tile-pane { z-index: 200 !important; }
-.leaflet-overlay-pane { z-index: 650 !important; }   /* polygons/heat */
-.leaflet-marker-pane { z-index: 660 !important; }    /* markers above heat */
-.leaflet-heatmap-layer { z-index: 655 !important; }  /* ensure visible above tiles */
-@import url("/leaflet.css");

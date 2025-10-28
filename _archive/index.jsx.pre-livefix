@@ -12,7 +12,7 @@ const EnhancedMap = dynamic(() => import('../components/EnhancedMapV2'), {
 
 export default function Home() {
   const [stations, setStations] = useState([]);
-  const [dataSource, setDataSource] = useState('OPENCHARGE');
+  const [dataSource, setDataSource] = useState(process.env.NEXT_PUBLIC_DATA_SOURCE || 'opencharge');
   const [fellBack, setFellBack] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -30,7 +30,7 @@ export default function Home() {
   const handleFetchStations = useCallback((data) => {
     if (!data) return;
     setStations(data.items || []);
-    setDataSource(data.source || 'OPENCHARGE');
+    setDataSource(data.source || process.env.NEXT_PUBLIC_DATA_SOURCE || 'opencharge');
     setFellBack(data.fellBack || false);
     setError(null);
   }, []);
@@ -54,7 +54,7 @@ export default function Home() {
             bbox: data.bbox
           };
           setStations(normalizedData.items || []);
-          setDataSource(normalizedData.source || process.env.NEXT_PUBLIC_DATA_SOURCE || 'opencharge');
+          setDataSource(normalizedData.source || 'DEMO');
           setFellBack(normalizedData.fellBack || false);
           setError(null);
           

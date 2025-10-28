@@ -6,3 +6,31 @@ node_modules/
 .env
 .env*.local
 .vercel
+node_modules
+node_modules
+.env.local
+
+# Build + deps
+node_modules/
+.next/
+out/
+dist/
+*.log
+.env*
+.vercel/
+
+# Replit export noise
+.local/
+replit.nix
+*.bin
+
+# Python/venv (defensive)
+.venv/
+__pycache__/
+*.pyc
+
+# Data/models (keep README only)
+data/*
+!data/README.md
+models/*
+!models/README.md
