@@ -1,8 +1,21 @@
-public/sw.js
-public/workbox-*.js
-public/fallback-*.js
+# Build & deps
 node_modules/
-.next
-.env
-.env*.local
-.vercel
+.next/
+out/
+dist/
+*.log
+.vercel/
+
+# Local/env
+.env*
+.env.local
+.local/
+
+# Transient / tools
+.DS_Store
+*.zip
+*.bak
+*.backup
+*.old
+coverage/
+test-results/
