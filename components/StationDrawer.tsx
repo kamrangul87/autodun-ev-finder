@@ -126,15 +126,18 @@ function oget(obj: any, path: string[]): any {
 
 // minimal OCM ID → label fallback when titles are missing
 const OCM_TYPE_BY_ID: Record<number, string> = {
-  25: "Type 2",   // Type 2 (Socket Only)
-  33: "CCS",      // CCS (Type 2 Combo)
-  2:  "CHAdeMO",  // CHAdeMO
+  25: "Type 2", // Type 2 (Socket Only)
+  33: "CCS", // CCS (Type 2 Combo)
+  2: "CHAdeMO", // CHAdeMO
   // add more if you encounter them frequently
 };
 
 function normalizeConnectors(station: any): Connector[] | null {
   // 1) Preferred: connectorsDetailed from EnhancedMapV2 normalization
-  if (Array.isArray(station?.connectorsDetailed) && station.connectorsDetailed.length) {
+  if (
+    Array.isArray(station?.connectorsDetailed) &&
+    station.connectorsDetailed.length
+  ) {
     return station.connectorsDetailed.map((c: any) => ({
       type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
       quantity:
@@ -144,7 +147,7 @@ function normalizeConnectors(station: any): Connector[] | null {
       powerKW: safeNumber(c?.powerKW),
     }));
   }
-  
+
   // 2) Fallback: already-normalized station.connectors array
   if (Array.isArray(station?.connectors) && station.connectors.length) {
     return station.connectors.map((c: any) => ({
@@ -189,8 +192,12 @@ function normalizeConnectors(station: any): Connector[] | null {
 
   // 3) Council: NumberOfPoints, etc. → default to Type 2 when it's a council record
   const npts =
-    pick<number>(station, ["NumberOfPoints", "numberOfPoints", "points", "count"]) ??
-    null;
+    pick<number>(station, [
+      "NumberOfPoints",
+      "numberOfPoints",
+      "points",
+      "count",
+    ]) ?? null;
 
   if (typeof npts === "number" && npts > 0) {
     const label = station?.isCouncil ? "Type 2" : "Unknown";
@@ -205,7 +212,9 @@ function sumConnectors(list: Connector[] | null): number | null {
   let total = 0;
   for (const c of list) {
     const q =
-      typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 0;
+      typeof c?.quantity === "number" && !Number.isNaN(c.quantity)
+        ? c.quantity
+        : 0;
     total += q;
   }
   return total > 0 ? total : null;
@@ -236,6 +245,11 @@ export default function StationDrawer({
   const [vote, setVote] = useState<"up" | "down" | null>(null);
   const [comment, setComment] = useState("");
 
+  // NEW: AI score state
+  const [aiScore, setAiScore] = useState<number | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
@@ -245,6 +259,9 @@ export default function StationDrawer({
     if (!open) return;
     setVote(null);
     setComment("");
+    setAiScore(null);
+    setAiError(null);
+    setAiLoading(false);
   }, [open, station?.id]);
 
   // outside click (on transparent overlay)
@@ -263,7 +280,11 @@ export default function StationDrawer({
   useEffect(() => {
     if (!open || !station) return;
     const id = setTimeout(
-      () => telemetry.drawerOpen((station as any).id, Boolean((station as any).isCouncil)),
+      () =>
+        telemetry.drawerOpen(
+          (station as any).id,
+          Boolean((station as any).isCouncil)
+        ),
       60
     );
     return () => clearTimeout(id);
@@ -322,6 +343,76 @@ export default function StationDrawer({
 
   const showUnknownBreakdown =
     (!canonical || canonical.length === 0) && totalNum !== null;
+
+  // ───── AI score action
+  async function fetchAiScore() {
+    if (!station) return;
+    setAiLoading(true);
+    setAiError(null);
+
+    // Feature engineering (robust fallbacks)
+    const power_kw =
+      safeNumber(
+        pick<number>(s, ["PowerKW", "powerKW"]),
+        // as a fallback, pick the max connector power if present
+        Array.isArray(connectors)
+          ? connectors
+              .map((c: any) => safeNumber(c?.powerKW, 0) || 0)
+              .reduce((a, b) => Math.max(a, b), 0) || undefined
+          : undefined
+      ) ?? 50;
+
+    const n_connectors = totalNum ?? (Array.isArray(connectors) ? connectors.length : 1);
+
+    const has_fast_dc =
+      // If any known DC types or any power >= 50 kW, consider "fast DC"
+      (canonical?.some((c) => c.label === "CCS" || c.label === "CHAdeMO") ||
+        (Array.isArray(connectors) &&
+          connectors.some((c: any) => (c?.powerKW ?? 0) >= 50)))
+        ? 1
+        : 0;
+
+    const rating =
+      safeNumber(
+        pick<number>(s, ["rating", "UserRating", "userRating"]),
+        4.2
+      ) ?? 4.2;
+
+    const usage_score = 1;
+
+    const has_geo =
+      (typeof s.lat === "number" && typeof s.lng === "number") ||
+      (typeof s.Latitude === "number" && typeof s.Longitude === "number")
+        ? 1
+        : 0;
+
+    try {
+      const resp = await fetch("/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          power_kw,
+          n_connectors,
+          has_fast_dc,
+          rating,
+          usage_score,
+          has_geo,
+        }),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data?.error || "Failed to score");
+      }
+      setAiScore(typeof data?.score === "number" ? data.score : null);
+    } catch (err: any) {
+      console.error(err);
+      setAiError(err?.message || "Unable to score this station");
+      setAiScore(null);
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   if (!open) return null;
 
@@ -530,9 +621,68 @@ export default function StationDrawer({
             </button>
           </div>
 
+          {/* NEW: AI Score section */}
+          <div style={cardRow}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
+                AI Score
+              </div>
+              {aiScore !== null && (
+                <span
+                  title="Model score (0–1)"
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 12,
+                    fontWeight: 700,
+                    background:
+                      aiScore >= 0.75
+                        ? "#dcfce7"
+                        : aiScore >= 0.5
+                        ? "#fef9c3"
+                        : "#fee2e2",
+                    color:
+                      aiScore >= 0.75
+                        ? "#166534"
+                        : aiScore >= 0.5
+                        ? "#854d0e"
+                        : "#991b1b",
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                  }}
+                >
+                  {aiScore.toFixed(3)}
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <button
+                onClick={fetchAiScore}
+                disabled={aiLoading}
+                style={primaryBtn}
+              >
+                {aiLoading ? "Scoring..." : "Get AI Score"}
+              </button>
+            </div>
+
+            {aiError && (
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  color: "#991b1b",
+                }}
+              >
+                {aiError}
+              </div>
+            )}
+          </div>
+
           {/* Feedback */}
           <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ fontSize: 12, color: "#374151" }}>Rate this location</div>
+            <div style={{ fontSize: 12, color: "#374151" }}>
+              Rate this location
+            </div>
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 style={{
@@ -556,7 +706,7 @@ export default function StationDrawer({
               </button>
             </div>
 
-            {/* NEW: comment box */}
+            {/* comment box */}
             <textarea
               placeholder="Optional comment (e.g., price, access, reliability)…"
               value={comment}
@@ -592,7 +742,7 @@ const drawerStyle: CSSProperties = {
   width: "min(286px, 92vw)",
   maxHeight: "calc(100vh - 96px)",
   background: "#fff",
-  border: "1px solid #eaeaea",  // ← fixed
+  border: "1px solid #eaeaea", // ← fixed
   borderRadius: 14,
   boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
   padding: 10,
