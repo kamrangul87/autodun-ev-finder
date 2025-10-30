@@ -16,7 +16,8 @@ export class LruTTL<K, V> {
       this.map.delete(k);
       return;
     }
-    this.map.delete(k);            // bump LRU
+    // bump LRU: remove and reinsert
+    this.map.delete(k);
     this.map.set(k, e);
     return e.v;
   }
@@ -24,9 +25,13 @@ export class LruTTL<K, V> {
   set(k: K, v: V) {
     if (this.map.has(k)) this.map.delete(k);
     this.map.set(k, { v, t: Date.now() });
+
     if (this.map.size > this.max) {
-      const first = this.map.keys().next().value;
-      this.map.delete(first);
+      const it = this.map.keys().next(); // IteratorResult<K>
+      if (!it.done) {
+        // Oldest key (front of insertion order)
+        this.map.delete(it.value as K);
+      }
     }
   }
 }
