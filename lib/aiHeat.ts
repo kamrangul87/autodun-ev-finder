@@ -1,10 +1,13 @@
 // lib/aiHeat.ts
-type StationLike = { id?: string | number; lat: number; lng: number; };
+type StationLike = { id?: string | number; lat: number; lng: number };
 
+// ↑↑ increase contrast by bending the curve
 export function weightFromScore(score: number | null | undefined) {
   if (score == null || Number.isNaN(score)) return 0.4; // gentle default
   const s = Math.max(0, Math.min(1, Number(score)));
-  return 0.2 + 0.8 * s; // 0.2–1.0
+  const gamma = 1.6;              // 1.0 = linear; >1 amplifies differences
+  const curved = Math.pow(s, gamma);
+  return 0.2 + 0.8 * curved;      // range 0.2–1.0 (unchanged bounds)
 }
 
 export function buildHeatPoints(
