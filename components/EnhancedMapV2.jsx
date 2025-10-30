@@ -7,6 +7,7 @@ import { LocateMeButton } from './LocateMeButton.tsx';
 import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
+import { buildHeatPoints } from '../lib/aiHeat'; // <-- AI heat weights
 
 // OCM connector normalization - expanded ID mapping for common OCM connector types
 const ID2 = {
@@ -36,6 +37,7 @@ const mapOCM = (conns)=>Array.isArray(conns)?conns.reduce((acc,c)=>{
 },[]):[];
 
 if (typeof window !== 'undefined') {
+  // @ts-ignore
   delete L.Icon.Default.prototype._getIconUrl;
   L.Icon.Default.mergeOptions({
     iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
@@ -67,10 +69,17 @@ function MapInitializer() {
   return null;
 }
 
-function HeatmapLayer({ stations, intensity = 1 }) {
+/**
+ * HeatmapLayer with AI weighting support (no UI change).
+ * If NEXT_PUBLIC_SCORER_ENABLED==="true" and aiScoresById is provided,
+ * weights come from AI scores (0.2–1.0). Otherwise it falls back to legacy
+ * connector-count weighting.
+ */
+function HeatmapLayer({ stations, intensity = 1, aiScoresById }) {
   const map = useMap();
   const heatLayerRef = useRef(null);
   const [zoom, setZoom] = useState(map.getZoom());
+  const aiEnabled = process.env.NEXT_PUBLIC_SCORER_ENABLED === 'true';
 
   useEffect(() => {
     const updateZoom = () => setZoom(map.getZoom());
@@ -98,14 +107,27 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         processedStations = stations.filter((_, idx) => idx % 3 === 0);
         console.log(`[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`);
       }
-      
+
+      // Legacy max for connector-intensity fallback
       const maxIntensity = Math.max(...processedStations.map(s => s.connectors || 1));
-      
-      const heatData = processedStations.map(s => [
-        s.lat, 
-        s.lng, 
-        ((s.connectors || 1) / maxIntensity) * intensity
-      ]);
+
+      let heatData;
+      if (aiEnabled) {
+        // AI path: use AI weights when available, otherwise default 1.0 per point
+        // buildHeatPoints expects { lat, lng, id? }
+        const aiPoints = buildHeatPoints(
+          processedStations.map(s => ({ id: s.id, lat: s.lat, lng: s.lng })),
+          aiScoresById // may be undefined; buildHeatPoints then uses weight=1.0
+        );
+        heatData = aiPoints.map(([lat, lng, w]) => [lat, lng, w * intensity]);
+      } else {
+        // Legacy path: weight by connector count normalized to max
+        heatData = processedStations.map(s => [
+          s.lat,
+          s.lng,
+          ((s.connectors || 1) / maxIntensity) * intensity
+        ]);
+      }
       
       heatLayerRef.current = L.heatLayer(heatData, {
         radius: radius,
@@ -127,7 +149,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         heatLayerRef.current = null;
       }
     };
-  }, [map, stations, intensity, zoom]);
+  }, [map, stations, intensity, zoom, aiScoresById, aiEnabled]);
   
   return null;
 }
@@ -363,7 +385,9 @@ export default function EnhancedMap({
   onFetchStations,
   onLoadingChange,
   onToast,
-  isLoading = false
+  isLoading = false,
+  // OPTIONAL: pass a shared score map if you start caching scores in the drawer
+  aiScoresById, // Record<string|number, number> | undefined
 }) {
   const [activeStation, setActiveStation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -487,7 +511,7 @@ export default function EnhancedMap({
           shouldZoomToData={shouldZoomToData}
           stations={stationsNormalized}
         />
-        {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
+        {showHeatmap && <HeatmapLayer stations={stationsNormalized} aiScoresById={aiScoresById} />}
         {showMarkers && (
           <MarkerClusterGroup chunkedLoading>
             {stationsNormalized.map(station => (
