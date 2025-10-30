@@ -1,4 +1,4 @@
-// pages/index.jsx - HOTFIX (with AI heatmap wiring)
+// pages/index.jsx - HOTFIX
 import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
 import Head from 'next/head';
@@ -43,7 +43,7 @@ export default function Home() {
   const [initialDataReady, setInitialDataReady] = useState(false);
   const hasLoadedRef = useRef(false);
 
-  // 🔹 AI scores map state (used by EnhancedMap heat layer)
+  // 🔹 Global AI-score store so the heatmap can reweight as scores arrive
   const [aiScoresById, setAiScoresById] = useState({});
 
   useEffect(() => {
@@ -156,7 +156,6 @@ export default function Home() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude } = pos.coords;
-        // Trigger location found which will center the map
         setState((s) => ({
           ...s,
           userLocation: { lat: latitude, lng: longitude },
@@ -171,13 +170,13 @@ export default function Home() {
     );
   };
 
-  // 🔹 StationDrawer will call this after scoring. We update the shared
-  //     aiScoresById map so the heatmap reweights immediately.
+  // 🔹 Drawer and viewport batch scorer call this to store a newly computed score
   const handleAiScore = useCallback((stationId, score) => {
-    setAiScoresById((prev) => {
-      if (prev[stationId] === score) return prev;
-      return { ...prev, [stationId]: score };
-    });
+    setAiScoresById((prev) =>
+      prev[stationId] === score ? prev : { ...prev, [stationId]: score }
+    );
+    // Optional debug:
+    // console.log('[AI] scored', stationId, score);
   }, []);
 
   const heatCount = state.heat ? stations.length : 0;
@@ -206,6 +205,7 @@ export default function Home() {
         >
           <h1 style={{ margin: 0, fontSize: '1.5rem' }}>⚡ Autodun EV Finder</h1>
         </header>
+
         <div
           className="controls-container"
           style={{
@@ -254,10 +254,8 @@ export default function Home() {
               {searching ? 'Searching...' : 'Go'}
             </button>
           </div>
-          <div
-            className="toggle-group"
-            style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}
-          >
+
+          <div className="toggle-group" style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
             <label
               style={{
                 display: 'flex',
@@ -310,6 +308,7 @@ export default function Home() {
               <span>Council ({councilCount})</span>
             </label>
           </div>
+
           <div className="action-buttons" style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               onClick={handleZoomToData}
@@ -361,6 +360,7 @@ export default function Home() {
               {loading ? 'Loading...' : 'Refresh'}
             </button>
           </div>
+
           <style jsx>{`
             @media (max-width: 375px) {
               .controls-container {
@@ -380,6 +380,7 @@ export default function Home() {
             }
           `}</style>
         </div>
+
         <div
           style={{
             padding: '0.5rem 1rem',
@@ -388,11 +389,10 @@ export default function Home() {
             color: '#374151',
           }}
         >
-          <strong>Source:</strong>{' '}
-          {dataSource === 'OPENCHARGE' ? 'OPENCHARGE (live)' : dataSource} •{' '}
-          <strong>Stations:</strong> {stations.length} • <strong>Bounds:</strong>{' '}
-          {regionName}
+          <strong>Source:</strong> {dataSource === 'OPENCHARGE' ? 'OPENCHARGE (live)' : dataSource}{' '}
+          • <strong>Stations:</strong> {stations.length} • <strong>Bounds:</strong> {regionName}
         </div>
+
         {error && (
           <div
             style={{
@@ -406,6 +406,7 @@ export default function Home() {
             ⚠️ {error}
           </div>
         )}
+
         {toast && (
           <div
             style={{
@@ -430,9 +431,8 @@ export default function Home() {
             {toast.message}
           </div>
         )}
-        <div
-          style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}
-        >
+
+        <div style={{ flex: 1, width: '100%', minHeight: '500px', position: 'relative' }}>
           {initialDataReady ? (
             <EnhancedMap
               stations={stations}
@@ -446,7 +446,7 @@ export default function Home() {
               onLoadingChange={setLoading}
               onToast={showToast}
               isLoading={loading}
-              // 🔹 pass AI score state & callback so heatmap reweights
+              // 🔹 AI heatmap wiring
               aiScoresById={aiScoresById}
               onAiScore={handleAiScore}
             />
