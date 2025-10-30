@@ -4,5 +4,8 @@
   "env": {
     "STATIONS": "STATIC",
     "NEXT_PUBLIC_TILE_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-  }
+  },
+  "crons": [
+    { "path": "/api/cron/warm", "schedule": "0 */2 * * *" }
+  ]
 }
