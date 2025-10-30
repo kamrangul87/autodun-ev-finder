@@ -1,3 +1,4 @@
+// components/EnhancedMapV2.jsx
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
@@ -7,7 +8,7 @@ import { LocateMeButton } from './LocateMeButton.tsx';
 import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
-import { buildHeatPoints } from '../lib/aiHeat'; // <-- AI heat weights
+import { buildHeatPoints } from '../lib/aiHeat';
 
 // OCM connector normalization - expanded ID mapping for common OCM connector types
 const ID2 = {
@@ -386,8 +387,9 @@ export default function EnhancedMap({
   onLoadingChange,
   onToast,
   isLoading = false,
-  // OPTIONAL: pass a shared score map if you start caching scores in the drawer
-  aiScoresById, // Record<string|number, number> | undefined
+  // 🔹 new: AI scorer wiring
+  aiScoresById,                 // Record<string|number, number> | undefined
+  onAiScore,                    // (stationId, score) => void
 }) {
   const [activeStation, setActiveStation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -538,6 +540,8 @@ export default function EnhancedMap({
         station={activeStation}
         onClose={handleDrawerClose}
         onFeedbackSubmit={handleFeedbackSubmit}
+        // 🔹 forward to allow heatmap to update after scoring
+        onAiScore={onAiScore}
       />
 
       <style jsx global>{`
