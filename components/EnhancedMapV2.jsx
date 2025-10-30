@@ -417,12 +417,53 @@ export default function EnhancedMap({
     setActiveStation(null);
   }, []);
 
-  const handleFeedbackSubmit = useCallback((stationId, vote, comment) => {
-    onToast?.({ 
-      message: '✓ Thanks for your feedback!', 
-      type: 'success' 
-    });
-  }, [onToast]);
+ const handleFeedbackSubmit = useCallback(
+  async (stationId, vote, comment) => {
+    try {
+      // normalize vote to the values your webhook/Sheet expects
+      const voteNorm =
+        vote === 'up' ? 'good' :
+        vote === 'down' ? 'bad' :
+        String(vote || '');
+
+      // best-effort lat/lng for context
+      const lat =
+        activeStation?.lat ??
+        activeStation?.Latitude ??
+        null;
+      const lng =
+        activeStation?.lng ??
+        activeStation?.Longitude ??
+        null;
+
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stationId,
+          vote: voteNorm,
+          comment: comment || '',
+          lat,
+          lng,
+          ts: new Date().toISOString(),
+        }),
+      });
+
+      if (!res.ok) throw new Error(`feedback POST failed: ${res.status}`);
+
+      onToast?.({ message: '✓ Thanks for your feedback!', type: 'success' });
+      // optional: telemetry.feedbackSubmit(stationId, voteNorm, Boolean(comment && comment.trim()));
+    } catch (err) {
+      console.error('[feedback] submit error', err);
+      onToast?.({
+        message: 'Saved locally — network issue. Please try again in a moment.',
+        type: 'error',
+      });
+    }
+  },
+  [onToast, activeStation]
+);
+
 
   const handleLocationChange = useCallback((location, accuracy) => {
     setUserLocation(location);
