@@ -69,12 +69,12 @@ export function logEvent(
 
   // Future: POST to /api/telemetry endpoint
   // if (TELEMETRY_ENDPOINT) {
-  //   fetch('/api/telemetry', {
-  //     method: 'POST',
-  //     headers: { 'Content-Type': 'application/json' },
-  //     body: JSON.stringify(event),
-  //   }).catch(() => {});
-  // }
+   fetch('/api/telemetry', {
+     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify(event),
+    }).catch(() => {});
+   }
 }
 
 /**
