@@ -447,9 +447,15 @@ export default function EnhancedMap({
   useEffect(() => {
     const aiEnabled = process.env.NEXT_PUBLIC_SCORER_ENABLED === 'true';
     if (!aiEnabled || !Array.isArray(stationsNormalized) || stationsNormalized.length === 0) return;
-    scoreViewportStations(stationsNormalized, aiScoresById, (id, score) => {
-      onAiScore?.(id, score);
-    }, 25, 3);
+    scoreViewportStations(
+      stationsNormalized,
+      aiScoresById,
+      (id, score) => {
+        onAiScore?.(id, score);
+      },
+      25,
+      3
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stationsNormalized]);
 
@@ -555,6 +561,7 @@ export default function EnhancedMap({
           borderRadius: '6px',
           boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
           fontSize: '11px',
+          maxWidth: 260,
         }}
       >
         <div style={{ fontWeight: '600', marginBottom: '6px', color: '#1f2937' }}>Legend</div>
@@ -575,8 +582,9 @@ export default function EnhancedMap({
           <span>Council markers</span>
         </div>
         {process.env.NEXT_PUBLIC_SCORER_ENABLED === 'true' && (
-          <div style={{ marginTop: 6, fontSize: 10.5, color: '#6b7280' }}>
-            Heatmap weighted by AI suitability (0.2–1.0) where available.
+          <div style={{ marginTop: 6, fontSize: 10.5, color: '#6b7280', lineHeight: 1.35 }}>
+            Heatmap uses the station’s <b>AI suitability</b> (0–100%). Brighter areas indicate
+            higher suitability. Rough guide: <b>Low</b> 0–49%, <b>Medium</b> 50–74%, <b>High</b> 75–100%.
           </div>
         )}
       </div>
