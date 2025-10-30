@@ -380,12 +380,11 @@ export default function StationDrawer({
     setAiLoading(true);
     setAiError(null);
 
-    // cache check (applies even if scorer disabled; we surface last known)
+    // cache check
     const cached = maybeLoadFromCache(station);
     if (typeof cached === "number") {
       setAiScore(cached);
       onAiScore?.(s.id, cached);
-      // still emit telemetry for button usage
       scoreReturned({ stationId: s.id, score: cached, cache: "HIT" });
       setAiLoading(false);
       return;
@@ -433,23 +432,25 @@ export default function StationDrawer({
 
     const t0 = Date.now();
     try {
-      const resp = await fetch(`/api/score?stationId=${encodeURIComponent(String(s.id ?? ""))}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          power_kw,
-          n_connectors,
-          has_fast_dc,
-          rating,
-          usage_score,
-          has_geo,
-        }),
-      });
+      const resp = await fetch(
+        `/api/score?stationId=${encodeURIComponent(String(s.id ?? ""))}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            power_kw,
+            n_connectors,
+            has_fast_dc,
+            rating,
+            usage_score,
+            has_geo,
+          }),
+        }
+      );
 
       const data = await resp.json();
 
       if (!resp.ok) {
-        // degrade gracefully; server also degrades
         setAiScore(typeof data?.score === "number" ? data.score : null);
         setAiError(data?.error || "Failed to score");
         scoreReturned({
@@ -485,6 +486,16 @@ export default function StationDrawer({
 
   if (!open) return null;
 
+  // helpers for UI label
+  const scoreLabel =
+    aiScore == null
+      ? ""
+      : aiScore >= 0.75
+      ? "High"
+      : aiScore >= 0.5
+      ? "Medium"
+      : "Low";
+
   return (
     <>
       {/* transparent overlay (outside click catcher) */}
@@ -497,7 +508,7 @@ export default function StationDrawer({
           background: "transparent",
         }}
       />
-      {/* floating compact card (kept as you approved) */}
+      {/* floating compact card */}
       <div
         ref={cardRef}
         role="dialog"
@@ -536,7 +547,7 @@ export default function StationDrawer({
                     whiteSpace: "nowrap",
                   }}
                 >
-                Council dataset
+                  Council dataset
                 </span>
               )}
             </div>
@@ -690,15 +701,15 @@ export default function StationDrawer({
             </button>
           </div>
 
-          {/* AI Score */}
+          {/* AI Suitability */}
           <div style={cardRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
-                AI Score
+                AI Suitability
               </div>
               {aiScore !== null && (
                 <span
-                  title="Model score (0–1)"
+                  title="Model estimate: higher is better (0–100%)"
                   style={{
                     marginLeft: "auto",
                     fontSize: 12,
@@ -719,7 +730,7 @@ export default function StationDrawer({
                     borderRadius: 999,
                   }}
                 >
-                  {aiScore.toFixed(3)}
+                  {(aiScore * 100).toFixed(0)}% · {scoreLabel}
                 </span>
               )}
             </div>
@@ -745,6 +756,18 @@ export default function StationDrawer({
                 {aiError}
               </div>
             )}
+
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 11.5,
+                color: "#6b7280",
+                lineHeight: 1.35,
+              }}
+            >
+              Combines power, number of connectors, presence of DC fast,
+              rating, and geo to estimate overall suitability (0–100%).
+            </div>
           </div>
 
           {/* Feedback */}
@@ -811,7 +834,7 @@ const drawerStyle: CSSProperties = {
   width: "min(286px, 92vw)",
   maxHeight: "calc(100vh - 96px)",
   background: "#fff",
-  border: "1px solid #eaeaea", // ← fixed
+  border: "1px solid #eaeaea",
   borderRadius: 14,
   boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
   padding: 10,
