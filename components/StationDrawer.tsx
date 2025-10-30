@@ -1,7 +1,7 @@
 // components/StationDrawer.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { telemetry } from "../utils/telemetry";
+import { telemetry, scoreRequested, scoreReturned } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
 import {
   aggregateToCanonical,
@@ -230,12 +230,15 @@ type Props = {
     vote: "up" | "down",
     comment?: string
   ) => void;
+  /** Optional: bubble AI score up so map heat can update immediately */
+  onAiScore?: (stationId: number | string, score: number) => void;
 };
 
 export default function StationDrawer({
   station,
   onClose,
   onFeedbackSubmit,
+  onAiScore,
 }: Props) {
   const open = Boolean(station);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -245,7 +248,7 @@ export default function StationDrawer({
   const [vote, setVote] = useState<"up" | "down" | null>(null);
   const [comment, setComment] = useState("");
 
-  // NEW: AI score state
+  // AI score state
   const [aiScore, setAiScore] = useState<number | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -344,17 +347,54 @@ export default function StationDrawer({
   const showUnknownBreakdown =
     (!canonical || canonical.length === 0) && totalNum !== null;
 
-  // ───── AI score action
+  /* ─────────────── AI score logic (with 30m client cache) ─────────────── */
+
+  function getCacheKey(st: any) {
+    return `aiScore:${String(st?.id ?? "")}`;
+  }
+
+  function maybeLoadFromCache(st: any): number | null {
+    try {
+      const raw = localStorage.getItem(getCacheKey(st));
+      if (!raw) return null;
+      const { score, t } = JSON.parse(raw);
+      if (typeof score !== "number" || typeof t !== "number") return null;
+      if (Date.now() - t > 30 * 60 * 1000) return null; // >30m
+      return score;
+    } catch {
+      return null;
+    }
+  }
+
+  function saveToCache(st: any, score: number) {
+    try {
+      localStorage.setItem(
+        getCacheKey(st),
+        JSON.stringify({ score, t: Date.now() })
+      );
+    } catch {}
+  }
+
   async function fetchAiScore() {
     if (!station) return;
     setAiLoading(true);
     setAiError(null);
 
+    // cache check (applies even if scorer disabled; we surface last known)
+    const cached = maybeLoadFromCache(station);
+    if (typeof cached === "number") {
+      setAiScore(cached);
+      onAiScore?.(s.id, cached);
+      // still emit telemetry for button usage
+      scoreReturned({ stationId: s.id, score: cached, cache: "HIT" });
+      setAiLoading(false);
+      return;
+    }
+
     // Feature engineering (robust fallbacks)
     const power_kw =
       safeNumber(
         pick<number>(s, ["PowerKW", "powerKW"]),
-        // as a fallback, pick the max connector power if present
         Array.isArray(connectors)
           ? connectors
               .map((c: any) => safeNumber(c?.powerKW, 0) || 0)
@@ -362,10 +402,10 @@ export default function StationDrawer({
           : undefined
       ) ?? 50;
 
-    const n_connectors = totalNum ?? (Array.isArray(connectors) ? connectors.length : 1);
+    const n_connectors =
+      totalNum ?? (Array.isArray(connectors) ? connectors.length : 1);
 
     const has_fast_dc =
-      // If any known DC types or any power >= 50 kW, consider "fast DC"
       (canonical?.some((c) => c.label === "CCS" || c.label === "CHAdeMO") ||
         (Array.isArray(connectors) &&
           connectors.some((c: any) => (c?.powerKW ?? 0) >= 50)))
@@ -373,10 +413,8 @@ export default function StationDrawer({
         : 0;
 
     const rating =
-      safeNumber(
-        pick<number>(s, ["rating", "UserRating", "userRating"]),
-        4.2
-      ) ?? 4.2;
+      safeNumber(pick<number>(s, ["rating", "UserRating", "userRating"]), 4.2) ??
+      4.2;
 
     const usage_score = 1;
 
@@ -386,8 +424,16 @@ export default function StationDrawer({
         ? 1
         : 0;
 
+    // telemetry (request)
+    scoreRequested({
+      stationId: s.id,
+      src: "drawer",
+      features: { power_kw, n_connectors, has_fast_dc, rating, usage_score, has_geo },
+    });
+
+    const t0 = Date.now();
     try {
-      const resp = await fetch("/api/score", {
+      const resp = await fetch(`/api/score?stationId=${encodeURIComponent(String(s.id ?? ""))}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -401,14 +447,37 @@ export default function StationDrawer({
       });
 
       const data = await resp.json();
+
       if (!resp.ok) {
-        throw new Error(data?.error || "Failed to score");
+        // degrade gracefully; server also degrades
+        setAiScore(typeof data?.score === "number" ? data.score : null);
+        setAiError(data?.error || "Failed to score");
+        scoreReturned({
+          stationId: s.id,
+          score: data?.score,
+          cache: "MISS",
+          ms: Date.now() - t0,
+        });
+        return;
       }
-      setAiScore(typeof data?.score === "number" ? data.score : null);
+
+      const score = typeof data?.score === "number" ? data.score : null;
+      setAiScore(score);
+      if (typeof score === "number") {
+        saveToCache(s, score);
+        onAiScore?.(s.id, score); // bubble up to update heat weights
+      }
+      scoreReturned({
+        stationId: s.id,
+        score: score ?? undefined,
+        cache: "MISS",
+        ms: Date.now() - t0,
+      });
     } catch (err: any) {
       console.error(err);
       setAiError(err?.message || "Unable to score this station");
       setAiScore(null);
+      scoreReturned({ stationId: s.id, cache: "MISS" });
     } finally {
       setAiLoading(false);
     }
@@ -467,7 +536,7 @@ export default function StationDrawer({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Council dataset
+                Council dataset
                 </span>
               )}
             </div>
@@ -621,7 +690,7 @@ export default function StationDrawer({
             </button>
           </div>
 
-          {/* NEW: AI Score section */}
+          {/* AI Score */}
           <div style={cardRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
