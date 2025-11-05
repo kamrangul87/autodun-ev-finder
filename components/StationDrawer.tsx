@@ -879,7 +879,7 @@ const iconBtn: CSSProperties = {
 
 const chipBtn: CSSProperties = {
   appearance: "none",
-  border: "1px solid "#e5e7eb",
+  border: "1px solid #e5e7eb",
   background: "#fff",
   padding: "6px 9px",
   borderRadius: 8,
@@ -932,3 +932,4 @@ const textarea: CSSProperties = {
   color: "#111827",
   background: "#fff",
 };
+
