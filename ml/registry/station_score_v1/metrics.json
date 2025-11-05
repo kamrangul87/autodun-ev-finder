@@ -1,0 +1,15 @@
+{
+  "framework": "sklearn-rf",
+  "r2": 0.6009511734441481,
+  "rmse": 0.057165931115296935,
+  "n_train": 200,
+  "n_test": 50,
+  "features": [
+    "power_kw",
+    "n_connectors",
+    "has_fast_dc",
+    "rating",
+    "usage_score",
+    "has_geo"
+  ]
+}
