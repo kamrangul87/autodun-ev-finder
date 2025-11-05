@@ -13,7 +13,7 @@ export default async function handler(req, res) {
 
   try {
     // Next.js usually parses JSON, but handle string bodies just in case
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
 
     const {
       stationId,
@@ -28,15 +28,17 @@ export default async function handler(req, res) {
       ts,
       timestamp,
       type,
+      source, // ✅ NEW: accept source from client
     } = body;
 
     const feedbackData = {
       // prefer explicit stationId; fall back to councilId if present
       stationId: stationId || councilId,
       council: Boolean(council) || undefined,
-      vote: vote || undefined,                 // 'good' | 'bad' or any string you pass
+      vote: vote || undefined,                 // 'good' | 'bad' or custom
       type: type || (vote ? "vote" : "council"),
-      text: text || comment || undefined,      // store any freeform text under a single field
+      text: text || comment || undefined,      // freeform text under one field
+      source: source || undefined,             // ✅ NEW: pass through to webhook
       lat: typeof lat === "number" ? lat : undefined,
       lng: typeof lng === "number" ? lng : undefined,
       zoom: typeof zoom === "number" ? zoom : undefined,
@@ -56,29 +58,29 @@ export default async function handler(req, res) {
         });
 
         if (!response.ok) {
-          // Log, but still return 204 so UI is never blocked
           console.error(`[feedback] Webhook failed with status ${response.status}`);
           console.log(`[feedback] payload: ${JSON.stringify(feedbackData)}`);
         } else {
           console.log(`[feedback] Forwarded to webhook: ${feedbackData.type || "unknown"}`);
         }
 
-        // No content needed back to client; UI already shows toast
-        return res.status(204).end();
+        // ✅ Always return JSON so browser r.json() succeeds
+        return res.status(200).json({ ok: true });
       } catch (webhookError) {
         console.error("[feedback] Webhook error:", webhookError?.message || webhookError);
         console.log(`[feedback] payload: ${JSON.stringify(feedbackData)}`);
-        return res.status(204).end();
+        // ✅ Still return JSON (don’t block UI)
+        return res.status(200).json({ ok: true, forwarded: false });
       }
     }
 
     // If no webhook set, just log and acknowledge (useful in Preview)
     console.log(`[feedback] (no webhook) ${JSON.stringify(feedbackData)}`);
-    return res.status(200).json({ success: true, message: "Feedback logged" });
+    return res.status(200).json({ ok: true, message: "Feedback logged (no webhook)" });
   } catch (error) {
     console.error("[API /feedback] Error:", error);
     return res
       .status(500)
-      .json({ error: "Failed to process feedback", message: error?.message || String(error) });
+      .json({ ok: false, error: "Failed to process feedback", message: error?.message || String(error) });
   }
 }
