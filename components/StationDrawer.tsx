@@ -910,8 +910,9 @@ const secondaryBtn: CSSProperties = {
   ...primaryBtn,
   background: "#fff",
   color: "#111827",
-  border: "1px solid "#e5e7eb",
+  border: "1px solid #e5e7eb",
 };
+
 
 const voteBtn: CSSProperties = {
   ...secondaryBtn,
@@ -932,4 +933,5 @@ const textarea: CSSProperties = {
   color: "#111827",
   background: "#fff",
 };
+
 
