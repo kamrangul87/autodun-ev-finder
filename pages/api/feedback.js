@@ -1,4 +1,4 @@
-// pages/api/feedback.ts
+// pages/api/feedback.js
 
 export const config = { runtime: "nodejs" };
 export const dynamic = "force-dynamic";
@@ -25,13 +25,13 @@ export default async function handler(req, res) {
       timestamp,
       type,
       source,
-      // allow clients to pass these, but we'll also compute below
+      // optional if client sends these
       mlScore,
       modelVersion,
     } = body;
 
-    // Base feedback object
-    const feedbackData: any = {
+    // Base payload
+    const feedbackData = {
       stationId: stationId || councilId,
       council: Boolean(council) || undefined,
       vote: vote || undefined,
@@ -45,32 +45,34 @@ export default async function handler(req, res) {
       userAgent: req.headers["user-agent"] || "",
     };
 
-    // 🔮 Compute ML score locally (best-effort; non-blocking)
+    // 🔮 Best-effort local ML scoring (does not block if it fails)
     try {
-      const { predict } = await import("../../ml/scorer");
-      // Derive minimal feature set; use safe defaults (mirrors StationDrawer features)
-      const features = {
-        power_kw: Number(body.power_kw ?? 50),
-        n_connectors: Number(body.n_connectors ?? 1),
-        has_fast_dc: body.has_fast_dc ? 1 : 0,
-        rating: Number(body.rating ?? 4.2),
-        usage_score: Number(body.usage_score ?? 0),
-        has_geo:
-          (typeof lat === "number" && typeof lng === "number") ||
-          (typeof body.has_geo === "number" ? body.has_geo : 0)
-            ? 1
-            : 0,
-      };
-      const out = predict(features);
-      feedbackData.mlScore = typeof mlScore === "number" ? mlScore : out.score;
-      feedbackData.modelVersion = modelVersion || out.modelVersion;
+      const mod = await import("../../ml/scorer");
+      const predict = mod.predict || mod.default;
+      if (typeof predict === "function") {
+        const features = {
+          power_kw: Number(body.power_kw ?? 50),
+          n_connectors: Number(body.n_connectors ?? 1),
+          has_fast_dc: body.has_fast_dc ? 1 : 0,
+          rating: Number(body.rating ?? 4.2),
+          usage_score: Number(body.usage_score ?? 0),
+          has_geo: (typeof lat === "number" && typeof lng === "number") ? 1 : 0,
+        };
+        const out = await predict(features);
+        if (typeof feedbackData.mlScore !== "number") {
+          feedbackData.mlScore = (typeof mlScore === "number") ? mlScore : out?.score;
+        }
+        if (!feedbackData.modelVersion) {
+          feedbackData.modelVersion = modelVersion || out?.modelVersion;
+        }
+      }
     } catch (e) {
-      // If ML fails, keep flow working; Sheet columns will be blank
       console.warn("[feedback] ML compute skipped:", e?.message || e);
     }
 
     const webhookUrl = process.env.FEEDBACK_WEBHOOK_URL;
 
+    // Forward to Google Apps Script if configured
     if (webhookUrl) {
       try {
         const response = await fetch(webhookUrl, {
@@ -85,18 +87,24 @@ export default async function handler(req, res) {
         } else {
           console.log(`[feedback] Forwarded to webhook: ${feedbackData.type || "unknown"}`);
         }
+        // Always return JSON so client .json() works
         return res.status(200).json({ ok: true });
-      } catch (webhookError) {
-        console.error("[feedback] Webhook error:", webhookError?.message || webhookError);
+      } catch (err) {
+        console.error("[feedback] Webhook error:", err?.message || err);
         console.log(`[feedback] payload: ${JSON.stringify(feedbackData)}`);
         return res.status(200).json({ ok: true, forwarded: false });
       }
     }
 
+    // No webhook -> just log
     console.log(`[feedback] (no webhook) ${JSON.stringify(feedbackData)}`);
     return res.status(200).json({ ok: true, message: "Feedback logged (no webhook)" });
   } catch (error) {
     console.error("[API /feedback] Error:", error);
-    return res.status(500).json({ ok: false, error: "Failed to process feedback", message: error?.message || String(error) });
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to process feedback",
+      message: error?.message || String(error),
+    });
   }
 }
