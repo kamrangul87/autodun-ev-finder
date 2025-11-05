@@ -928,10 +928,12 @@ const textarea: CSSProperties = {
   fontSize: 12,
   padding: "8px 10px",
   borderRadius: 10,
-  border: "1px solid "#e5e7eb",
+  border: "1px solid #e5e7eb",
   outline: "none",
   color: "#111827",
   background: "#fff",
 };
+
+
 
 
