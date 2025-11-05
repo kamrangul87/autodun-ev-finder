@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "bias": 0.0,
+  "weights": {
+    "power_kw": 0.35,
+    "n_connectors": 0.20,
+    "has_fast_dc": 0.20,
+    "rating": 0.20,
+    "has_geo": 0.05
+  },
+  "caps": {
+    "power_kw_max": 150,
+    "n_connectors_max": 8,
+    "rating_max": 5
+  }
+}
