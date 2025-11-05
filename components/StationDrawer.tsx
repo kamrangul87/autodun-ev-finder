@@ -813,6 +813,7 @@ export default function StationDrawer({
                 if (!station) return;
                 const chosen = vote ?? "up";
                 onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
+                alert('Thanks! Your feedback was submitted.'); // ✅ one-line confirmation
               }}
             >
               Submit feedback
@@ -878,7 +879,7 @@ const iconBtn: CSSProperties = {
 
 const chipBtn: CSSProperties = {
   appearance: "none",
-  border: "1px solid #e5e7eb",
+  border: "1px solid "#e5e7eb",
   background: "#fff",
   padding: "6px 9px",
   borderRadius: 8,
@@ -909,7 +910,7 @@ const secondaryBtn: CSSProperties = {
   ...primaryBtn,
   background: "#fff",
   color: "#111827",
-  border: "1px solid #e5e7eb",
+  border: "1px solid "#e5e7eb",
 };
 
 const voteBtn: CSSProperties = {
@@ -926,7 +927,7 @@ const textarea: CSSProperties = {
   fontSize: 12,
   padding: "8px 10px",
   borderRadius: 10,
-  border: "1px solid #e5e7eb",
+  border: "1px solid "#e5e7eb",
   outline: "none",
   color: "#111827",
   background: "#fff",
