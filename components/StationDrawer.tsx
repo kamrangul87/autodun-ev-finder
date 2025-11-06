@@ -88,7 +88,7 @@ function useFocusTrap(enabled: boolean, containerRef: React.RefObject<HTMLElemen
   }, [enabled, containerRef]);
 }
 
-/* ─────────────── Normalizers (hardened) ─────────────── */
+/* ─────────────── Small helpers ─────────────── */
 
 const pick = <T,>(obj: any, keys: string[]): T | undefined => {
   try {
@@ -107,7 +107,7 @@ function canonicalizeConnectorLabel(raw?: string): string {
   if (t.includes("chademo")) return "CHAdeMO";
   if (t.includes("type 2") || t.includes("type-2")) return "Type 2";
   if (t.includes("iec 62196") && t.includes("type 2")) return "Type 2";
-  if (t.includes("tesla") && t.includes("type 2")) return "Type 2"; // older Tesla AC
+  if (t.includes("tesla") && t.includes("type 2")) return "Type 2";
   return String(raw).trim();
 }
 
@@ -124,6 +124,30 @@ function oget(obj: any, path: string[]): any {
   }
 }
 
+async function copyText(text: string) {
+  try {
+    if ((navigator as any)?.clipboard?.writeText) {
+      await (navigator as any).clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ─────────────── Normalizers ─────────────── */
+
 const OCM_TYPE_BY_ID: Record<number, string> = {
   25: "Type 2",
   33: "CCS",
@@ -135,8 +159,7 @@ function normalizeConnectors(station: any): Connector[] | null {
     if (Array.isArray(station?.connectorsDetailed) && station.connectorsDetailed.length) {
       return station.connectorsDetailed.map((c: any) => ({
         type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
-        quantity:
-          typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1,
+        quantity: typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1,
         powerKW: safeNumber(c?.powerKW),
       }));
     }
@@ -144,8 +167,7 @@ function normalizeConnectors(station: any): Connector[] | null {
     if (Array.isArray(station?.connectors) && station.connectors.length) {
       return station.connectors.map((c: any) => ({
         type: canonicalizeConnectorLabel(c?.type ?? "Unknown"),
-        quantity:
-          typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1,
+        quantity: typeof c?.quantity === "number" && !Number.isNaN(c.quantity) ? c.quantity : 1,
         powerKW: safeNumber(c?.powerKW),
       }));
     }
@@ -184,9 +206,7 @@ function normalizeConnectors(station: any): Connector[] | null {
       const label = station?.isCouncil ? "Type 2" : "Unknown";
       return [{ type: label, quantity: npts }];
     }
-  } catch {
-    // swallow and fall through
-  }
+  } catch {}
   return null;
 }
 
@@ -225,6 +245,11 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // NEW: issue modal state
+  const [issueOpen, setIssueOpen] = useState(false);
+  const [issueCategory, setIssueCategory] = useState("Data mismatch");
+  const [issueText, setIssueText] = useState("");
+
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
@@ -236,10 +261,12 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
     setAiScore(null);
     setAiError(null);
     setAiLoading(false);
+    setIssueOpen(false);
+    setIssueText("");
   }, [open, (station as any)?.id]);
 
   useEffect(() => {
-    if (!open || !station) return;
+    if (!open) return;
     const overlay = overlayRef.current;
     const handler = (e: PointerEvent) => {
       const card = cardRef.current;
@@ -247,7 +274,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
     };
     overlay?.addEventListener("pointerdown", handler);
     return () => overlay?.removeEventListener("pointerdown", handler);
-  }, [open, onClose, station]);
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open || !station) return;
@@ -315,7 +342,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
 
   const showUnknownBreakdown = (!canonical || canonical.length === 0) && totalNum !== null;
 
-  /* ─────────────── AI score logic (guarded) ─────────────── */
+  /* ─────────────── AI score logic ─────────────── */
 
   function getCacheKey(st: any) {
     return `aiScore:${String(st?.id ?? "")}`;
@@ -327,7 +354,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
       if (!raw) return null;
       const { score, t } = JSON.parse(raw);
       if (typeof score !== "number" || typeof t !== "number") return null;
-      if (Date.now() - t > 30 * 60 * 1000) return null; // 30m
+      if (Date.now() - t > 30 * 60 * 1000) return null;
       return score;
     } catch {
       return null;
@@ -436,12 +463,65 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
   const scoreLabel =
     aiScore == null ? "" : aiScore >= 0.75 ? "High" : aiScore >= 0.5 ? "Medium" : "Low";
 
+  // NEW: minimal JSON snapshot for "Copy JSON"
+  const jsonSnapshot = useMemo(() => {
+    if (!station) return "{}";
+    const lat = typeof s?.lat === "number" ? s.lat : (typeof s?.Latitude === "number" ? s.Latitude : null);
+    const lng = typeof s?.lng === "number" ? s.lng : (typeof s?.Longitude === "number" ? s.Longitude : null);
+    const snap = {
+      id: s?.id,
+      title: s?.name || s?.AddressInfo?.Title || "",
+      lat, lng,
+      connectors: s?.connectors ?? s?.connectorsDetailed ?? s?.Connections ?? [],
+      address: [line1, town, postcode].filter(Boolean).join(", ") || s?.address || s?.AddressInfo?.Title || null,
+      source: s?.source ?? (s?.isCouncil ? "council" : "ocm"),
+    };
+    try {
+      return JSON.stringify(snap, null, 2);
+    } catch {
+      return "{}";
+    }
+  }, [station, s, line1, town, postcode]);
+
+  // report issue submit (safe: won’t crash if /api/feedback missing)
+  async function submitIssue() {
+    try {
+      const payload = {
+        type: "issue",
+        category: issueCategory,
+        message: issueText,
+        stationId: s?.id ?? null,
+        title: s?.name || s?.AddressInfo?.Title || "",
+        lat: typeof s?.lat === "number" ? s.lat : (typeof s?.Latitude === "number" ? s.Latitude : null),
+        lng: typeof s?.lng === "number" ? s.lng : (typeof s?.Longitude === "number" ? s.Longitude : null),
+        source: s?.source ?? "drawer",
+        createdAt: new Date().toISOString(),
+      };
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).catch(() => null);
+      if (!res || !res.ok) {
+        alert("Could not submit right now. Please try again later.");
+        return;
+      }
+      alert("Thanks! Your issue was reported.");
+      setIssueOpen(false);
+      setIssueText("");
+    } catch {
+      alert("Could not submit right now. Please try again later.");
+    }
+  }
+
   return (
     <>
+      {/* overlay */}
       <div
         ref={overlayRef}
         style={{ position: "fixed", inset: 0, zIndex: 10000, background: "transparent" }}
       />
+      {/* drawer */}
       <div
         ref={cardRef}
         role="dialog"
@@ -500,9 +580,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
             <div title={fullAddress} style={rowValue}>{fullAddress}</div>
             <button
               onClick={() => {
-                try {
-                  (navigator as any)?.clipboard?.writeText?.(fullAddress);
-                } catch {}
+                try { (navigator as any)?.clipboard?.writeText?.(fullAddress); } catch {}
               }}
               style={chipBtn}
             >
@@ -550,13 +628,7 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
             ) : showUnknownBreakdown ? (
               <ul style={{ margin: "6px 0 0 0", padding: 0, listStyle: "none" }}>
                 <li
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 12,
-                    color: "#374151",
-                  }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#374151" }}
                 >
                   <span
                     aria-hidden
@@ -611,6 +683,27 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
               style={secondaryBtn}
             >
               Copy
+            </button>
+          </div>
+
+          {/* NEW: utilities row */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={async () => {
+                const ok = await copyText(jsonSnapshot);
+                alert(ok ? "Copied station JSON to clipboard." : "Copy failed. Please try again.");
+              }}
+              style={secondaryBtn}
+              title="Copy minimal station JSON"
+            >
+              Copy JSON
+            </button>
+            <button
+              onClick={() => setIssueOpen(true)}
+              style={secondaryBtn}
+              title="Report a problem with this station"
+            >
+              Report issue
             </button>
           </div>
 
@@ -694,6 +787,45 @@ export default function StationDrawer({ station, onClose, onFeedbackSubmit, onAi
           </div>
         </div>
       </div>
+
+      {/* NEW: Issue Modal */}
+      {issueOpen && (
+        <div style={modalBackdrop} onClick={() => setIssueOpen(false)}>
+          <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Report an issue</div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>
+              Station: <span style={{ fontWeight: 600 }}>{title || s?.id}</span>
+            </div>
+
+            <label style={modalLabel}>Category</label>
+            <select
+              value={issueCategory}
+              onChange={(e) => setIssueCategory(e.target.value)}
+              style={modalInput}
+            >
+              <option>Data mismatch</option>
+              <option>Connector info wrong</option>
+              <option>Station not found/closed</option>
+              <option>Location inaccurate</option>
+              <option>Other</option>
+            </select>
+
+            <label style={modalLabel}>Details</label>
+            <textarea
+              value={issueText}
+              onChange={(e) => setIssueText(e.target.value)}
+              placeholder="What’s wrong? (e.g., connector types, access, pricing, address)"
+              rows={4}
+              style={{ ...modalInput, resize: "vertical" }}
+            />
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button style={secondaryBtn} onClick={() => setIssueOpen(false)}>Cancel</button>
+              <button style={primaryBtn} onClick={submitIssue}>Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }
@@ -803,5 +935,43 @@ const textarea: CSSProperties = {
   border: "1px solid #e5e7eb",
   outline: "none",
   color: "#111827",
+  background: "#fff",
+};
+
+/* modal styles */
+const modalBackdrop: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.35)",
+  zIndex: 10002,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const modalCard: CSSProperties = {
+  width: "min(520px, 92vw)",
+  background: "#fff",
+  borderRadius: 14,
+  border: "1px solid #eaeaea",
+  boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
+  padding: 12,
+};
+
+const modalLabel: CSSProperties = {
+  display: "block",
+  fontSize: 12,
+  fontWeight: 700,
+  color: "#374151",
+  marginTop: 8,
+  marginBottom: 4,
+};
+
+const modalInput: CSSProperties = {
+  width: "100%",
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  padding: "8px 10px",
+  fontSize: 12,
   background: "#fff",
 };
