@@ -188,6 +188,58 @@ export default function AdminFeedback() {
     return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
   }, [points, filteredRows]);
 
+  /* ── CSV Export (filtered rows) ─────────────────────────────── */
+  function escapeCSV(v: unknown): string {
+    const s = v == null ? "" : String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+  function toISO(ts: string | null): string {
+    try { return ts ? new Date(ts).toISOString() : ""; } catch { return ts ?? ""; }
+  }
+  function buildCSV(rowsIn: Row[]): string {
+    const header = [
+      "time_iso",
+      "station",
+      "vote",
+      "mlScore",
+      "comment",
+      "source",
+      "lat",
+      "lng",
+      "model",
+      "userAgent",
+    ];
+    const body = rowsIn.map((r) => [
+      toISO(r.ts),
+      r.stationId ?? "",
+      r.vote ?? "",
+      r.mlScore ?? "",
+      r.comment ?? "",
+      r.source ?? "",
+      Number.isFinite(r.lat ?? NaN) ? (r.lat as number).toFixed(6) : "",
+      Number.isFinite(r.lng ?? NaN) ? (r.lng as number).toFixed(6) : "",
+      r.modelVersion ?? "",
+      r.userAgent ?? "",
+    ]);
+    const lines = [header, ...body].map((arr) => arr.map(escapeCSV).join(",")).join("\n");
+    // Add BOM so Excel opens UTF-8 correctly
+    return "\uFEFF" + lines;
+  }
+  function downloadCSV() {
+    const csv = buildCSV(filteredRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = url;
+    a.download = `feedback-export-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
       <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Autodun Admin · Feedback</h1>
@@ -204,7 +256,27 @@ export default function AdminFeedback() {
 
       {/* Filters */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 12 }}>Filters</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontWeight: 800 }}>Filters</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              onClick={() => {
+                setSentiment("all");
+                setScoreMin(0);
+                setScoreMax(100);
+                setDateFrom("");
+                setDateTo("");
+                setQ("");
+                setSort("recent");
+              }}
+              style={refreshBtn}
+            >
+              Reset
+            </button>
+            <button onClick={downloadCSV} style={primaryBtn}>Export CSV</button>
+          </div>
+        </div>
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 10 }}>
           {/* Sentiment */}
           <div>
@@ -277,20 +349,6 @@ export default function AdminFeedback() {
               <option value="scoreLow">Score: Low → High</option>
             </select>
           </div>
-          <button
-            onClick={() => {
-              setSentiment("all");
-              setScoreMin(0);
-              setScoreMax(100);
-              setDateFrom("");
-              setDateTo("");
-              setQ("");
-              setSort("recent");
-            }}
-            style={refreshBtn}
-          >
-            Reset
-          </button>
         </div>
       </div>
 
@@ -468,6 +526,16 @@ const refreshBtn: React.CSSProperties = {
   padding: "10px 12px",
   border: "1px solid #e5e7eb",
   background: "#fff",
+  borderRadius: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const primaryBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  border: "1px solid #2563eb",
+  background: "#2563eb",
+  color: "#fff",
   borderRadius: 12,
   fontWeight: 700,
   cursor: "pointer",
