@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback, useEffect as UseEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 
 /* ──────────────────────────────────────────────────────────────
@@ -60,6 +60,23 @@ function badgeColor(score?: number) {
   if (s >= 70) return { bg: "#dcfce7", text: "#166534", border: "#bbf7d0", label: `ML ${s}` };
   if (s >= 40) return { bg: "#fef9c3", text: "#854d0e", border: "#fde68a", label: `ML ${s}` };
   return { bg: "#fee2e2", text: "#991b1b", border: "#fecaca", label: `ML ${s}` };
+}
+
+/* Drawer helpers */
+function gmapsUrl(lat: number, lng: number) {
+  return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    alert("Copied!");
+  } catch {
+    const ok = window.confirm(`Copy this:\n\n${text}`);
+    if (ok) return;
+  }
+}
+function isNumericId(id: unknown) {
+  return typeof id === "number" || /^\d+$/.test(String(id ?? ""));
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -195,7 +212,6 @@ export default function AdminFeedback() {
   /* Keep map/charts in sync with filtered table */
   const filteredPoints: FeedbackPoint[] = useMemo(() => {
     if (!filteredRows.length) return points;
-    // Simple join key: station + timestamp (fallback to index)
     const set = new Set(filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`));
     return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
   }, [points, filteredRows]);
@@ -262,9 +278,12 @@ export default function AdminFeedback() {
       stationName: selected.stationId ? String(selected.stationId) : undefined,
       lat, lng,
       mlScore: typeof selected.mlScore === "number" ? selected.mlScore : undefined,
-      sentiment: (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up" ? "positive"
-        : (selected.vote || "").toLowerCase() === "bad" || (selected.vote || "").toLowerCase() === "down" ? "negative"
-        : "neutral",
+      sentiment:
+        (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up"
+          ? "positive"
+          : (selected.vote || "").toLowerCase() === "bad" || (selected.vote || "").toLowerCase() === "down"
+          ? "negative"
+          : "neutral",
       source: selected.source || undefined,
       createdAt: selected.ts || undefined,
     };
@@ -382,7 +401,7 @@ export default function AdminFeedback() {
         </div>
       </div>
 
-      {/* Timeline (as-is) */}
+      {/* Timeline */}
       <div style={panel}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>
           Timeline (last {stats?.timeline?.length ?? 0} days)
@@ -561,12 +580,37 @@ export default function AdminFeedback() {
               </div>
             </div>
 
-            {/* Mini map */}
+            {/* Mini map + actions */}
             {selectedPoint && (
               <div style={{ marginTop: 12 }}>
                 <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
                 <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
                   <MapClient points={[selectedPoint]} />
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button
+                    style={primaryBtn}
+                    onClick={() => window.open(gmapsUrl(selectedPoint.lat, selectedPoint.lng), "_blank")}
+                  >
+                    Directions
+                  </button>
+                  <button
+                    style={ghostBtn}
+                    onClick={() => copy(`${selectedPoint.lat},${selectedPoint.lng}`)}
+                  >
+                    Copy coords
+                  </button>
+                  {isNumericId(selected?.stationId) && (
+                    <button
+                      style={ghostBtn}
+                      onClick={() =>
+                        window.open(`https://openchargemap.org/site/poi/${selected!.stationId}`, "_blank")
+                      }
+                    >
+                      Open in OCM
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -650,6 +694,16 @@ const primaryBtn: React.CSSProperties = {
   border: "1px solid #2563eb",
   background: "#2563eb",
   color: "#fff",
+  borderRadius: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const ghostBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  color: "#111827",
   borderRadius: 12,
   fontWeight: 700,
   cursor: "pointer",
