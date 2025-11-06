@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback, useEffect as UseEffect } from "react";
 import dynamic from "next/dynamic";
 
 /* ──────────────────────────────────────────────────────────────
@@ -78,6 +78,9 @@ export default function AdminFeedback() {
   const [q, setQ] = useState<string>("");
   const [sort, setSort] = useState<SortKey>("recent");
 
+  // drawer state
+  const [selected, setSelected] = useState<Row | null>(null);
+
   async function load() {
     setLoading(true);
     try {
@@ -93,6 +96,15 @@ export default function AdminFeedback() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  // close on ESC
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setSelected(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
   const rows = data?.rows || [];
@@ -223,8 +235,7 @@ export default function AdminFeedback() {
       r.userAgent ?? "",
     ]);
     const lines = [header, ...body].map((arr) => arr.map(escapeCSV).join(",")).join("\n");
-    // Add BOM so Excel opens UTF-8 correctly
-    return "\uFEFF" + lines;
+    return "\uFEFF" + lines; // Excel-friendly BOM
   }
   function downloadCSV() {
     const csv = buildCSV(filteredRows);
@@ -239,6 +250,25 @@ export default function AdminFeedback() {
     a.remove();
     URL.revokeObjectURL(url);
   }
+
+  // derived: selected row point
+  const selectedPoint: FeedbackPoint | null = useMemo(() => {
+    if (!selected) return null;
+    const lat = Number(selected.lat);
+    const lng = Number(selected.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+      id: String(selected.stationId ?? "sel"),
+      stationName: selected.stationId ? String(selected.stationId) : undefined,
+      lat, lng,
+      mlScore: typeof selected.mlScore === "number" ? selected.mlScore : undefined,
+      sentiment: (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up" ? "positive"
+        : (selected.vote || "").toLowerCase() === "bad" || (selected.vote || "").toLowerCase() === "down" ? "negative"
+        : "neutral",
+      source: selected.source || undefined,
+      createdAt: selected.ts || undefined,
+    };
+  }, [selected]);
 
   return (
     <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
@@ -405,7 +435,7 @@ export default function AdminFeedback() {
             </thead>
             <tbody>
               {filteredRows.slice(0, 200).map((r, i) => (
-                <tr key={i}>
+                <tr key={i} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
                   <td>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
                   <td>{r.stationId ?? "—"}</td>
                   <td
@@ -448,12 +478,13 @@ export default function AdminFeedback() {
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                     }}
+                    title={r.comment || ""}
                   >
                     {r.comment || "—"}
                   </td>
                   <td>{r.source || "—"}</td>
-                  <td>{Number.isFinite(r.lat ?? NaN) ? r.lat!.toFixed(6) : "—"}</td>
-                  <td>{Number.isFinite(r.lng ?? NaN) ? r.lng!.toFixed(6) : "—"}</td>
+                  <td>{Number.isFinite(r.lat ?? NaN) ? (r.lat as number).toFixed(6) : "—"}</td>
+                  <td>{Number.isFinite(r.lng ?? NaN) ? (r.lng as number).toFixed(6) : "—"}</td>
                   <td>{r.modelVersion || "—"}</td>
                 </tr>
               ))}
@@ -468,6 +499,80 @@ export default function AdminFeedback() {
           </table>
         </div>
       </div>
+
+      {/* Drawer */}
+      {selected && (
+        <>
+          <div style={backdrop} onClick={() => setSelected(null)} />
+          <aside style={drawer}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>
+                Station {selected.stationId ?? "—"}
+              </div>
+              <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">✕</button>
+            </div>
+
+            <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
+              {selected.ts ? new Date(selected.ts).toLocaleString() : "—"}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+              <Info label="Vote" value={selected.vote || "—"} />
+              <Info label="Source" value={selected.source || "—"} />
+              <Info label="Model" value={selected.modelVersion || "—"} />
+              <Info label="User Agent" value={selected.userAgent || "—"} />
+              <Info label="Lat" value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"} />
+              <Info label="Lng" value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"} />
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Comment</div>
+              <div style={{ padding: 10, border: "1px solid #e5e7eb", borderRadius: 10, whiteSpace: "pre-wrap" }}>
+                {selected.comment || "—"}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>ML Score</div>
+              <div>
+                {typeof selected.mlScore === "number" ? (
+                  (() => {
+                    const c = badgeColor(selected.mlScore);
+                    return (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: `1px solid ${c.border}`,
+                          background: c.bg,
+                          color: c.text,
+                          fontWeight: 700,
+                          fontSize: 13,
+                        }}
+                      >
+                        {c.label}
+                      </span>
+                    );
+                  })()
+                ) : (
+                  "—"
+                )}
+              </div>
+            </div>
+
+            {/* Mini map */}
+            {selectedPoint && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
+                <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  <MapClient points={[selectedPoint]} />
+                </div>
+              </div>
+            )}
+          </aside>
+        </>
+      )}
     </div>
   );
 }
@@ -502,6 +607,15 @@ function FragmentRow({ day, count, avg }: { day: string; count: number; avg: num
       </div>
       <div style={{ fontSize: 13 }}>{avg == null ? "—" : avg.toFixed(3)}</div>
     </>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
+      <div style={{ fontWeight: 700 }}>{value}</div>
+    </div>
   );
 }
 
@@ -549,6 +663,41 @@ const input: React.CSSProperties = {
   border: "1px solid #e5e7eb",
   borderRadius: 10,
   background: "#fff",
+};
+
+const backdrop: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.4)",
+  zIndex: 50,
+};
+
+const drawer: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  right: 0,
+  width: 420,
+  maxWidth: "90vw",
+  height: "100%",
+  background: "#fff",
+  borderLeft: "1px solid #e5e7eb",
+  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)",
+  zIndex: 60,
+  padding: 16,
+  display: "flex",
+  flexDirection: "column",
+  overflowY: "auto",
+};
+
+const iconBtn: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 8,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 16,
+  lineHeight: "1",
 };
 
 /* tiny utils */
