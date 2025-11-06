@@ -89,6 +89,138 @@ function useFocusTrap(
   }, [enabled, containerRef]);
 }
 
+/* ─────────────── Small helpers ─────────────── */
+
+// robust clipboard copy with fallback
+async function copyText(text: string) {
+  try {
+    // modern API
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    // fallback
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ─────────────── Issue modal (inline, minimal) ─────────────── */
+
+type IssueReportModalProps = {
+  open: boolean;
+  onClose: () => void;
+  station: {
+    id: string | number;
+    title?: string;
+    lat?: number | null;
+    lng?: number | null;
+    source?: string;
+    [k: string]: any;
+  };
+};
+
+function IssueReportModal({ open, onClose, station }: IssueReportModalProps) {
+  const [category, setCategory] = useState("Data mismatch");
+  const [message, setMessage] = useState("");
+
+  if (!open) return null;
+
+  const submit = async () => {
+    const payload = {
+      type: "issue",
+      category,
+      message,
+      stationId: station?.id ?? null,
+      title: station?.title ?? "",
+      lat: station?.lat ?? null,
+      lng: station?.lng ?? null,
+      source: station?.source ?? "drawer",
+      snapshot: {
+        id: station?.id,
+        title: station?.title,
+        lat: station?.lat,
+        lng: station?.lng,
+      },
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      alert("Thanks! Your issue was reported.");
+      onClose();
+      setMessage("");
+    } catch (e) {
+      console.error(e);
+      alert("Could not submit right now. Please try again.");
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100000] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl">
+        <div className="mb-2 text-lg font-semibold">Report an issue</div>
+        <div className="text-xs text-gray-500 mb-3">
+          Station: <span className="font-medium">{station?.title ?? station?.id}</span>
+        </div>
+
+        <label className="block text-sm font-medium mb-1">Category</label>
+        <select
+          className="mb-3 w-full rounded-xl border px-3 py-2"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        >
+          <option>Data mismatch</option>
+          <option>Connector info wrong</option>
+          <option>Station not found/closed</option>
+          <option>Location inaccurate</option>
+          <option>Other</option>
+        </select>
+
+        <label className="block text-sm font-medium mb-1">Details</label>
+        <textarea
+          className="mb-4 h-28 w-full rounded-xl border px-3 py-2"
+          placeholder="What’s wrong? (e.g., connector types, access, pricing, address)"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+        />
+
+        <div className="flex items-center gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-xl border px-3 py-2 text-sm hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            className="rounded-xl bg-black px-4 py-2 text-sm text-white hover:opacity-90"
+          >
+            Submit
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────── Normalizers ─────────────── */
 
 const pick = <T,>(obj: any, keys: string[]): T | undefined => {
@@ -253,6 +385,9 @@ export default function StationDrawer({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // NEW: Issue modal state
+  const [issueOpen, setIssueOpen] = useState(false);
+
   useBodyScrollLock(open);
   useEscapeToClose(open, onClose);
   useFocusTrap(open, cardRef);
@@ -265,7 +400,8 @@ export default function StationDrawer({
     setAiScore(null);
     setAiError(null);
     setAiLoading(false);
-  }, [open, station?.id]);
+    setIssueOpen(false);
+  }, [open, (station as any)?.id]);
 
   // outside click (on transparent overlay)
   useEffect(() => {
@@ -496,6 +632,35 @@ export default function StationDrawer({
       ? "Medium"
       : "Low";
 
+  // NEW: minimal, tidy JSON snapshot for Copy JSON
+  const jsonSnapshot = useMemo(() => {
+    if (!station) return "{}";
+    const snap = {
+      id: s.id,
+      title: s.name || s?.AddressInfo?.Title || "",
+      lat:
+        typeof s.lat === "number"
+          ? s.lat
+          : typeof s.Latitude === "number"
+          ? s.Latitude
+          : null,
+      lng:
+        typeof s.lng === "number"
+          ? s.lng
+          : typeof s.Longitude === "number"
+          ? s.Longitude
+          : null,
+      connectors: s.connectors ?? s.connectorsDetailed ?? s?.Connections ?? [],
+      address:
+        [line1, town, postcode].filter(Boolean).join(", ") ||
+        s.address ||
+        s?.AddressInfo?.Title ||
+        null,
+      source: s.source ?? (s.isCouncil ? "council" : "ocm"),
+    };
+    return JSON.stringify(snap, null, 2);
+  }, [station, s, line1, town, postcode]);
+
   return (
     <>
       {/* transparent overlay (outside click catcher) */}
@@ -701,6 +866,27 @@ export default function StationDrawer({
             </button>
           </div>
 
+          {/* NEW: Developer utilities row (non-intrusive) */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              onClick={async () => {
+                const ok = await copyText(jsonSnapshot);
+                alert(ok ? "Copied station JSON to clipboard." : "Copy failed. Please try again.");
+              }}
+              style={secondaryBtn}
+              title="Copy minimal station JSON"
+            >
+              Copy JSON
+            </button>
+            <button
+              onClick={() => setIssueOpen(true)}
+              style={secondaryBtn}
+              title="Report a problem with this station"
+            >
+              Report issue
+            </button>
+          </div>
+
           {/* AI Suitability */}
           <div style={cardRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -813,7 +999,7 @@ export default function StationDrawer({
                 if (!station) return;
                 const chosen = vote ?? "up";
                 onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
-                alert('Thanks! Your feedback was submitted.'); // ✅ one-line confirmation
+                alert("Thanks! Your feedback was submitted."); // ✅ one-line confirmation
               }}
             >
               Submit feedback
@@ -821,6 +1007,29 @@ export default function StationDrawer({
           </div>
         </div>
       </div>
+
+      {/* NEW: Issue Modal */}
+      <IssueReportModal
+        open={issueOpen}
+        onClose={() => setIssueOpen(false)}
+        station={{
+          id: s.id,
+          title: s.name || s?.AddressInfo?.Title,
+          lat:
+            typeof s.lat === "number"
+              ? s.lat
+              : typeof s.Latitude === "number"
+              ? s.Latitude
+              : null,
+          lng:
+            typeof s.lng === "number"
+              ? s.lng
+              : typeof s.Longitude === "number"
+              ? s.Longitude
+              : null,
+          source: s.source ?? (s.isCouncil ? "council" : "ocm"),
+        }}
+      />
     </>
   );
 }
@@ -913,7 +1122,6 @@ const secondaryBtn: CSSProperties = {
   border: "1px solid #e5e7eb",
 };
 
-
 const voteBtn: CSSProperties = {
   ...secondaryBtn,
   padding: "8px 10px",
@@ -933,7 +1141,3 @@ const textarea: CSSProperties = {
   color: "#111827",
   background: "#fff",
 };
-
-
-
-
