@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 
-// Dynamic client-only components
+/* ──────────────────────────────────────────────────────────────
+   Client-only components (avoid SSR “window is not defined”)
+   ────────────────────────────────────────────────────────────── */
 const MapClient = dynamic(() => import("../../components/admin/MapClient"), { ssr: false });
 const ChartsClient = dynamic(() => import("../../components/admin/ChartsClient"), { ssr: false });
 
+/* ──────────────────────────────────────────────────────────────
+   Types (matches your API)
+   ────────────────────────────────────────────────────────────── */
 type Row = {
   ts: string | null;
   stationId: string | number | null;
@@ -25,13 +30,13 @@ type ApiData = {
     total: number;
     good: number;
     bad: number;
-    goodPct: number;    // 0..1
+    goodPct: number; // 0..1
     avgScore: number | null;
     timeline: { day: string; count: number; avgScore: number | null }[];
   };
 };
 
-// lightweight point type (mirrors MapClient)
+/* Lightweight point used for map/charts */
 type FeedbackPoint = {
   id: string;
   stationName?: string;
@@ -40,12 +45,38 @@ type FeedbackPoint = {
   mlScore?: number;
   sentiment?: "positive" | "neutral" | "negative";
   source?: string;
-  createdAt?: string;
+  createdAt?: string; // ISO
 };
 
+/* Filters/sort */
+type Sentiment = "all" | "positive" | "neutral" | "negative";
+type SortKey = "recent" | "oldest" | "scoreHigh" | "scoreLow";
+
+/* Score badge color helper */
+function badgeColor(score?: number) {
+  if (typeof score !== "number" || !isFinite(score))
+    return { bg: "#f3f4f6", text: "#374151", border: "#e5e7eb", label: "—" };
+  const s = Math.round(score);
+  if (s >= 70) return { bg: "#dcfce7", text: "#166534", border: "#bbf7d0", label: `ML ${s}` };
+  if (s >= 40) return { bg: "#fef9c3", text: "#854d0e", border: "#fde68a", label: `ML ${s}` };
+  return { bg: "#fee2e2", text: "#991b1b", border: "#fecaca", label: `ML ${s}` };
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Page
+   ────────────────────────────────────────────────────────────── */
 export default function AdminFeedback() {
   const [data, setData] = useState<ApiData | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // filters
+  const [sentiment, setSentiment] = useState<Sentiment>("all");
+  const [scoreMin, setScoreMin] = useState<number>(0);
+  const [scoreMax, setScoreMax] = useState<number>(100);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [q, setQ] = useState<string>("");
+  const [sort, setSort] = useState<SortKey>("recent");
 
   async function load() {
     setLoading(true);
@@ -60,12 +91,14 @@ export default function AdminFeedback() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const rows = data?.rows || [];
   const stats = data?.stats;
 
-  // Adapt rows to map/chart points (client-safe)
+  /* Adapt rows → points for map/charts */
   const points: FeedbackPoint[] = useMemo(() => {
     const toSentiment = (vote?: string | null): FeedbackPoint["sentiment"] => {
       const v = (vote || "").toLowerCase();
@@ -81,7 +114,8 @@ export default function AdminFeedback() {
         return {
           id: String(r.stationId ?? i),
           stationName: r.stationId ? String(r.stationId) : undefined,
-          lat, lng,
+          lat,
+          lng,
           mlScore: typeof r.mlScore === "number" ? r.mlScore : undefined,
           sentiment: toSentiment(r.vote),
           source: r.source || undefined,
@@ -91,10 +125,74 @@ export default function AdminFeedback() {
       .filter(Boolean) as FeedbackPoint[];
   }, [rows]);
 
+  /* Apply filters & sorting (table) */
+  const filteredRows = useMemo(() => {
+    const from = dateFrom ? new Date(dateFrom) : null;
+    const to = dateTo ? new Date(dateTo) : null;
+    const needle = q.trim().toLowerCase();
+
+    let out = rows.filter((r) => {
+      // sentiment
+      if (sentiment !== "all") {
+        const v = (r.vote || "").toLowerCase();
+        const s = v === "good" || v === "up" ? "positive" : v === "bad" || v === "down" ? "negative" : "neutral";
+        if (s !== sentiment) return false;
+      }
+      // score range
+      if (Number.isFinite(r.mlScore ?? NaN)) {
+        const s = r.mlScore as number;
+        if (s < scoreMin || s > scoreMax) return false;
+      } else if (scoreMin > 0) return false;
+
+      // date range
+      if (from || to) {
+        const t = r.ts ? new Date(r.ts) : null;
+        if (from && (!t || t < from)) return false;
+        if (to && (!t || t > to)) return false;
+      }
+
+      // search
+      if (needle) {
+        const hay = [
+          r.comment ?? "",
+          String(r.stationId ?? ""),
+          r.source ?? "",
+          r.vote ?? "",
+          r.modelVersion ?? "",
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+
+      return true;
+    });
+
+    // sorting
+    out.sort((a, b) => {
+      if (sort === "recent") return new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime();
+      if (sort === "oldest") return new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime();
+      if (sort === "scoreHigh") return (b.mlScore ?? -Infinity) - (a.mlScore ?? -Infinity);
+      if (sort === "scoreLow") return (a.mlScore ?? Infinity) - (b.mlScore ?? Infinity);
+      return 0;
+    });
+
+    return out;
+  }, [rows, sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort]);
+
+  /* Keep map/charts in sync with filtered table */
+  const filteredPoints: FeedbackPoint[] = useMemo(() => {
+    if (!filteredRows.length) return points;
+    // Simple join key: station + timestamp (fallback to index)
+    const set = new Set(filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`));
+    return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
+  }, [points, filteredRows]);
+
   return (
     <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
       <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Autodun Admin · Feedback</h1>
 
+      {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
         <StatCard label="Total" value={fmt(stats?.total)} />
         <StatCard label="Good" value={fmt(stats?.good)} />
@@ -104,10 +202,104 @@ export default function AdminFeedback() {
         <button onClick={load} style={refreshBtn}>{loading ? "Refreshing…" : "Refresh"}</button>
       </div>
 
-      {/* Timeline (unchanged) */}
+      {/* Filters */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Timeline (last {stats?.timeline?.length ?? 0} days)</div>
-        {(!stats || !stats.timeline.length) ? (
+        <div style={{ fontWeight: 800, marginBottom: 12 }}>Filters</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 10 }}>
+          {/* Sentiment */}
+          <div>
+            <div style={label}>Sentiment</div>
+            <select value={sentiment} onChange={(e) => setSentiment(e.target.value as Sentiment)} style={input}>
+              <option value="all">All</option>
+              <option value="positive">Positive</option>
+              <option value="neutral">Neutral</option>
+              <option value="negative">Negative</option>
+            </select>
+          </div>
+
+          {/* Score min */}
+          <div>
+            <div style={label}>Score ≥</div>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={scoreMin}
+              onChange={(e) => setScoreMin(Number(e.target.value) || 0)}
+              style={input}
+            />
+          </div>
+
+          {/* Score max */}
+          <div>
+            <div style={label}>Score ≤</div>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={scoreMax}
+              onChange={(e) => setScoreMax(Number(e.target.value) || 100)}
+              style={input}
+            />
+          </div>
+
+          {/* From */}
+          <div>
+            <div style={label}>From</div>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={input} />
+          </div>
+
+          {/* To */}
+          <div>
+            <div style={label}>To</div>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={input} />
+          </div>
+
+          {/* Search */}
+          <div>
+            <div style={label}>Search</div>
+            <input
+              placeholder="comment / station / source"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              style={input}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
+          <div>
+            <div style={label}>Sort</div>
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} style={input}>
+              <option value="recent">Recent</option>
+              <option value="oldest">Oldest</option>
+              <option value="scoreHigh">Score: High → Low</option>
+              <option value="scoreLow">Score: Low → High</option>
+            </select>
+          </div>
+          <button
+            onClick={() => {
+              setSentiment("all");
+              setScoreMin(0);
+              setScoreMax(100);
+              setDateFrom("");
+              setDateTo("");
+              setQ("");
+              setSort("recent");
+            }}
+            style={refreshBtn}
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {/* Timeline (as-is) */}
+      <div style={panel}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>
+          Timeline (last {stats?.timeline?.length ?? 0} days)
+        </div>
+        {!stats || !stats.timeline.length ? (
           <div style={{ color: "#6b7280", fontSize: 14 }}>No data yet.</div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 120px", gap: 8 }}>
@@ -121,21 +313,21 @@ export default function AdminFeedback() {
         )}
       </div>
 
-      {/* NEW: Map */}
+      {/* Map */}
       <div style={panel}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Feedback Map</div>
         <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapClient points={points} />
+          <MapClient points={filteredPoints} />
         </div>
       </div>
 
-      {/* NEW: Charts */}
+      {/* Charts */}
       <div style={panel}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics</div>
-        <ChartsClient points={points} />
+        <ChartsClient points={filteredPoints} />
       </div>
 
-      {/* Table (unchanged) */}
+      {/* Table */}
       <div style={panel}>
         <div style={{ fontWeight: 800, marginBottom: 8 }}>Latest feedback</div>
         <div style={{ overflowX: "auto" }}>
@@ -154,15 +346,51 @@ export default function AdminFeedback() {
               </tr>
             </thead>
             <tbody>
-              {rows.slice(0, 200).map((r, i) => (
+              {filteredRows.slice(0, 200).map((r, i) => (
                 <tr key={i}>
                   <td>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
                   <td>{r.stationId ?? "—"}</td>
-                  <td style={{ fontWeight: 700, color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b" }}>
+                  <td
+                    style={{
+                      fontWeight: 700,
+                      color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b",
+                    }}
+                  >
                     {r.vote || "—"}
                   </td>
-                  <td>{typeof r.mlScore === "number" ? r.mlScore.toFixed(3) : "—"}</td>
-                  <td style={{ maxWidth: 360, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <td>
+                    {typeof r.mlScore === "number" ? (
+                      (() => {
+                        const c = badgeColor(r.mlScore);
+                        return (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: `1px solid ${c.border}`,
+                              background: c.bg,
+                              color: c.text,
+                              fontWeight: 700,
+                              fontSize: 12,
+                            }}
+                          >
+                            {c.label}
+                          </span>
+                        );
+                      })()
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      maxWidth: 360,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
                     {r.comment || "—"}
                   </td>
                   <td>{r.source || "—"}</td>
@@ -171,8 +399,12 @@ export default function AdminFeedback() {
                   <td>{r.modelVersion || "—"}</td>
                 </tr>
               ))}
-              {rows.length === 0 && (
-                <tr><td colSpan={9} style={{ color: "#6b7280", textAlign: "center" }}>No rows</td></tr>
+              {filteredRows.length === 0 && (
+                <tr>
+                  <td colSpan={9} style={{ color: "#6b7280", textAlign: "center" }}>
+                    No rows
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -182,11 +414,20 @@ export default function AdminFeedback() {
   );
 }
 
-/* ——— components & styles you already had ——— */
-
+/* ──────────────────────────────────────────────────────────────
+   Small presentational pieces
+   ────────────────────────────────────────────────────────────── */
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ padding: "10px 12px", border: "1px solid #e5e7eb", background: "#fff", borderRadius: 12, minWidth: 140 }}>
+    <div
+      style={{
+        padding: "10px 12px",
+        border: "1px solid #e5e7eb",
+        background: "#fff",
+        borderRadius: 12,
+        minWidth: 140,
+      }}
+    >
       <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
     </div>
@@ -206,6 +447,9 @@ function FragmentRow({ day, count, avg }: { day: string; count: number; avg: num
   );
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Styles
+   ────────────────────────────────────────────────────────────── */
 const panel: React.CSSProperties = {
   marginTop: 14,
   padding: 12,
@@ -229,7 +473,23 @@ const refreshBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
+const label: React.CSSProperties = { fontSize: 12, color: "#6b7280", marginBottom: 4 };
+
+const input: React.CSSProperties = {
+  width: "100%",
+  padding: "8px 10px",
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  background: "#fff",
+};
+
 /* tiny utils */
-function fmt(n?: number | null) { return (n ?? 0).toLocaleString(); }
-function pct(p?: number | null) { return p == null ? "—" : `${Math.round(p * 100)}%`; }
-function score(s?: number | null) { return s == null ? "—" : s.toFixed(3); }
+function fmt(n?: number | null) {
+  return (n ?? 0).toLocaleString();
+}
+function pct(p?: number | null) {
+  return p == null ? "—" : `${Math.round(p * 100)}%`;
+}
+function score(s?: number | null) {
+  return s == null ? "—" : s.toFixed(3);
+}
