@@ -80,6 +80,22 @@ function isNumericId(id: unknown) {
   return typeof id === "number" || /^\d+$/.test(String(id ?? ""));
 }
 
+/* Relative time ("x minutes ago") */
+function relativeTime(iso?: string | null) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return "—";
+  const diff = Date.now() - t;
+  const s = Math.max(1, Math.round(diff / 1000));
+  const m = Math.round(s / 60);
+  const h = Math.round(m / 60);
+  const d = Math.round(h / 24);
+  if (s < 60) return `${s}s ago`;
+  if (m < 60) return `${m}m ago`;
+  if (h < 24) return `${h}h ago`;
+  return `${d}d ago`;
+}
+
 /* ──────────────────────────────────────────────────────────────
    Page
    ────────────────────────────────────────────────────────────── */
@@ -101,6 +117,10 @@ export default function AdminFeedback() {
 
   // map fit trigger
   const [fitKey, setFitKey] = useState(0);
+
+  // focus on the MAIN map (optional)
+  const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
+  const [focusKey, setFocusKey] = useState(0);
 
   // table pagination
   const [page, setPage] = useState(1);
@@ -480,7 +500,12 @@ export default function AdminFeedback() {
           </div>
         </div>
         <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapClient points={filteredPoints} fitToPointsKey={fitKey} />
+          <MapClient
+            points={filteredPoints}
+            fitToPointsKey={fitKey}
+            focusPoint={focusPoint}
+            focusKey={focusKey}
+          />
         </div>
       </div>
 
@@ -490,7 +515,7 @@ export default function AdminFeedback() {
         <ChartsClient points={filteredPoints} />
       </div>
 
-      {/* Table */}
+      {/* Table + Pagination */}
       <div style={panel}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ fontWeight: 800 }}>Latest feedback</div>
@@ -500,37 +525,13 @@ export default function AdminFeedback() {
             <span style={{ fontSize: 12, color: "#6b7280" }}>
               {total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}
             </span>
-            <button
-              style={miniBtn}
-              onClick={() => setPage(1)}
-              disabled={clampedPage <= 1}
-            >
-              « First
-            </button>
-            <button
-              style={miniBtn}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={clampedPage <= 1}
-            >
-              ‹ Prev
-            </button>
+            <button style={miniBtn} onClick={() => setPage(1)} disabled={clampedPage <= 1}>« First</button>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={clampedPage <= 1}>‹ Prev</button>
             <div style={{ fontSize: 12, fontWeight: 700, minWidth: 60, textAlign: "center" }}>
               Page {clampedPage}/{totalPages}
             </div>
-            <button
-              style={miniBtn}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={clampedPage >= totalPages}
-            >
-              Next ›
-            </button>
-            <button
-              style={miniBtn}
-              onClick={() => setPage(totalPages)}
-              disabled={clampedPage >= totalPages}
-            >
-              Last »
-            </button>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={clampedPage >= totalPages}>Next ›</button>
+            <button style={miniBtn} onClick={() => setPage(totalPages)} disabled={clampedPage >= totalPages}>Last »</button>
           </div>
         </div>
 
@@ -559,7 +560,9 @@ export default function AdminFeedback() {
                 const stationStr = r.stationId ?? "—";
                 return (
                   <tr key={rowKey} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
-                    <td>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
+                    <td title={r.ts || ""}>
+                      {r.ts ? new Date(r.ts).toLocaleString() : "—"}
+                    </td>
 
                     {/* Station + copy */}
                     <td>
@@ -701,8 +704,9 @@ export default function AdminFeedback() {
               <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">✕</button>
             </div>
 
+            {/* Relative + absolute time */}
             <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
-              {selected.ts ? new Date(selected.ts).toLocaleString() : "—"}
+              {relativeTime(selected.ts)} · {selected.ts ? new Date(selected.ts).toLocaleString() : "—"}
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
@@ -712,6 +716,31 @@ export default function AdminFeedback() {
               <Info label="User Agent" value={selected.userAgent || "—"} />
               <Info label="Lat" value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"} />
               <Info label="Lng" value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"} />
+            </div>
+
+            {/* Copy Station ID / Zoom on main map */}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              {selected.stationId != null && (
+                <button
+                  style={ghostBtn}
+                  onClick={() => copy(String(selected.stationId))}
+                >
+                  Copy Station ID
+                </button>
+              )}
+              {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
+                <button
+                  style={ghostBtn}
+                  onClick={() => {
+                    setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 14 });
+                    setFocusKey((k) => k + 1);
+                    // also close drawer to show main map if you want:
+                    // setSelected(null);
+                  }}
+                >
+                  Zoom on main map
+                </button>
+              )}
             </div>
 
             <div style={{ marginTop: 12 }}>
@@ -755,7 +784,7 @@ export default function AdminFeedback() {
               <div style={{ marginTop: 12 }}>
                 <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
                 <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
-                  <MapClient points={[selectedPoint]} fitToPointsKey={fitKey} />
+                  <MapClient points={[selectedPoint]} />
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
