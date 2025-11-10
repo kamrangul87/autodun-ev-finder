@@ -168,6 +168,91 @@ function StationMarker({ station, onClick }) {
   );
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Council boundaries overlay (polygons) — minimal addition
+   Fetches /api/council?mode=bbox&bbox=... and draws a GeoJSON layer.
+   Respects showCouncil; cached by bbox to reduce requests.
+   ────────────────────────────────────────────────────────────── */
+function CouncilBoundaryLayer({ showCouncil }) {
+  const map = useMap();
+  const layerRef = useRef(null);
+  const lastBboxRef = useRef(null);
+  const fetchTimeoutRef = useRef(null);
+
+  const fetchPolys = useCallback(async () => {
+    if (!showCouncil) {
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+      lastBboxRef.current = null;
+      return;
+    }
+
+    const b = map.getBounds();
+    const sw = b.getSouthWest();
+    const ne = b.getNorthEast();
+    const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+
+    if (lastBboxRef.current === bbox) return;
+
+    const cacheKey = `council_poly_${bbox}`;
+    const cached = getCached(cacheKey);
+    if (cached?.geojson) {
+      if (layerRef.current) map.removeLayer(layerRef.current);
+      layerRef.current = L.geoJSON(cached.geojson, {
+        style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
+        onEachFeature: (f, layer) => {
+          const { name, code } = f.properties || {};
+          layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
+        },
+      }).addTo(map);
+      lastBboxRef.current = bbox;
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/council?mode=bbox&bbox=${bbox}`, { cache: 'no-store' });
+      const gj = await res.json();
+
+      if (layerRef.current) map.removeLayer(layerRef.current);
+      layerRef.current = L.geoJSON(gj, {
+        style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
+        onEachFeature: (f, layer) => {
+          const { name, code } = f.properties || {};
+          layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
+        },
+      }).addTo(map);
+
+      setCache(cacheKey, { geojson: gj });
+      lastBboxRef.current = bbox;
+    } catch (e) {
+      console.error('[CouncilBoundaryLayer] fetch error:', e);
+    }
+  }, [map, showCouncil]);
+
+  useMapEvents({
+    moveend: () => {
+      if (!showCouncil) return;
+      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
+      fetchTimeoutRef.current = setTimeout(fetchPolys, 300);
+    },
+  });
+
+  useEffect(() => {
+    fetchPolys();
+    return () => {
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+    };
+  }, [fetchPolys]);
+
+  return null;
+}
+
+/* Existing council markers (points), unchanged */
 function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
@@ -613,6 +698,7 @@ export default function EnhancedMap({
           stations={stationsNormalized}
         />
         {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
+
         {showMarkers && (
           <MarkerClusterGroup chunkedLoading>
             {stationsNormalized.map((station) => (
@@ -620,7 +706,13 @@ export default function EnhancedMap({
             ))}
           </MarkerClusterGroup>
         )}
+
+        {/* NEW: council polygons overlay */}
+        <CouncilBoundaryLayer showCouncil={showCouncil} />
+
+        {/* Existing: council “station-like” markers */}
         <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} />
+
         <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
         <LocateMeControl onLocationChange={handleLocationChange} onError={handleLocationError} />
       </MapContainer>
