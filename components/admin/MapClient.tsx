@@ -1,7 +1,7 @@
 // components/admin/MapClient.tsx
 "use client";
 
-import { MapContainer, TileLayer, Marker, Tooltip } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
@@ -28,7 +28,7 @@ if (typeof window !== "undefined") {
   });
 }
 
-/* ────────────────── helpers ────────────────── */
+/* ───────── helpers ───────── */
 
 function pinColor(s?: FeedbackPoint["sentiment"]) {
   if (s === "positive") return "#16a34a"; // green
@@ -51,6 +51,22 @@ function iconFor(s?: FeedbackPoint["sentiment"]) {
     iconAnchor: [13, 38],
     tooltipAnchor: [0, -34],
   });
+}
+
+/** Imperative fit-to-bounds that runs when `trigger` changes */
+function FitBounds({ points, trigger }: { points: FeedbackPoint[]; trigger: number }) {
+  const map = useMap();
+  React.useEffect(() => {
+    if (!points.length) return;
+    if (points.length === 1) {
+      map.setView([points[0].lat, points[0].lng], Math.max(map.getZoom(), 12), { animate: true });
+      return;
+    }
+    const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng] as [number, number]));
+    if (!bounds.isValid()) return;
+    map.fitBounds(bounds.pad(0.2), { animate: true });
+  }, [trigger, points, map]);
+  return null;
 }
 
 function ScoreBadge({ value }: { value?: number }) {
@@ -81,11 +97,17 @@ function ScoreBadge({ value }: { value?: number }) {
   );
 }
 
-/* ────────────────── component ────────────────── */
+/* ───────── component ───────── */
 
-export default function MapClient({ points }: { points: FeedbackPoint[] }) {
+export default function MapClient({
+  points,
+  fitToPointsKey = 0,
+}: {
+  points: FeedbackPoint[];
+  fitToPointsKey?: number; // bump to trigger fit-to-results
+}) {
   const center: [number, number] =
-    points.length ? [points[0].lat, points[0].lng] : [52.3555, -1.1743]; // UK-ish fallback
+    points.length ? [points[0].lat, points[0].lng] : [52.3555, -1.1743]; // UK fallback
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -95,7 +117,9 @@ export default function MapClient({ points }: { points: FeedbackPoint[] }) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Clusters */}
+        {/* Imperative fitter */}
+        <FitBounds points={points} trigger={fitToPointsKey} />
+
         <MarkerClusterGroup chunkedLoading>
           {points.map((p) => (
             <Marker
