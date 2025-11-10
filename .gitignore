@@ -19,3 +19,5 @@ dist/
 *.old
 coverage/
 test-results/
+.vercel
+.env*.local
