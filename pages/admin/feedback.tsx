@@ -99,8 +99,12 @@ export default function AdminFeedback() {
   // drawer state
   const [selected, setSelected] = useState<Row | null>(null);
 
-  // trigger for map fit
+  // map fit trigger
   const [fitKey, setFitKey] = useState(0);
+
+  // table pagination
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
 
   async function load() {
     setLoading(true);
@@ -225,6 +229,11 @@ export default function AdminFeedback() {
     setFitKey((k) => k + 1);
   }, [filteredPoints]);
 
+  // reset pagination when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, filteredRows.length]);
+
   /* ── CSV Export (filtered rows) ─────────────────────────────── */
   function escapeCSV(v: unknown): string {
     const s = v == null ? "" : String(v);
@@ -297,6 +306,33 @@ export default function AdminFeedback() {
       createdAt: selected.ts || undefined,
     };
   }, [selected]);
+
+  /* Pagination slice */
+  const total = filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const clampedPage = Math.min(page, totalPages);
+  const startIdx = (clampedPage - 1) * pageSize;
+  const endIdx = Math.min(startIdx + pageSize, total);
+  const pageRows = filteredRows.slice(startIdx, endIdx);
+
+  /* Search highlighter */
+  function highlight(s: string | number | null | undefined) {
+    const text = String(s ?? "");
+    const needle = q.trim();
+    if (!needle) return text;
+    const parts = text.split(new RegExp(`(${escapeRegExp(needle)})`, "ig"));
+    return (
+      <>
+        {parts.map((chunk, i) =>
+          chunk.toLowerCase() === needle.toLowerCase() ? (
+            <mark key={i} style={{ background: "#fde68a", padding: "0 2px", borderRadius: 3 }}>{chunk}</mark>
+          ) : (
+            <span key={i}>{chunk}</span>
+          )
+        )}
+      </>
+    );
+  }
 
   return (
     <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
@@ -456,78 +492,192 @@ export default function AdminFeedback() {
 
       {/* Table */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Latest feedback</div>
-        <div style={{ overflowX: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontWeight: 800 }}>Latest feedback</div>
+
+          {/* Pagination controls */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>
+              {total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}
+            </span>
+            <button
+              style={miniBtn}
+              onClick={() => setPage(1)}
+              disabled={clampedPage <= 1}
+            >
+              « First
+            </button>
+            <button
+              style={miniBtn}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={clampedPage <= 1}
+            >
+              ‹ Prev
+            </button>
+            <div style={{ fontSize: 12, fontWeight: 700, minWidth: 60, textAlign: "center" }}>
+              Page {clampedPage}/{totalPages}
+            </div>
+            <button
+              style={miniBtn}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={clampedPage >= totalPages}
+            >
+              Next ›
+            </button>
+            <button
+              style={miniBtn}
+              onClick={() => setPage(totalPages)}
+              disabled={clampedPage >= totalPages}
+            >
+              Last »
+            </button>
+          </div>
+        </div>
+
+        <div style={{ overflowX: "auto", maxHeight: 520, position: "relative" }}>
           <table style={table}>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Station</th>
-                <th>Vote</th>
-                <th>mlScore</th>
-                <th>Comment</th>
-                <th>Source</th>
-                <th>Lat</th>
-                <th>Lng</th>
-                <th>Model</th>
+                <th style={thSticky}>Time</th>
+                <th style={thSticky}>Station</th>
+                <th style={thSticky}>Vote</th>
+                <th style={thSticky}>mlScore</th>
+                <th style={thSticky}>Comment</th>
+                <th style={thSticky}>Source</th>
+                <th style={thSticky}>Lat</th>
+                <th style={thSticky}>Lng</th>
+                <th style={thSticky}>Model</th>
               </tr>
             </thead>
             <tbody>
-              {filteredRows.slice(0, 200).map((r, i) => (
-                <tr key={i} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
-                  <td>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
-                  <td>{r.stationId ?? "—"}</td>
-                  <td
-                    style={{
-                      fontWeight: 700,
-                      color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b",
-                    }}
-                  >
-                    {r.vote || "—"}
-                  </td>
-                  <td>
-                    {typeof r.mlScore === "number" ? (
-                      (() => {
-                        const c = badgeColor(r.mlScore);
-                        return (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              padding: "2px 8px",
-                              borderRadius: 999,
-                              border: `1px solid ${c.border}`,
-                              background: c.bg,
-                              color: c.text,
-                              fontWeight: 700,
-                              fontSize: 12,
+              {pageRows.map((r, i) => {
+                const rowKey = `${startIdx + i}`;
+                const latOk = Number.isFinite(r.lat ?? NaN);
+                const lngOk = Number.isFinite(r.lng ?? NaN);
+                const latStr = latOk ? (r.lat as number).toFixed(6) : "—";
+                const lngStr = lngOk ? (r.lng as number).toFixed(6) : "—";
+                const stationStr = r.stationId ?? "—";
+                return (
+                  <tr key={rowKey} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
+                    <td>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
+
+                    {/* Station + copy */}
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+                          {highlight(stationStr)}
+                        </code>
+                        {r.stationId != null && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(String(r.stationId));
                             }}
+                            title="Copy Station ID"
                           >
-                            {c.label}
-                          </span>
-                        );
-                      })()
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td
-                    style={{
-                      maxWidth: 360,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                    title={r.comment || ""}
-                  >
-                    {r.comment || "—"}
-                  </td>
-                  <td>{r.source || "—"}</td>
-                  <td>{Number.isFinite(r.lat ?? NaN) ? (r.lat as number).toFixed(6) : "—"}</td>
-                  <td>{Number.isFinite(r.lng ?? NaN) ? (r.lng as number).toFixed(6) : "—"}</td>
-                  <td>{r.modelVersion || "—"}</td>
-                </tr>
-              ))}
-              {filteredRows.length === 0 && (
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Vote */}
+                    <td
+                      style={{
+                        fontWeight: 700,
+                        color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b",
+                      }}
+                    >
+                      {r.vote || "—"}
+                    </td>
+
+                    {/* ML Score */}
+                    <td>
+                      {typeof r.mlScore === "number" ? (
+                        (() => {
+                          const c = badgeColor(r.mlScore);
+                          return (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                padding: "2px 8px",
+                                borderRadius: 999,
+                                border: `1px solid ${c.border}`,
+                                background: c.bg,
+                                color: c.text,
+                                fontWeight: 700,
+                                fontSize: 12,
+                              }}
+                            >
+                              {c.label}
+                            </span>
+                          );
+                        })()
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+
+                    {/* Comment (ellipsized, highlight) */}
+                    <td
+                      style={{
+                        maxWidth: 360,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                      title={r.comment || ""}
+                    >
+                      {highlight(r.comment || "—")}
+                    </td>
+
+                    {/* Source (highlight) */}
+                    <td>{highlight(r.source || "—")}</td>
+
+                    {/* Lat with copy */}
+                    <td style={monoCell}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{latStr}</span>
+                        {latOk && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(latStr);
+                            }}
+                            title="Copy latitude"
+                          >
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Lng with copy */}
+                    <td style={monoCell}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{lngStr}</span>
+                        {lngOk && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(lngStr);
+                            }}
+                            title="Copy longitude"
+                          >
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
+                    <td>{r.modelVersion || "—"}</td>
+                  </tr>
+                );
+              })}
+              {pageRows.length === 0 && (
                 <tr>
                   <td colSpan={9} style={{ color: "#6b7280", textAlign: "center" }}>
                     No rows
@@ -696,6 +846,41 @@ const table: React.CSSProperties = {
   borderSpacing: 0,
 };
 
+const thSticky: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
+  background: "#fff",
+  zIndex: 1,
+  boxShadow: "inset 0 -1px 0 #e5e7eb",
+  textAlign: "left",
+  padding: "8px 6px",
+};
+
+const miniBtn: React.CSSProperties = {
+  padding: "6px 8px",
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  borderRadius: 8,
+  fontWeight: 700,
+  cursor: "pointer",
+  fontSize: 12,
+};
+
+const copyIconBtn: React.CSSProperties = {
+  width: 24,
+  height: 24,
+  borderRadius: 6,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 12,
+  lineHeight: "1",
+};
+
+const monoCell: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+};
+
 const refreshBtn: React.CSSProperties = {
   padding: "10px 12px",
   border: "1px solid #e5e7eb",
@@ -779,4 +964,7 @@ function pct(p?: number | null) {
 }
 function score(s?: number | null) {
   return s == null ? "—" : s.toFixed(3);
+}
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
