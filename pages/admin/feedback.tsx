@@ -1,3 +1,4 @@
+// pages/admin/feedback.tsx
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 
@@ -98,7 +99,7 @@ export default function AdminFeedback() {
   // drawer state
   const [selected, setSelected] = useState<Row | null>(null);
 
-  // NEW: trigger for map fit
+  // trigger for map fit
   const [fitKey, setFitKey] = useState(0);
 
   async function load() {
@@ -219,7 +220,7 @@ export default function AdminFeedback() {
     return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
   }, [points, filteredRows]);
 
-  // NEW: bump fitKey whenever filteredPoints change (auto-fit)
+  // bump fitKey whenever filteredPoints change (auto-fit)
   useEffect(() => {
     setFitKey((k) => k + 1);
   }, [filteredPoints]);
@@ -706,7 +707,7 @@ const refreshBtn: React.CSSProperties = {
 
 const primaryBtn: React.CSSProperties = {
   padding: "10px 12px",
-  border: "1px solid "#2563eb",
+  border: "1px solid #2563eb",
   background: "#2563eb",
   color: "#fff",
   borderRadius: 12,
