@@ -98,6 +98,9 @@ export default function AdminFeedback() {
   // drawer state
   const [selected, setSelected] = useState<Row | null>(null);
 
+  // NEW: trigger for map fit
+  const [fitKey, setFitKey] = useState(0);
+
   async function load() {
     setLoading(true);
     try {
@@ -215,6 +218,11 @@ export default function AdminFeedback() {
     const set = new Set(filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`));
     return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
   }, [points, filteredRows]);
+
+  // NEW: bump fitKey whenever filteredPoints change (auto-fit)
+  useEffect(() => {
+    setFitKey((k) => k + 1);
+  }, [filteredPoints]);
 
   /* ── CSV Export (filtered rows) ─────────────────────────────── */
   function escapeCSV(v: unknown): string {
@@ -422,9 +430,20 @@ export default function AdminFeedback() {
 
       {/* Map */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Feedback Map</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontWeight: 800 }}>Feedback Map</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              style={refreshBtn}
+              onClick={() => setFitKey((k) => k + 1)}
+              title="Fit map to current results"
+            >
+              Fit to results
+            </button>
+          </div>
+        </div>
         <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapClient points={filteredPoints} />
+          <MapClient points={filteredPoints} fitToPointsKey={fitKey} />
         </div>
       </div>
 
@@ -585,7 +604,7 @@ export default function AdminFeedback() {
               <div style={{ marginTop: 12 }}>
                 <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
                 <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
-                  <MapClient points={[selectedPoint]} />
+                  <MapClient points={[selectedPoint]} fitToPointsKey={fitKey} />
                 </div>
 
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -621,9 +640,7 @@ export default function AdminFeedback() {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Small presentational pieces
-   ────────────────────────────────────────────────────────────── */
+/* ─────────────── Small presentational pieces ─────────────── */
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div
@@ -663,9 +680,7 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Styles
-   ────────────────────────────────────────────────────────────── */
+/* ─────────────── styles ─────────────── */
 const panel: React.CSSProperties = {
   marginTop: 14,
   padding: 12,
@@ -691,7 +706,7 @@ const refreshBtn: React.CSSProperties = {
 
 const primaryBtn: React.CSSProperties = {
   padding: "10px 12px",
-  border: "1px solid #2563eb",
+  border: "1px solid "#2563eb",
   background: "#2563eb",
   color: "#fff",
   borderRadius: 12,
