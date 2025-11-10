@@ -1,6 +1,7 @@
 // components/admin/MapClient.tsx
 "use client";
 
+import React, { useEffect } from "react";
 import { MapContainer, TileLayer, Marker, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
@@ -56,7 +57,7 @@ function iconFor(s?: FeedbackPoint["sentiment"]) {
 /** Imperative fit-to-bounds that runs when `trigger` changes */
 function FitBounds({ points, trigger }: { points: FeedbackPoint[]; trigger: number }) {
   const map = useMap();
-  React.useEffect(() => {
+  useEffect(() => {
     if (!points.length) return;
     if (points.length === 1) {
       map.setView([points[0].lat, points[0].lng], Math.max(map.getZoom(), 12), { animate: true });
