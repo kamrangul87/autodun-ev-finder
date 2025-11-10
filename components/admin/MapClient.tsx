@@ -70,6 +70,23 @@ function FitBounds({ points, trigger }: { points: FeedbackPoint[]; trigger: numb
   return null;
 }
 
+/** Optional focus-to-point when `focusKey` bumps (backwards compatible) */
+function FocusPoint({
+  focus,
+  focusKey,
+}: {
+  focus?: { lat: number; lng: number; zoom?: number };
+  focusKey: number;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (!focus) return;
+    const z = focus.zoom ?? Math.max(map.getZoom(), 13);
+    map.setView([focus.lat, focus.lng], z, { animate: true });
+  }, [focusKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  return null;
+}
+
 function ScoreBadge({ value }: { value?: number }) {
   if (typeof value !== "number" || !isFinite(value)) return null;
   const s = Math.round(value);
@@ -103,9 +120,13 @@ function ScoreBadge({ value }: { value?: number }) {
 export default function MapClient({
   points,
   fitToPointsKey = 0,
+  focusPoint,          // optional
+  focusKey = 0,        // optional
 }: {
   points: FeedbackPoint[];
-  fitToPointsKey?: number; // bump to trigger fit-to-results
+  fitToPointsKey?: number;
+  focusPoint?: { lat: number; lng: number; zoom?: number };
+  focusKey?: number;
 }) {
   const center: [number, number] =
     points.length ? [points[0].lat, points[0].lng] : [52.3555, -1.1743]; // UK fallback
@@ -118,8 +139,9 @@ export default function MapClient({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {/* Imperative fitter */}
+        {/* Imperative fitter / focus */}
         <FitBounds points={points} trigger={fitToPointsKey} />
+        <FocusPoint focus={focusPoint} focusKey={focusKey} />
 
         <MarkerClusterGroup chunkedLoading>
           {points.map((p) => (
