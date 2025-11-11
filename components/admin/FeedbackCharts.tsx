@@ -42,7 +42,7 @@ export default function FeedbackCharts() {
   const [range, setRange] = useState<RangeKey>("7d");
   const [loading, setLoading] = useState(false);
 
-  // Fetch feedback once (increase limit if you like)
+  // Fetch feedback once
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -105,7 +105,8 @@ export default function FeedbackCharts() {
         bucket.n += 1;
       }
     }
-    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+    // 👇 Replace spread with Array.from to avoid downlevelIteration issues
+    return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered]);
 
   const bySource = useMemo(() => {
@@ -114,7 +115,8 @@ export default function FeedbackCharts() {
       const s = (r.source || "unknown").toLowerCase();
       map.set(s, (map.get(s) || 0) + 1);
     }
-    return [...map.entries()].map(([name, value]) => ({ name, value }));
+    // 👇 Use Array.from instead of [...]
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
   /* ---------------- export data ---------------- */
