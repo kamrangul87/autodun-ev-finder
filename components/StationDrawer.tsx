@@ -312,7 +312,7 @@ export default function StationDrawer({
 
   const title = s.name || ai.Title || "Unknown location";
 
-  // Coordinates (robust)
+  // Coordinates (still computed for Directions/CouncilBadge, but not shown)
   const lat: number | null =
     typeof s.lat === "number"
       ? s.lat
@@ -604,28 +604,12 @@ export default function StationDrawer({
             </button>
           </div>
 
-          {/* Coordinates + Council */}
+          {/* Council (Lat/Lng hidden; we still pass them to CouncilBadge if available) */}
           <div style={cardRow}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-              <div>
-                <div style={rowLabel}>Lat</div>
-                <div style={rowValue}>
-                  {typeof lat === "number" ? lat : "—"}
-                </div>
-              </div>
-              <div>
-                <div style={rowLabel}>Lng</div>
-                <div style={rowValue}>
-                  {typeof lng === "number" ? lng : "—"}
-                </div>
-              </div>
-            </div>
-
-            {/* council badge */}
-            {typeof lat === "number" && typeof lng === "number" && (
-              <div style={{ marginTop: 8 }}>
-                <CouncilBadge lat={lat} lng={lng} />
-              </div>
+            {typeof lat === "number" && typeof lng === "number" ? (
+              <CouncilBadge lat={lat} lng={lng} />
+            ) : (
+              <div style={{ fontSize: 12, color: "#6b7280" }}>No coordinates available.</div>
             )}
           </div>
 
@@ -720,9 +704,9 @@ export default function StationDrawer({
           <div style={{ display: "flex", gap: 6 }}>
             <a
               href={
-                station
+                station && typeof lat === "number" && typeof lng === "number"
                   ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
-                      `${(s.lat as number) ?? ""},${(s.lng as number) ?? ""}`
+                      `${lat},${lng}`
                     )}`
                   : "#"
               }
@@ -734,7 +718,7 @@ export default function StationDrawer({
             </a>
             <button
               onClick={() => {
-                const text = s.name || fullAddress || `${s.lat}, ${s.lng}`;
+                const text = s.name || fullAddress || (typeof lat === "number" && typeof lng === "number" ? `${lat}, ${lng}` : "");
                 navigator.clipboard?.writeText(String(text));
               }}
               style={secondaryBtn}
@@ -855,7 +839,7 @@ export default function StationDrawer({
                 if (!station) return;
                 const chosen = vote ?? "up";
                 onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
-                alert("Thanks! Your feedback was submitted."); // ✅ one-line confirmation
+                alert("Thanks! Your feedback was submitted.");
               }}
             >
               Submit feedback
