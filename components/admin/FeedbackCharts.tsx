@@ -56,6 +56,31 @@ function getMlScore(p: FeedbackPoint): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// --- CSV helpers ---
+function esc(v: any) {
+  // basic CSV escaping for commas/quotes/newlines
+  const s = v == null ? "" : String(v);
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+function toCSV(headers: string[], rows: (string | number)[][]) {
+  const lines = [headers.map(esc).join(",")];
+  for (const r of rows) lines.push(r.map(esc).join(","));
+  return lines.join("\r\n");
+}
+function downloadCSV(filename: string, csv: string) {
+  // BOM so Excel opens UTF-8 correctly
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) {
   const [range, setRange] = useState<RangeKey>("7d");
 
@@ -166,11 +191,70 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
   const sourcePie = { labels: sourceLabels, datasets: [{ data: sourceValues }] };
   const sentimentPie = { labels: ["Positive", "Neutral", "Negative"], datasets: [{ data: sentimentCounts }] };
 
+  // --- Export handlers ---
+  const safeRangeTag = range === "all" ? "all" : range;
+  const todayTag = new Date().toISOString().slice(0, 10);
+
+  const exportDaily = () => {
+    const rows = dayLabels.map((d, i) => [
+      d,
+      stackedGood[i] ?? 0,
+      stackedNeutral[i] ?? 0,
+      stackedBad[i] ?? 0,
+      (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0),
+    ]);
+    const csv = toCSV(["date", "positive", "neutral", "negative", "total"], rows);
+    downloadCSV(`daily_feedback_${safeRangeTag}_${todayTag}.csv`, csv);
+  };
+
+  const exportAvg = () => {
+    const rows = dayLabels.map((d, i) => [d, dayAvg[i] ?? 0]);
+    const csv = toCSV(["date", "avg_ml_score"], rows);
+    downloadCSV(`avg_ml_score_${safeRangeTag}_${todayTag}.csv`, csv);
+  };
+
+  const exportSources = () => {
+    const rows = sourceLabels.map((name, i) => [name, sourceValues[i] ?? 0]);
+    const csv = toCSV(["source", "count"], rows);
+    downloadCSV(`sources_${safeRangeTag}_${todayTag}.csv`, csv);
+  };
+
+  const exportAll = () => {
+    const a = toCSV(
+      ["date", "positive", "neutral", "negative", "total"],
+      dayLabels.map((d, i) => [
+        d,
+        stackedGood[i] ?? 0,
+        stackedNeutral[i] ?? 0,
+        stackedBad[i] ?? 0,
+        (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0),
+      ])
+    );
+    const b = toCSV(
+      ["date", "avg_ml_score"],
+      dayLabels.map((d, i) => [d, dayAvg[i] ?? 0])
+    );
+    const c = toCSV(
+      ["source", "count"],
+      sourceLabels.map((name, i) => [name, sourceValues[i] ?? 0])
+    );
+    const merged =
+      "Daily Feedback (stacked)\r\n" +
+      a +
+      "\r\n\r\nAvg ML Score by Day\r\n" +
+      b +
+      "\r\n\r\nFeedback by Source\r\n" +
+      c +
+      "\r\n";
+    downloadCSV(`analytics_${safeRangeTag}_${todayTag}.csv`, merged);
+  };
+
   return (
     <div className="w-full">
-      {/* Range selector */}
-      <div className="flex items-center gap-2 mb-3">
+      {/* Range + Export */}
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <div className="font-medium text-lg">Analytics</div>
+
         <div className="ml-auto flex gap-2">
           <button
             className={`px-3 py-1 rounded-full border ${range === "7d" ? "bg-black text-white" : "bg-white"}`}
@@ -190,6 +274,13 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
           >
             All
           </button>
+        </div>
+
+        <div className="flex gap-2 w-full lg:w-auto">
+          <button className="px-3 py-1 rounded-full border" onClick={exportDaily}>Export Daily</button>
+          <button className="px-3 py-1 rounded-full border" onClick={exportAvg}>Export Avg ML</button>
+          <button className="px-3 py-1 rounded-full border" onClick={exportSources}>Export Sources</button>
+          <button className="px-3 py-1 rounded-full border" onClick={exportAll}>Export All</button>
         </div>
       </div>
 
