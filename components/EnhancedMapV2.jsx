@@ -9,17 +9,19 @@ import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
 
-// OCM connector normalization - expanded ID mapping for common OCM connector types
+/* ──────────────────────────────────────────────────────────────
+   OCM connector normalization
+   ────────────────────────────────────────────────────────────── */
 const ID2 = {
-  1: 'Type 2',   // Type 2 (Tethered)
-  2: 'CHAdeMO',  // CHAdeMO
-  25: 'Type 2',  // Type 2 (Socket Only)
-  32: 'CCS',     // CCS (Type 2 Combo) - Tethered
-  33: 'CCS',     // CCS (Type 2 Combo) - Socket
-  1036: 'Type 2',// Type 2 (Socketed, IEC 62196 Type 2)
-  8: 'Type 2',   // Type 2 (Socket Only, IEC 62196-T2)
-  27: 'Type 2',  // Type 2 (Tethered Cable)
-  30: 'CHAdeMO'  // CHAdeMO (Tethered)
+  1: 'Type 2',
+  2: 'CHAdeMO',
+  25: 'Type 2',
+  32: 'CCS',
+  33: 'CCS',
+  1036: 'Type 2',
+  8: 'Type 2',
+  27: 'Type 2',
+  30: 'CHAdeMO'
 };
 
 const canon = (t = '') => {
@@ -42,7 +44,6 @@ const mapOCM = (conns) =>
               c?.CurrentType?.Title ||
               c?.Level?.Title
           );
-        // ALWAYS push connectors, even if Unknown, so users see all connector info
         acc.push({
           type: label,
           quantity: typeof c?.Quantity === 'number' && c.Quantity > 0 ? c.Quantity : 1,
@@ -89,6 +90,9 @@ function MapInitializer() {
   return null;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Heatmap
+   ────────────────────────────────────────────────────────────── */
 function HeatmapLayer({ stations, intensity = 1 }) {
   const map = useMap();
   const heatLayerRef = useRef(null);
@@ -118,13 +122,9 @@ function HeatmapLayer({ stations, intensity = 1 }) {
       let processedStations = stations;
       if (stations.length > 25000) {
         processedStations = stations.filter((_, idx) => idx % 3 === 0);
-        console.log(
-          `[HeatmapLayer] Downsampled ${stations.length} to ${processedStations.length} points for performance`
-        );
       }
 
       const maxIntensity = Math.max(...processedStations.map((s) => s.connectors || 1));
-
       const heatData = processedStations.map((s) => [
         s.lat,
         s.lng,
@@ -137,12 +137,7 @@ function HeatmapLayer({ stations, intensity = 1 }) {
         blur: 15,
         maxZoom: 17,
         max: 1.0,
-        gradient: {
-          0.0: 'green',
-          0.4: 'yellow',
-          0.7: 'orange',
-          1.0: 'red'
-        }
+        gradient: { 0.0: 'green', 0.4: 'yellow', 0.7: 'orange', 1.0: 'red' }
       }).addTo(map);
     });
 
@@ -161,19 +156,15 @@ function StationMarker({ station, onClick }) {
   return (
     <Marker
       position={[station.lat, station.lng]}
-      eventHandlers={{
-        click: () => onClick(station)
-      }}
+      eventHandlers={{ click: () => onClick(station) }}
     />
   );
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Council boundaries overlay (polygons) — minimal addition
-   Fetches /api/council?mode=bbox&bbox=... and draws a GeoJSON layer.
-   Respects showCouncil; cached by bbox to reduce requests.
+   NEW: Council polygons overlay with click → set code & bbox
    ────────────────────────────────────────────────────────────── */
-function CouncilBoundaryLayer({ showCouncil }) {
+function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
   const map = useMap();
   const layerRef = useRef(null);
   const lastBboxRef = useRef(null);
@@ -192,44 +183,55 @@ function CouncilBoundaryLayer({ showCouncil }) {
     const b = map.getBounds();
     const sw = b.getSouthWest();
     const ne = b.getNorthEast();
-    const bbox = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+    const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
 
-    if (lastBboxRef.current === bbox) return;
+    if (lastBboxRef.current === bboxStr) return;
 
-    const cacheKey = `council_poly_${bbox}`;
+    const cacheKey = `council_poly_${bboxStr}`;
     const cached = getCached(cacheKey);
-    if (cached?.geojson) {
-      if (layerRef.current) map.removeLayer(layerRef.current);
-      layerRef.current = L.geoJSON(cached.geojson, {
-        style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
-        onEachFeature: (f, layer) => {
-          const { name, code } = f.properties || {};
-          layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
-        },
-      }).addTo(map);
-      lastBboxRef.current = bbox;
-      return;
-    }
 
-    try {
-      const res = await fetch(`/api/council?mode=bbox&bbox=${bbox}`, { cache: 'no-store' });
-      const gj = await res.json();
-
+    const addLayer = (gj) => {
       if (layerRef.current) map.removeLayer(layerRef.current);
       layerRef.current = L.geoJSON(gj, {
         style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
         onEachFeature: (f, layer) => {
           const { name, code } = f.properties || {};
+          // compute bbox from layer bounds (Leaflet returns [lat,lng])
+          const ll = layer;
+          if (ll && 'getBounds' in ll) {
+            const lb = ll.getBounds();
+            const bb = [lb.getWest(), lb.getSouth(), lb.getEast(), lb.getNorth()];
+            (f.properties ||= {}).bbox = bb;
+          }
           layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
+          layer.on('click', () => {
+            const bb = f?.properties?.bbox;
+            if (bb && Array.isArray(bb) && bb.length === 4) {
+              onBBox?.(bb);
+              map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]], { padding: [18, 18] });
+            }
+            onSelect?.(code || null);
+          });
         },
       }).addTo(map);
+      lastBboxRef.current = bboxStr;
+    };
 
+    if (cached?.geojson) {
+      addLayer(cached.geojson);
+      return;
+    }
+
+    try {
+      // API accepts mode=bbox (it may ignore bbox filter; harmless)
+      const res = await fetch(`/api/council?mode=bbox&bbox=${bboxStr}`, { cache: 'no-store' });
+      const gj = await res.json();
+      addLayer(gj);
       setCache(cacheKey, { geojson: gj });
-      lastBboxRef.current = bbox;
     } catch (e) {
       console.error('[CouncilBoundaryLayer] fetch error:', e);
     }
-  }, [map, showCouncil]);
+  }, [map, showCouncil, onBBox, onSelect]);
 
   useMapEvents({
     moveend: () => {
@@ -331,9 +333,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
-          eventHandlers={{
-            click: () => onMarkerClick(station)
-          }}
+          eventHandlers={{ click: () => onMarkerClick(station) }}
         />
       ))}
     </MarkerClusterGroup>
@@ -348,32 +348,33 @@ function UserLocationMarker({ location, accuracy }) {
       <Circle
         center={[location.lat, location.lng]}
         radius={accuracy || 100}
-        pathOptions={{
-          color: '#3b82f6',
-          fillColor: '#3b82f6',
-          fillOpacity: 0.1,
-          weight: 1
-        }}
+        pathOptions={{ color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.1, weight: 1 }}
       />
       <Marker position={[location.lat, location.lng]} icon={userLocationIcon} />
     </>
   );
 }
 
-function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shouldZoomToData, stations }) {
+/* ──────────────────────────────────────────────────────────────
+   Viewport → fetch stations. If councilBBox provided, use it.
+   ────────────────────────────────────────────────────────────── */
+function ViewportFetcher({
+  onFetchStations,
+  onLoadingChange,
+  searchResult,
+  shouldZoomToData,
+  stations,
+  showCouncil,
+  councilBBox
+}) {
   const map = useMap();
   const fetchTimeoutRef = useRef(null);
   const lastFetchRef = useRef(null);
   const isFirstFetchRef = useRef(true);
 
-  const fetchForViewport = useCallback(
-    async (isFirstLoad = false) => {
-      const bounds = map.getBounds();
-      const sw = bounds.getSouthWest();
-      const ne = bounds.getNorthEast();
-      const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-
-      if (lastFetchRef.current === bboxStr) return;
+  const fetchForBBox = useCallback(
+    async (bboxStr, isFirstLoad = false) => {
+      if (!bboxStr || lastFetchRef.current === bboxStr) return;
 
       const cacheKey = `bbox_${bboxStr}`;
       const cached = getCached(cacheKey);
@@ -410,11 +411,32 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
         onLoadingChange?.(false);
       }
     },
-    [map, onFetchStations, onLoadingChange]
+    [onFetchStations, onLoadingChange]
+  );
+
+  // Fetch whenever councilBBox changes
+  useEffect(() => {
+    if (showCouncil && councilBBox && councilBBox.length === 4) {
+      const bboxStr = councilBBox.join(',');
+      fetchForBBox(bboxStr, true);
+    }
+  }, [showCouncil, councilBBox, fetchForBBox]);
+
+  // Default viewport-driven fetch (only when NOT locked to council bbox)
+  const fetchForViewport = useCallback(
+    (isFirstLoad = false) => {
+      const bounds = map.getBounds();
+      const sw = bounds.getSouthWest();
+      const ne = bounds.getNorthEast();
+      const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
+      fetchForBBox(bboxStr, isFirstLoad);
+    },
+    [map, fetchForBBox]
   );
 
   useMapEvents({
     moveend: () => {
+      if (showCouncil && councilBBox) return; // locked to council bbox → ignore pan
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
       fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 400);
     }
@@ -433,10 +455,14 @@ function ViewportFetcher({ onFetchStations, onLoadingChange, searchResult, shoul
       map.setView([searchResult.lat, searchResult.lng], 13);
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
       fetchTimeoutRef.current = setTimeout(() => {
-        fetchForViewport(false);
+        if (showCouncil && councilBBox) {
+          fetchForBBox(councilBBox.join(','), false);
+        } else {
+          fetchForViewport(false);
+        }
       }, 500);
     }
-  }, [map, searchResult, fetchForViewport]);
+  }, [map, searchResult, fetchForViewport, fetchForBBox, showCouncil, councilBBox]);
 
   useEffect(() => {
     if (shouldZoomToData && stations && stations.length > 0) {
@@ -473,22 +499,24 @@ export default function EnhancedMap({
   onFetchStations,
   onLoadingChange,
   onToast,
-  isLoading = false
+  isLoading = false,
+  /* NEW (tiny state sync from page/URL) */
+  councilCode = null,
+  councilBBox = null,
+  onCouncilSelect,
+  onCouncilBBox
 }) {
   const [activeStation, setActiveStation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [locationAccuracy, setLocationAccuracy] = useState(null);
   const mapRef = useRef(null);
 
-  // Normalize stations to fix "Unknown" connectors before filtering/heatmap/markers
-  // Keep numeric connectors field for heatmap intensity, add connectorsDetailed for drawer
+  /* Normalize stations */
   const stationsNormalized = useMemo(
     () =>
       (stations || []).map((s) => {
-        // Check if connectors are already detailed (from API or previous normalization)
         const existingDetailed = s?.connectorsDetailed || s?.properties?.connectorsDetailed;
         if (Array.isArray(existingDetailed) && existingDetailed.length) {
-          // Use existing detailed connectors, ensure they're canonicalized
           const detailed = existingDetailed.map((c) => ({
             type: canon(c?.type || 'Unknown'),
             quantity: typeof c?.quantity === 'number' && c.quantity > 0 ? c.quantity : 1,
@@ -497,8 +525,6 @@ export default function EnhancedMap({
           const totalCount = detailed.reduce((sum, c) => sum + (c.quantity || 0), 0);
           return { ...s, connectorsDetailed: detailed, connectors: totalCount };
         }
-
-        // Fall back to OCM Connections field if no detailed connectors
         const conns = s?.Connections || s?.properties?.Connections;
         if (Array.isArray(conns) && conns.length) {
           const detailed = mapOCM(conns);
@@ -507,14 +533,12 @@ export default function EnhancedMap({
             return { ...s, connectorsDetailed: detailed, connectors: totalCount };
           }
         }
-
-        // No connector details available
         return s;
       }),
     [stations]
   );
 
-  // Handle external location updates from controls
+  /* external location → center */
   useEffect(() => {
     if (externalUserLocation && mapRef.current) {
       setUserLocation(externalUserLocation);
@@ -530,46 +554,26 @@ export default function EnhancedMap({
     telemetry.drawerOpen(station.id, station.isCouncil || false);
   }, []);
 
-  const handleDrawerClose = useCallback(() => {
-    setActiveStation(null);
-  }, []);
+  const handleDrawerClose = useCallback(() => setActiveStation(null), []);
 
-  // ✅ POST feedback to /api/feedback
+  /* POST feedback */
   const handleFeedbackSubmit = useCallback(
     async (stationId, vote, comment) => {
       try {
-        // normalize vote to values your webhook/Sheet expects
-        const voteNorm =
-          vote === 'up' ? 'good' : vote === 'down' ? 'bad' : String(vote || '');
-
-        // best-effort lat/lng for context
+        const voteNorm = vote === 'up' ? 'good' : vote === 'down' ? 'bad' : String(vote || '');
         const lat = activeStation?.lat ?? activeStation?.Latitude ?? null;
         const lng = activeStation?.lng ?? activeStation?.Longitude ?? null;
 
         const res = await fetch('/api/feedback', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            stationId,
-            vote: voteNorm,
-            comment: comment || '',
-            lat,
-            lng,
-            ts: new Date().toISOString()
-          })
+          body: JSON.stringify({ stationId, vote: voteNorm, comment: comment || '', lat, lng, ts: new Date().toISOString() })
         });
-
         if (!res.ok) throw new Error(`feedback POST failed: ${res.status}`);
-
         onToast?.({ message: '✓ Thanks for your feedback!', type: 'success' });
-        // Optional telemetry:
-        // telemetry.feedbackSubmit(stationId, voteNorm, Boolean(comment && comment.trim()));
       } catch (err) {
         console.error('[feedback] submit error', err);
-        onToast?.({
-          message: 'Saved locally — network issue. Please try again in a moment.',
-          type: 'error'
-        });
+        onToast?.({ message: 'Saved locally — network issue. Please try again in a moment.', type: 'error' });
       }
     },
     [onToast, activeStation]
@@ -579,17 +583,11 @@ export default function EnhancedMap({
     (location, accuracy) => {
       setUserLocation(location);
       setLocationAccuracy(accuracy);
-
       if (mapRef.current && location) {
         mapRef.current.setView([location.lat, location.lng], 14);
-
         const nearest = findNearestStation(location, stationsNormalized);
         if (nearest) {
-          console.log(
-            `[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(
-              2
-            )} km)`
-          );
+          console.log(`[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(2)} km)`);
         }
       }
     },
@@ -597,12 +595,7 @@ export default function EnhancedMap({
   );
 
   const handleLocationError = useCallback(
-    (error) => {
-      onToast?.({
-        message: error,
-        type: 'error'
-      });
-    },
+    (error) => onToast?.({ message: error, type: 'error' }),
     [onToast]
   );
 
@@ -636,9 +629,7 @@ export default function EnhancedMap({
               animation: 'spin 0.6s linear infinite'
             }}
           />
-          <span style={{ fontSize: '11px', fontWeight: '500', color: '#374151' }}>
-            Loading…
-          </span>
+          <span style={{ fontSize: '11px', fontWeight: '500', color: '#374151' }}>Loading…</span>
         </div>
       )}
 
@@ -663,15 +654,7 @@ export default function EnhancedMap({
           <span>Charging stations</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <div
-            style={{
-              width: '12px',
-              height: '12px',
-              background: '#9333ea',
-              transform: 'rotate(45deg)',
-              border: '1px solid white'
-            }}
-          />
+          <div style={{ width: '12px', height: '12px', background: '#9333ea', transform: 'rotate(45deg)', border: '1px solid white' }} />
           <span>Council markers</span>
         </div>
       </div>
@@ -690,13 +673,18 @@ export default function EnhancedMap({
           url={process.env.NEXT_PUBLIC_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png'}
           maxZoom={19}
         />
+
         <ViewportFetcher
           onFetchStations={onFetchStations}
           onLoadingChange={onLoadingChange}
           searchResult={searchResult}
           shouldZoomToData={shouldZoomToData}
           stations={stationsNormalized}
+          /* NEW */
+          showCouncil={showCouncil}
+          councilBBox={councilBBox}
         />
+
         {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
 
         {showMarkers && (
@@ -707,8 +695,12 @@ export default function EnhancedMap({
           </MarkerClusterGroup>
         )}
 
-        {/* NEW: council polygons overlay */}
-        <CouncilBoundaryLayer showCouncil={showCouncil} />
+        {/* NEW: council polygons overlay (click → code+bbox) */}
+        <CouncilBoundaryLayer
+          showCouncil={showCouncil}
+          onSelect={onCouncilSelect}
+          onBBox={onCouncilBBox}
+        />
 
         {/* Existing: council “station-like” markers */}
         <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} />
@@ -724,11 +716,7 @@ export default function EnhancedMap({
       />
 
       <style jsx global>{`
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </div>
   );
