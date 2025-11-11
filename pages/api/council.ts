@@ -6,6 +6,7 @@ const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supa = createClient(url, serviceRole, { auth: { persistSession: false } });
 
+type BBox = [number, number, number, number]; // [minLng,minLat,maxLng,maxLat]
 type FC = { type: "FeatureCollection"; features: any[] };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -13,16 +14,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (mode === "bbox") {
-      // MVP: return all councils (lightweight simplified GeoJSON)
+      // Lightweight: return all councils with geometry & precomputed bbox
       const { data, error } = await supa
         .from("council_geojson")
         .select("id,name,code,geometry");
+
       if (error) return res.status(500).json({ ok: false, error: error.message });
-      return res.status(200).json(asFC(data || []));
+
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+      return res.status(200).json(asFCWithBboxes(data || []));
+    }
+
+    if (mode === "code") {
+      const code = String(req.query.code || "");
+      if (!code) return res.status(400).json({ ok: false, error: "Missing code" });
+
+      const one = await supa
+        .from("council_geojson")
+        .select("id,name,code,geometry")
+        .eq("code", code)
+        .single();
+
+      if (one.error) return res.status(404).json({ ok: false, error: "not_found" });
+
+      const feature = asFeatureWithBBox(one.data);
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+      return res.status(200).json({ ok: true, feature, bbox: feature.properties.bbox as BBox });
     }
 
     if (mode === "point") {
-      // When lat/lng provided -> nearest feature (existing behavior)
+      // When lat/lng provided -> nearest feature; else -> list of centroids
       const lat = num(req.query.lat);
       const lng = num(req.query.lng);
 
@@ -38,19 +59,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             return {
               id: r.id,
               name: r.name ?? r.code ?? "Council",
+              code: r.code ?? null,
               lat: c.lat,
               lng: c.lng,
             };
           })
           .filter(Boolean);
-        return res.status(200).json({ items });
+        res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+        return res.status(200).json({ ok: true, items });
       }
 
-      // WITH lat/lng: return nearest council's full GeoJSON feature
+      // WITH lat/lng: return nearest council's full GeoJSON feature (+bbox)
       const nearest = nearestByPoint(
-        cents.map((r) => ({ ...r, ...extractLngLat(r) })).filter((r: any) => isFinite(r.lat) && isFinite(r.lng)),
+        cents
+          .map((r) => ({ ...r, ...extractLngLat(r) }))
+          .filter((r: any) => isFinite(r.lat) && isFinite(r.lng)),
         [lng, lat]
       );
+
       if (!nearest) return res.status(200).json({ ok: true, feature: null });
 
       const one = await supa
@@ -60,7 +86,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         .single();
 
       if (one.error) return res.status(500).json({ ok: false, error: one.error.message });
-      return res.status(200).json({ ok: true, feature: asFeature(one.data) });
+
+      const feature = asFeatureWithBBox(one.data);
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
+      return res.status(200).json({ ok: true, feature, bbox: feature.properties.bbox as BBox });
     }
 
     return res.status(400).json({ ok: false, error: "Unknown mode" });
@@ -76,9 +105,28 @@ function asFC(rows: any[]): FC {
   return { type: "FeatureCollection", features: (rows || []).map(asFeature).filter(Boolean) };
 }
 
+function asFCWithBboxes(rows: any[]): FC {
+  return {
+    type: "FeatureCollection",
+    features: (rows || []).map(asFeatureWithBBox).filter(Boolean),
+  };
+}
+
 function asFeature(r: any) {
   if (!r) return null;
-  return { type: "Feature", properties: { id: r.id, name: r.name, code: r.code }, geometry: r.geometry };
+  return {
+    type: "Feature",
+    properties: { id: r.id, name: r.name, code: r.code },
+    geometry: r.geometry,
+  };
+}
+
+function asFeatureWithBBox(r: any) {
+  const f = asFeature(r);
+  if (!f) return null;
+  const bbox = computeBBoxFromGeometry(f.geometry);
+  (f as any).properties.bbox = bbox;
+  return f;
 }
 
 function num(v: any): number {
@@ -88,7 +136,7 @@ function num(v: any): number {
 
 /** Try live first, then static */
 async function loadCentroids(): Promise<any[]> {
-  // Try council_centroids_live (columns may be: id,name,code,lat,lng) 
+  // Try council_centroids_live (columns may be: id,name,code,lat,lng)
   const live = await supa
     .from("council_centroids_live")
     .select("id,name,code,lat,lng,centroid")
@@ -148,4 +196,38 @@ function nearestByPoint(rows: any[], [lng, lat]: [number, number]) {
     }
   }
   return best;
+}
+
+/** Compute [minLng,minLat,maxLng,maxLat] from a GeoJSON Polygon/MultiPolygon */
+function computeBBoxFromGeometry(geom: any): BBox {
+  let minX = 180, minY = 90, maxX = -180, maxY = -90;
+  const scan = (coords: number[][][]) => {
+    for (const ring of coords) {
+      for (const pt of ring) {
+        const x = pt[0], y = pt[1];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  };
+
+  if (!geom) return [minX, minY, maxX, maxY];
+
+  if (geom.type === "Polygon") {
+    scan(geom.coordinates as number[][][]);
+  } else if (geom.type === "MultiPolygon") {
+    for (const poly of geom.coordinates as number[][][][]) scan(poly as any);
+  } else if (geom.type === "GeometryCollection" && Array.isArray(geom.geometries)) {
+    for (const g of geom.geometries) {
+      const b = computeBBoxFromGeometry(g);
+      minX = Math.min(minX, b[0]);
+      minY = Math.min(minY, b[1]);
+      maxX = Math.max(maxX, b[2]);
+      maxY = Math.max(maxY, b[3]);
+    }
+  }
+
+  return [minX, minY, maxX, maxY];
 }
