@@ -5,6 +5,9 @@ import dynamic from "next/dynamic";
 import { createClient } from "@supabase/supabase-js";
 import type { LatLngTuple } from "leaflet";
 
+// ➕ Council badge (already in components/admin)
+import CouncilBadge from "./CouncilBadge";
+
 // Lazy-load Leaflet parts to avoid SSR issues
 const MapContainer = dynamic(
   async () => (await import("react-leaflet")).MapContainer,
@@ -308,11 +311,11 @@ export default function AdminFeedbackMap() {
         {centroids.map((c) => (
           <Marker key={`c-${c.id}`} position={[c.lat, c.lng]}>
             <Popup>
-              <div className="text-sm">
+              <div className="text-sm space-y-1">
                 <div className="font-medium">{c.name || "Council"}</div>
-                <div>
-                  Lat: {c.lat.toFixed(5)}, Lng: {c.lng.toFixed(5)}
-                </div>
+                <div>Lat: {c.lat.toFixed(5)}, Lng: {c.lng.toFixed(5)}</div>
+                {/* ➕ Show resolved council (keeps UX consistent / future-proof) */}
+                <CouncilBadge lat={c.lat} lng={c.lng} />
               </div>
             </Popup>
           </Marker>
@@ -323,13 +326,15 @@ export default function AdminFeedbackMap() {
           f.lat && f.lng ? (
             <Marker key={`f-${f.id}`} position={[Number(f.lat), Number(f.lng)]}>
               <Popup>
-                <div className="text-sm">
+                <div className="text-sm space-y-1">
                   <div className="font-medium">Feedback</div>
                   {f.created_at && (
                     <div className="opacity-70">
                       {new Date(f.created_at).toLocaleString()}
                     </div>
                   )}
+                  {/* ➕ Show council for this feedback location */}
+                  <CouncilBadge lat={Number(f.lat)} lng={Number(f.lng)} />
                 </div>
               </Popup>
             </Marker>
