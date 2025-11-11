@@ -14,7 +14,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     if (mode === "bbox") {
-      // Lightweight: return all councils with geometry & precomputed bbox
       const { data, error } = await supa
         .from("council_geojson")
         .select("id,name,code,geometry");
@@ -38,19 +37,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (one.error) return res.status(404).json({ ok: false, error: "not_found" });
 
       const feature = asFeatureWithBBox(one.data);
+      if (!feature) return res.status(404).json({ ok: false, error: "not_found" });
+
+      const bbox = (feature.properties?.bbox as BBox) || computeBBoxFromGeometry(feature.geometry);
       res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
-      return res.status(200).json({ ok: true, feature, bbox: feature.properties.bbox as BBox });
+      return res.status(200).json({ ok: true, feature, bbox });
     }
 
     if (mode === "point") {
-      // When lat/lng provided -> nearest feature; else -> list of centroids
       const lat = num(req.query.lat);
       const lng = num(req.query.lng);
 
-      // Load centroids (live preferred, fallback to static)
       const cents = await loadCentroids();
 
-      // NO lat/lng: return the list of centroids for map markers
+      // NO lat/lng: list of centroids (include code)
       if (!isFinite(lat) || !isFinite(lng)) {
         const items = cents
           .map((r) => {
@@ -69,7 +69,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({ ok: true, items });
       }
 
-      // WITH lat/lng: return nearest council's full GeoJSON feature (+bbox)
+      // WITH lat/lng: nearest council feature (+bbox)
       const nearest = nearestByPoint(
         cents
           .map((r) => ({ ...r, ...extractLngLat(r) }))
@@ -88,8 +88,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (one.error) return res.status(500).json({ ok: false, error: one.error.message });
 
       const feature = asFeatureWithBBox(one.data);
+      // It's valid to respond with null feature here; just avoid reading properties if null
+      const bbox = feature ? ((feature.properties?.bbox as BBox) || computeBBoxFromGeometry(feature.geometry)) : null;
+
       res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
-      return res.status(200).json({ ok: true, feature, bbox: feature.properties.bbox as BBox });
+      return res.status(200).json({ ok: true, feature, bbox });
     }
 
     return res.status(400).json({ ok: false, error: "Unknown mode" });
@@ -136,7 +139,6 @@ function num(v: any): number {
 
 /** Try live first, then static */
 async function loadCentroids(): Promise<any[]> {
-  // Try council_centroids_live (columns may be: id,name,code,lat,lng)
   const live = await supa
     .from("council_centroids_live")
     .select("id,name,code,lat,lng,centroid")
@@ -144,14 +146,12 @@ async function loadCentroids(): Promise<any[]> {
 
   if (!live.error && live.data && live.data.length) return live.data;
 
-  // Fallback to council_centroids (columns may be: id,name,code,centroid)
   const stat = await supa
     .from("council_centroids")
     .select("id,name,code,lat,lng,centroid")
     .limit(5000);
 
   if (stat.error) {
-    // Return empty on failure; caller will handle
     return [];
   }
   return stat.data || [];
@@ -159,10 +159,8 @@ async function loadCentroids(): Promise<any[]> {
 
 /** Extract a usable lng/lat from various shapes/columns */
 function extractLngLat(r: any): { lng: number; lat: number } | null {
-  // Direct numeric columns
   if (isFinite(r?.lng) && isFinite(r?.lat)) return { lng: Number(r.lng), lat: Number(r.lat) };
 
-  // Common alternates
   const lng =
     firstFinite(r?.lon, r?.long, r?.longitude) ??
     (Array.isArray(r?.centroid?.coordinates) ? Number(r.centroid.coordinates[0]) : undefined);
@@ -201,6 +199,7 @@ function nearestByPoint(rows: any[], [lng, lat]: [number, number]) {
 /** Compute [minLng,minLat,maxLng,maxLat] from a GeoJSON Polygon/MultiPolygon */
 function computeBBoxFromGeometry(geom: any): BBox {
   let minX = 180, minY = 90, maxX = -180, maxY = -90;
+
   const scan = (coords: number[][][]) => {
     for (const ring of coords) {
       for (const pt of ring) {
