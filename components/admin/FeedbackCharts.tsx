@@ -1,37 +1,24 @@
+// components/admin/FeedbackCharts.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import dynamic from "next/dynamic";
-
-// Recharts (client-only)
-const ResponsiveContainer = dynamic(
-  () => import("recharts").then((m) => m.ResponsiveContainer),
-  { ssr: false }
-);
-const BarChart = dynamic(() => import("recharts").then((m) => m.BarChart), { ssr: false });
-const Bar = dynamic(() => import("recharts").then((m) => m.Bar), { ssr: false });
-const XAxis = dynamic(() => import("recharts").then((m) => m.XAxis), { ssr: false });
-const YAxis = dynamic(() => import("recharts").then((m) => m.YAxis), { ssr: false });
-const Tooltip = dynamic(() => import("recharts").then((m) => m.Tooltip), { ssr: false });
-const Legend = dynamic(() => import("recharts").then((m) => m.Legend), { ssr: false });
-
-const LineChart = dynamic(() => import("recharts").then((m) => m.LineChart), { ssr: false });
-const Line = dynamic(() => import("recharts").then((m) => m.Line), { ssr: false });
-
-const PieChart = dynamic(() => import("recharts").then((m) => m.PieChart), { ssr: false });
-const Pie = dynamic(() => import("recharts").then((m) => m.Pie), { ssr: false });
-const Cell = dynamic(() => import("recharts").then((m) => m.Cell), { ssr: false });
+import {
+  ResponsiveContainer,
+  BarChart, Bar, XAxis, YAxis, Tooltip, Legend,
+  LineChart, Line,
+  PieChart, Pie, Cell,
+} from "recharts";
 
 type Row = {
-  ts: string;            // ISO date/time
+  ts: string;                       // ISO date/time
   vote?: "good" | "neutral" | "bad" | string;
-  mlScore?: number | string;
-  source?: string;
+  mlScore?: number | string | null;
+  source?: string | null;
 };
 
 type RangeKey = "7d" | "30d" | "all";
 
-// ---------- CSV helpers ----------
+/* ---------------- CSV helpers ---------------- */
 function esc(v: any) {
   const s = v == null ? "" : String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -50,12 +37,12 @@ function downloadCSV(filename: string, csv: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-export default function AdminFeedbackCharts() {
+export default function FeedbackCharts() {
   const [rows, setRows] = useState<Row[]>([]);
   const [range, setRange] = useState<RangeKey>("7d");
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
 
-  // Fetch once
+  // Fetch feedback once (increase limit if you like)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -66,20 +53,19 @@ export default function AdminFeedbackCharts() {
         if (cancelled) return;
         const items: Row[] = (data?.rows || data || []).map((d: any) => ({
           ts: d.ts ?? d.created_at ?? d.time ?? "",
-          vote: (d.vote ?? "").toLowerCase(),
-          mlScore: d.mlScore != null ? Number(d.mlScore) : null,
+          vote: (d.vote ?? d.sentiment ?? "").toLowerCase(),
+          mlScore: d.mlScore ?? d.mlscore ?? null,
           source: d.source ?? "unknown",
         }));
         setRows(items.filter((x) => x.ts));
-      } catch {}
-      finally {
+      } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Date helpers
+  /* ---------------- range filter ---------------- */
   const startCutoff = useMemo(() => {
     if (range === "all") return null;
     const now = new Date();
@@ -98,7 +84,7 @@ export default function AdminFeedbackCharts() {
     });
   }, [rows, startCutoff]);
 
-  // Aggregate by day (stacked + avg)
+  /* ---------------- aggregates ---------------- */
   const byDay = useMemo(() => {
     const map = new Map<string, { date: string; good: number; neutral: number; bad: number; avg: number; n: number }>();
     for (const r of filtered) {
@@ -109,8 +95,8 @@ export default function AdminFeedbackCharts() {
 
       const bucket = map.get(key)!;
       const v = (r.vote || "").toLowerCase();
-      if (v === "good") bucket.good += 1;
-      else if (v === "bad") bucket.bad += 1;
+      if (v === "good" || v === "positive") bucket.good += 1;
+      else if (v === "bad" || v === "negative") bucket.bad += 1;
       else bucket.neutral += 1;
 
       const ms = Number(r.mlScore);
@@ -122,7 +108,6 @@ export default function AdminFeedbackCharts() {
     return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered]);
 
-  // By source (donut)
   const bySource = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filtered) {
@@ -132,14 +117,14 @@ export default function AdminFeedbackCharts() {
     return [...map.entries()].map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // ---------- Export handlers ----------
-  const dayLabels = byDay.map((d) => d.date);
-  const stackedGood = byDay.map((d) => d.good);
+  /* ---------------- export data ---------------- */
+  const dayLabels  = byDay.map((d) => d.date);
+  const stackedGood    = byDay.map((d) => d.good);
   const stackedNeutral = byDay.map((d) => d.neutral);
-  const stackedBad = byDay.map((d) => d.bad);
-  const dayAvg = byDay.map((d) => +d.avg.toFixed(3));
-  const sourceLabels = bySource.map((s) => s.name);
-  const sourceValues = bySource.map((s) => s.value);
+  const stackedBad     = byDay.map((d) => d.bad);
+  const dayAvg         = byDay.map((d) => +d.avg.toFixed(3));
+  const sourceLabels   = bySource.map((s) => s.name);
+  const sourceValues   = bySource.map((s) => s.value);
 
   const safeRangeTag = range === "all" ? "all" : range;
   const todayTag = new Date().toISOString().slice(0, 10);
@@ -157,40 +142,28 @@ export default function AdminFeedbackCharts() {
       toCSV(["date", "positive", "neutral", "negative", "total"], rows)
     );
   };
-
   const exportAvg = () => {
     downloadCSV(
       `avg_ml_score_${safeRangeTag}_${todayTag}.csv`,
       toCSV(["date", "avg_ml_score"], dayLabels.map((d, i) => [d, dayAvg[i] ?? 0]))
     );
   };
-
   const exportSources = () => {
     downloadCSV(
       `sources_${safeRangeTag}_${todayTag}.csv`,
       toCSV(["source", "count"], sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0]))
     );
   };
-
   const exportAll = () => {
     const a = toCSV(
       ["date", "positive", "neutral", "negative", "total"],
       dayLabels.map((d, i) => [
-        d,
-        stackedGood[i] ?? 0,
-        stackedNeutral[i] ?? 0,
-        stackedBad[i] ?? 0,
+        d, stackedGood[i] ?? 0, stackedNeutral[i] ?? 0, stackedBad[i] ?? 0,
         (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0),
       ])
     );
-    const b = toCSV(
-      ["date", "avg_ml_score"],
-      dayLabels.map((d, i) => [d, dayAvg[i] ?? 0])
-    );
-    const c = toCSV(
-      ["source", "count"],
-      sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0])
-    );
+    const b = toCSV(["date", "avg_ml_score"], dayLabels.map((d, i) => [d, dayAvg[i] ?? 0]));
+    const c = toCSV(["source", "count"], sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0]));
     const merged =
       "Daily Feedback (stacked)\r\n" + a +
       "\r\n\r\nAvg ML Score by Day\r\n" + b +
@@ -198,27 +171,19 @@ export default function AdminFeedbackCharts() {
     downloadCSV(`analytics_${safeRangeTag}_${todayTag}.csv`, merged);
   };
 
+  /* ---------------- render ---------------- */
   return (
     <div className="w-full">
+      {/* Range + Export */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <div className="font-medium text-lg">Analytics</div>
 
         <div className="ml-auto flex gap-2">
-          <button
-            className={`px-3 py-1 rounded-full border ${range === "7d" ? "bg-black text-white" : "bg-white"}`}
-            onClick={() => setRange("7d")}
-          >7 days</button>
-          <button
-            className={`px-3 py-1 rounded-full border ${range === "30d" ? "bg-black text-white" : "bg-white"}`}
-            onClick={() => setRange("30d")}
-          >30 days</button>
-          <button
-            className={`px-3 py-1 rounded-full border ${range === "all" ? "bg-black text-white" : "bg-white"}`}
-            onClick={() => setRange("all")}
-          >All</button>
+          <button className={`px-3 py-1 rounded-full border ${range==="7d" ? "bg-black text-white":"bg-white"}`} onClick={() => setRange("7d")}>7 days</button>
+          <button className={`px-3 py-1 rounded-full border ${range==="30d" ? "bg-black text-white":"bg-white"}`} onClick={() => setRange("30d")}>30 days</button>
+          <button className={`px-3 py-1 rounded-full border ${range==="all" ? "bg-black text-white":"bg-white"}`} onClick={() => setRange("all")}>All</button>
         </div>
 
-        {/* Export buttons */}
         <div className="flex gap-2 w-full lg:w-auto">
           <button className="px-3 py-1 rounded-full border" onClick={exportDaily}>Export Daily</button>
           <button className="px-3 py-1 rounded-full border" onClick={exportAvg}>Export Avg ML</button>
@@ -270,14 +235,7 @@ export default function AdminFeedbackCharts() {
           <div style={{ width: "100%", height: 260 }}>
             <ResponsiveContainer>
               <PieChart>
-                <Pie
-                  data={bySource}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={60}
-                  outerRadius={90}
-                  paddingAngle={2}
-                >
+                <Pie data={bySource} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} paddingAngle={2}>
                   {bySource.map((_e, i) => <Cell key={i} />)}
                 </Pie>
                 <Tooltip />
