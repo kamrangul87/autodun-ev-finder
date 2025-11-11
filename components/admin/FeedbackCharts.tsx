@@ -1,55 +1,40 @@
-// components/admin/FeedbackCharts.tsx
 "use client";
 
-import { useMemo, useState } from "react";
-import {
-  Chart as ChartJS,
-  CategoryScale, LinearScale, PointElement, LineElement,
-  BarElement, ArcElement, Tooltip, Legend, TimeScale
-} from "chart.js";
-import { Pie, Bar, Line } from "react-chartjs-2";
-import type { FeedbackPoint } from "./FeedbackMap";
+import { useEffect, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 
-ChartJS.register(
-  CategoryScale, LinearScale, PointElement, LineElement,
-  BarElement, ArcElement, Tooltip, Legend, TimeScale
+// Recharts (client-only)
+const ResponsiveContainer = dynamic(
+  () => import("recharts").then((m) => m.ResponsiveContainer),
+  { ssr: false }
 );
+const BarChart = dynamic(() => import("recharts").then((m) => m.BarChart), { ssr: false });
+const Bar = dynamic(() => import("recharts").then((m) => m.Bar), { ssr: false });
+const XAxis = dynamic(() => import("recharts").then((m) => m.XAxis), { ssr: false });
+const YAxis = dynamic(() => import("recharts").then((m) => m.YAxis), { ssr: false });
+const Tooltip = dynamic(() => import("recharts").then((m) => m.Tooltip), { ssr: false });
+const Legend = dynamic(() => import("recharts").then((m) => m.Legend), { ssr: false });
+
+const LineChart = dynamic(() => import("recharts").then((m) => m.LineChart), { ssr: false });
+const Line = dynamic(() => import("recharts").then((m) => m.Line), { ssr: false });
+
+const PieChart = dynamic(() => import("recharts").then((m) => m.PieChart), { ssr: false });
+const Pie = dynamic(() => import("recharts").then((m) => m.Pie), { ssr: false });
+const Cell = dynamic(() => import("recharts").then((m) => m.Cell), { ssr: false });
+
+type Row = {
+  ts: string;            // ISO date/time
+  vote?: "good" | "neutral" | "bad" | string;
+  mlScore?: number | string;
+  source?: string;
+};
 
 type RangeKey = "7d" | "30d" | "all";
 
-function countBy<T extends string | number | undefined>(arr: any[], key: (x: any) => T) {
-  const m = new Map<T, number>();
-  for (const a of arr) {
-    const k = key(a);
-    m.set(k, (m.get(k) ?? 0) + 1);
-  }
-  return m;
-}
-
-// --- Safe access helpers ---
-function getSentiment(p: FeedbackPoint): "positive" | "neutral" | "negative" {
-  const s = String((p as any)?.sentiment ?? (p as any)?.vote ?? "").toLowerCase();
-  if (s === "positive" || s === "good") return "positive";
-  if (s === "negative" || s === "bad") return "negative";
-  return "neutral";
-}
-function getISODate(p: FeedbackPoint): string | null {
-  const raw = String((p as any)?.createdAt ?? (p as any)?.ts ?? (p as any)?.time ?? "");
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10); // YYYY-MM-DD
-}
-function getMlScore(p: FeedbackPoint): number | null {
-  const v = (p as any)?.mlScore ?? (p as any)?.mlscore ?? null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-// --- CSV helpers ---
+// ---------- CSV helpers ----------
 function esc(v: any) {
   const s = v == null ? "" : String(v);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 function toCSV(headers: string[], rows: (string | number)[][]) {
   const lines = [headers.map(esc).join(",")];
@@ -65,142 +50,175 @@ function downloadCSV(filename: string, csv: string) {
   document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) {
+export default function AdminFeedbackCharts() {
+  const [rows, setRows] = useState<Row[]>([]);
   const [range, setRange] = useState<RangeKey>("7d");
+  const [loading, setLoading] = useState<boolean>(false);
 
-  // Filter by date range
-  const filtered = useMemo(() => {
-    if (range === "all") return points ?? [];
+  // Fetch once
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const r = await fetch("/api/admin/feedback?limit=5000", { cache: "no-store" });
+        const data = await r.json();
+        if (cancelled) return;
+        const items: Row[] = (data?.rows || data || []).map((d: any) => ({
+          ts: d.ts ?? d.created_at ?? d.time ?? "",
+          vote: (d.vote ?? "").toLowerCase(),
+          mlScore: d.mlScore != null ? Number(d.mlScore) : null,
+          source: d.source ?? "unknown",
+        }));
+        setRows(items.filter((x) => x.ts));
+      } catch {}
+      finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Date helpers
+  const startCutoff = useMemo(() => {
+    if (range === "all") return null;
     const now = new Date();
-    const start = new Date(now);
-    if (range === "7d") start.setDate(start.getDate() - 6);
-    if (range === "30d") start.setDate(start.getDate() - 29);
-    start.setHours(0, 0, 0, 0);
+    const d = new Date(now);
+    if (range === "7d") d.setDate(d.getDate() - 6);
+    if (range === "30d") d.setDate(d.getDate() - 29);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }, [range]);
 
-    return (points ?? []).filter((p) => {
-      const raw = String((p as any)?.createdAt ?? (p as any)?.ts ?? (p as any)?.time ?? "");
-      const d = new Date(raw);
-      return !isNaN(d.getTime()) && d >= start;
+  const filtered = useMemo(() => {
+    if (!startCutoff) return rows;
+    return rows.filter((r) => {
+      const t = new Date(r.ts);
+      return !isNaN(t.getTime()) && t >= startCutoff!;
     });
-  }, [points, range]);
+  }, [rows, startCutoff]);
 
-  // Sentiment breakdown
-  const sentiments = ["positive", "neutral", "negative"] as const;
-  const sentimentCounts = useMemo(() => {
-    const arr = [0, 0, 0];
-    for (const p of filtered) {
-      const s = getSentiment(p);
-      if (s === "positive") arr[0] += 1;
-      else if (s === "neutral") arr[1] += 1;
-      else arr[2] += 1;
+  // Aggregate by day (stacked + avg)
+  const byDay = useMemo(() => {
+    const map = new Map<string, { date: string; good: number; neutral: number; bad: number; avg: number; n: number }>();
+    for (const r of filtered) {
+      const d = new Date(r.ts);
+      if (isNaN(d.getTime())) continue;
+      const key = d.toISOString().slice(0, 10);
+      if (!map.has(key)) map.set(key, { date: key, good: 0, neutral: 0, bad: 0, avg: 0, n: 0 });
+
+      const bucket = map.get(key)!;
+      const v = (r.vote || "").toLowerCase();
+      if (v === "good") bucket.good += 1;
+      else if (v === "bad") bucket.bad += 1;
+      else bucket.neutral += 1;
+
+      const ms = Number(r.mlScore);
+      if (!isNaN(ms)) {
+        bucket.avg = (bucket.avg * bucket.n + ms) / (bucket.n + 1);
+        bucket.n += 1;
+      }
     }
-    return arr;
+    return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
   }, [filtered]);
 
-  // Sources
-  const sourcesMap = useMemo(() => countBy(filtered, (p) => ((p as any)?.source ?? "unknown")), [filtered]);
-  const sourceLabels = useMemo(() => Array.from(sourcesMap.keys()), [sourcesMap]);
-  const sourceValues = useMemo(() => Array.from(sourcesMap.values()), [sourcesMap]);
-
-  // By-day aggregations
-  const { dayLabels, stackedGood, stackedNeutral, stackedBad, dayAvg } = useMemo(() => {
-    type Acc = { good: number; neutral: number; bad: number; sum: number; n: number };
-    const map = new Map<string, Acc>();
-
-    for (const p of filtered) {
-      const day = getISODate(p);
-      if (!day) continue;
-      if (!map.has(day)) map.set(day, { good: 0, neutral: 0, bad: 0, sum: 0, n: 0 });
-
-      const acc = map.get(day)!;
-      const s = getSentiment(p);
-      if (s === "positive") acc.good += 1;
-      else if (s === "negative") acc.bad += 1;
-      else acc.neutral += 1;
-
-      const ms = getMlScore(p);
-      if (ms !== null) { acc.sum += ms; acc.n += 1; }
+  // By source (donut)
+  const bySource = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of filtered) {
+      const s = (r.source || "unknown").toLowerCase();
+      map.set(s, (map.get(s) || 0) + 1);
     }
-
-    const labels = Array.from(map.keys()).sort();
-    const good = labels.map((d) => map.get(d)!.good);
-    const neutral = labels.map((d) => map.get(d)!.neutral);
-    const bad = labels.map((d) => map.get(d)!.bad);
-    const avg = labels.map((d) => {
-      const a = map.get(d)!; return a.n ? +(a.sum / a.n).toFixed(3) : 0;
-    });
-
-    return { dayLabels: labels, stackedGood: good, stackedNeutral: neutral, stackedBad: bad, dayAvg: avg };
+    return [...map.entries()].map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // Chart configs
-  const stackedData = {
-    labels: dayLabels,
-    datasets: [
-      { label: "Positive", data: stackedGood, stack: "s" as const },
-      { label: "Neutral", data: stackedNeutral, stack: "s" as const },
-      { label: "Negative", data: stackedBad, stack: "s" as const },
-    ],
-  };
-  const stackedOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: true }, tooltip: { enabled: true } },
-    scales: { x: { stacked: true as const }, y: { stacked: true as const, ticks: { precision: 0 } } },
-  };
-  const lineData = {
-    labels: dayLabels,
-    datasets: [{ label: "Avg ML Score", data: dayAvg, tension: 0.25, pointRadius: 0 }],
-  };
-  const lineOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: true }, tooltip: { enabled: true } },
-    scales: { y: { min: 0, max: 1 } },
-  };
-  const sourcePie = { labels: sourceLabels, datasets: [{ data: sourceValues }] };
-  const sentimentPie = { labels: ["Positive", "Neutral", "Negative"], datasets: [{ data: sentimentCounts }] };
+  // ---------- Export handlers ----------
+  const dayLabels = byDay.map((d) => d.date);
+  const stackedGood = byDay.map((d) => d.good);
+  const stackedNeutral = byDay.map((d) => d.neutral);
+  const stackedBad = byDay.map((d) => d.bad);
+  const dayAvg = byDay.map((d) => +d.avg.toFixed(3));
+  const sourceLabels = bySource.map((s) => s.name);
+  const sourceValues = bySource.map((s) => s.value);
 
-  // Exports
   const safeRangeTag = range === "all" ? "all" : range;
   const todayTag = new Date().toISOString().slice(0, 10);
+
   const exportDaily = () => {
     const rows = dayLabels.map((d, i) => [
-      d, stackedGood[i] ?? 0, stackedNeutral[i] ?? 0, stackedBad[i] ?? 0,
+      d,
+      stackedGood[i] ?? 0,
+      stackedNeutral[i] ?? 0,
+      stackedBad[i] ?? 0,
       (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0),
     ]);
-    downloadCSV(`daily_feedback_${safeRangeTag}_${todayTag}.csv`,
-      toCSV(["date", "positive", "neutral", "negative", "total"], rows));
+    downloadCSV(
+      `daily_feedback_${safeRangeTag}_${todayTag}.csv`,
+      toCSV(["date", "positive", "neutral", "negative", "total"], rows)
+    );
   };
+
   const exportAvg = () => {
-    downloadCSV(`avg_ml_score_${safeRangeTag}_${todayTag}.csv`,
-      toCSV(["date", "avg_ml_score"], dayLabels.map((d, i) => [d, dayAvg[i] ?? 0])));
+    downloadCSV(
+      `avg_ml_score_${safeRangeTag}_${todayTag}.csv`,
+      toCSV(["date", "avg_ml_score"], dayLabels.map((d, i) => [d, dayAvg[i] ?? 0]))
+    );
   };
+
   const exportSources = () => {
-    downloadCSV(`sources_${safeRangeTag}_${todayTag}.csv`,
-      toCSV(["source", "count"], sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0])));
+    downloadCSV(
+      `sources_${safeRangeTag}_${todayTag}.csv`,
+      toCSV(["source", "count"], sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0]))
+    );
   };
+
   const exportAll = () => {
-    const a = toCSV(["date", "positive", "neutral", "negative", "total"],
-      dayLabels.map((d, i) => [d, stackedGood[i] ?? 0, stackedNeutral[i] ?? 0, stackedBad[i] ?? 0,
-        (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0)]));
-    const b = toCSV(["date", "avg_ml_score"], dayLabels.map((d, i) => [d, dayAvg[i] ?? 0]));
-    const c = toCSV(["source", "count"], sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0]));
-    const merged = "Daily Feedback (stacked)\r\n" + a + "\r\n\r\nAvg ML Score by Day\r\n" + b +
-                   "\r\n\r\nFeedback by Source\r\n" + c + "\r\n";
+    const a = toCSV(
+      ["date", "positive", "neutral", "negative", "total"],
+      dayLabels.map((d, i) => [
+        d,
+        stackedGood[i] ?? 0,
+        stackedNeutral[i] ?? 0,
+        stackedBad[i] ?? 0,
+        (stackedGood[i] ?? 0) + (stackedNeutral[i] ?? 0) + (stackedBad[i] ?? 0),
+      ])
+    );
+    const b = toCSV(
+      ["date", "avg_ml_score"],
+      dayLabels.map((d, i) => [d, dayAvg[i] ?? 0])
+    );
+    const c = toCSV(
+      ["source", "count"],
+      sourceLabels.map((n, i) => [n, sourceValues[i] ?? 0])
+    );
+    const merged =
+      "Daily Feedback (stacked)\r\n" + a +
+      "\r\n\r\nAvg ML Score by Day\r\n" + b +
+      "\r\n\r\nFeedback by Source\r\n" + c + "\r\n";
     downloadCSV(`analytics_${safeRangeTag}_${todayTag}.csv`, merged);
   };
 
   return (
     <div className="w-full">
-      {/* Range + Export */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <div className="font-medium text-lg">Analytics</div>
 
         <div className="ml-auto flex gap-2">
-          <button className={`px-3 py-1 rounded-full border ${range==="7d"?"bg-black text-white":"bg-white"}`} onClick={() => setRange("7d")}>7 days</button>
-          <button className={`px-3 py-1 rounded-full border ${range==="30d"?"bg-black text-white":"bg-white"}`} onClick={() => setRange("30d")}>30 days</button>
-          <button className={`px-3 py-1 rounded-full border ${range==="all"?"bg-black text-white":"bg-white"}`} onClick={() => setRange("all")}>All</button>
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "7d" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("7d")}
+          >7 days</button>
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "30d" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("30d")}
+          >30 days</button>
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "all" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("all")}
+          >All</button>
         </div>
 
+        {/* Export buttons */}
         <div className="flex gap-2 w-full lg:w-auto">
           <button className="px-3 py-1 rounded-full border" onClick={exportDaily}>Export Daily</button>
           <button className="px-3 py-1 rounded-full border" onClick={exportAvg}>Export Avg ML</button>
@@ -209,37 +227,67 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
         </div>
       </div>
 
+      {loading && <div className="text-sm opacity-70 mb-3">Loading charts…</div>}
+
       {/* Row 1 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="p-4 rounded-2xl border bg-white">
-          <div className="font-semibold mb-3">Daily Feedback (stacked)</div>
+        <div className="p-3 rounded-2xl border">
+          <div className="font-medium mb-2">Daily Feedback (stacked)</div>
           <div style={{ width: "100%", height: 260 }}>
-            <Bar data={stackedData} options={stackedOpts} />
+            <ResponsiveContainer>
+              <BarChart data={byDay}>
+                <XAxis dataKey="date" />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="good" stackId="s" />
+                <Bar dataKey="neutral" stackId="s" />
+                <Bar dataKey="bad" stackId="s" />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
-        <div className="p-4 rounded-2xl border bg-white">
-          <div className="font-semibold mb-3">Avg ML Score by Day</div>
+
+        <div className="p-3 rounded-2xl border">
+          <div className="font-medium mb-2">Avg ML Score by Day</div>
           <div style={{ width: "100%", height: 260 }}>
-            <Line data={lineData} options={lineOpts} />
+            <ResponsiveContainer>
+              <LineChart data={byDay}>
+                <XAxis dataKey="date" />
+                <YAxis domain={[0, 1]} />
+                <Tooltip />
+                <Line type="monotone" dataKey="avg" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
 
       {/* Row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-        <div className="p-4 rounded-2xl border bg-white">
-          <div className="font-semibold mb-3">Feedback by Source</div>
+        <div className="p-3 rounded-2xl border lg:col-span-1">
+          <div className="font-medium mb-2">Feedback by Source</div>
           <div style={{ width: "100%", height: 260 }}>
-            <Pie data={sourcePie} />
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie
+                  data={bySource}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={60}
+                  outerRadius={90}
+                  paddingAngle={2}
+                >
+                  {bySource.map((_e, i) => <Cell key={i} />)}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
         </div>
-        <div className="p-4 rounded-2xl border bg-white">
-          <div className="font-semibold mb-3">Sentiment Breakdown</div>
-          <div style={{ width: "100%", height: 260 }}>
-            <Pie data={sentimentPie} />
-          </div>
-        </div>
-        <div className="p-4 rounded-2xl border bg-white flex items-center justify-center text-sm opacity-60">
+
+        <div className="lg:col-span-2 p-3 rounded-2xl border flex items-center justify-center text-sm opacity-60">
           Ready for next: “Top councils by feedback”, “Good/Bad heatmap”, etc.
         </div>
       </div>
