@@ -1,5 +1,7 @@
 // components/admin/FeedbackCharts.tsx
 "use client";
+
+import { useMemo, useState } from "react";
 import {
   Chart as ChartJS,
   CategoryScale, LinearScale, PointElement, LineElement,
@@ -13,7 +15,9 @@ ChartJS.register(
   ArcElement, Tooltip, Legend, TimeScale
 );
 
-function countBy<T extends string | number | undefined>(arr: any[], key: (x:any)=>T) {
+type RangeKey = "7d" | "30d" | "all";
+
+function countBy<T extends string | number | undefined>(arr: any[], key: (x: any) => T) {
   const m = new Map<T, number>();
   for (const a of arr) {
     const k = key(a);
@@ -22,43 +26,208 @@ function countBy<T extends string | number | undefined>(arr: any[], key: (x:any)
   return m;
 }
 
+// Normalize sentiment regardless of upstream naming
+function getSentiment(p: any): "positive" | "neutral" | "negative" {
+  const s = (p?.sentiment ?? p?.vote ?? "").toString().toLowerCase();
+  if (s === "positive" || s === "good") return "positive";
+  if (s === "negative" || s === "bad") return "negative";
+  return "neutral";
+}
+
+// Normalize timestamp and mlScore keys
+function getISODate(p: any): string | null {
+  const raw = (p?.createdAt ?? p?.ts ?? p?.time ?? "").toString();
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10); // YYYY-MM-DD
+}
+
+function getMlScore(p: any): number | null {
+  const v = p?.mlScore ?? p?.mlscore ?? null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) {
+  const [range, setRange] = useState<RangeKey>("7d");
+
+  // Filter by range
+  const filtered = useMemo(() => {
+    if (range === "all") return points ?? [];
+    const now = new Date();
+    const start = new Date(now);
+    if (range === "7d") start.setDate(start.getDate() - 6);
+    if (range === "30d") start.setDate(start.getDate() - 29);
+    start.setHours(0, 0, 0, 0);
+    return (points ?? []).filter((p) => {
+      const raw = p?.createdAt ?? p?.ts ?? p?.time ?? "";
+      const d = new Date(raw);
+      return !isNaN(d.getTime()) && d >= start;
+    });
+  }, [points, range]);
+
+  // --- Sentiment totals (for the small donut if you want it) ---
   const sentiments = ["positive", "neutral", "negative"] as const;
-  const sentimentCounts = sentiments.map(s => points.filter(p => p.sentiment === s).length);
+  const sentimentCounts = useMemo(() => {
+    const arr = [0, 0, 0];
+    for (const p of filtered) {
+      const s = getSentiment(p);
+      if (s === "positive") arr[0] += 1;
+      else if (s === "neutral") arr[1] += 1;
+      else arr[2] += 1;
+    }
+    return arr;
+  }, [filtered]);
 
-  const sourcesMap = countBy(points, (p)=> (p.source ?? "unknown"));
-  const sourceLabels = Array.from(sourcesMap.keys());
-  const sourceValues = Array.from(sourcesMap.values());
+  // --- Source distribution (bar or donut) ---
+  const sourcesMap = useMemo(() => countBy(filtered, (p) => (p?.source ?? "unknown")), [filtered]);
+  const sourceLabels = useMemo(() => Array.from(sourcesMap.keys()), [sourcesMap]);
+  const sourceValues = useMemo(() => Array.from(sourcesMap.values()), [sourcesMap]);
 
-  const byDay = new Map<string, number[]>();
-  for (const p of points) {
-    if (!p.createdAt) continue;
-    const day = p.createdAt.slice(0,10);
-    if (!byDay.has(day)) byDay.set(day, []);
-    if (typeof p.mlScore === "number") byDay.get(day)!.push(p.mlScore);
-  }
-  const dayLabels = Array.from(byDay.keys()).sort();
-  const dayAverages = dayLabels.map(d => {
-    const arr = byDay.get(d)!;
-    const sum = arr.reduce((a,b)=>a+b,0);
-    return Math.round((sum / Math.max(1, arr.length)) * 10) / 10;
-  });
+  // --- By day aggregations ---
+  // Stacked bar (positive / neutral / negative per day)
+  // Line (avg ml score per day)
+  const { dayLabels, stackedGood, stackedNeutral, stackedBad, dayAvg } = useMemo(() => {
+    type Acc = {
+      good: number;
+      neutral: number;
+      bad: number;
+      sum: number;
+      n: number;
+    };
+    const map = new Map<string, Acc>();
+
+    for (const p of filtered) {
+      const day = getISODate(p);
+      if (!day) continue;
+      if (!map.has(day)) map.set(day, { good: 0, neutral: 0, bad: 0, sum: 0, n: 0 });
+
+      const acc = map.get(day)!;
+      const s = getSentiment(p);
+      if (s === "positive") acc.good += 1;
+      else if (s === "negative") acc.bad += 1;
+      else acc.neutral += 1;
+
+      const ms = getMlScore(p);
+      if (ms !== null) {
+        acc.sum += ms;
+        acc.n += 1;
+      }
+    }
+
+    const labels = Array.from(map.keys()).sort();
+    const good = labels.map((d) => map.get(d)!.good);
+    const neutral = labels.map((d) => map.get(d)!.neutral);
+    const bad = labels.map((d) => map.get(d)!.bad);
+    const avg = labels.map((d) => {
+      const a = map.get(d)!;
+      return a.n ? +(a.sum / a.n).toFixed(3) : 0;
+    });
+
+    return { dayLabels: labels, stackedGood: good, stackedNeutral: neutral, stackedBad: bad, dayAvg: avg };
+  }, [filtered]);
+
+  // Chart.js datasets (no custom colors; let Chart.js pick)
+  const stackedData = {
+    labels: dayLabels,
+    datasets: [
+      { label: "Positive", data: stackedGood, stack: "s" as const },
+      { label: "Neutral", data: stackedNeutral, stack: "s" as const },
+      { label: "Negative", data: stackedBad, stack: "s" as const },
+    ],
+  };
+  const stackedOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: true }, tooltip: { enabled: true } },
+    scales: { x: { stacked: true as const }, y: { stacked: true as const, ticks: { precision: 0 } } },
+  };
+
+  const lineData = {
+    labels: dayLabels,
+    datasets: [{ label: "Avg ML Score", data: dayAvg, tension: 0.25, pointRadius: 0 }],
+  };
+  const lineOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: true }, tooltip: { enabled: true } },
+    scales: { y: { min: 0, max: 1 } },
+  };
+
+  const sourcePie = {
+    labels: sourceLabels,
+    datasets: [{ data: sourceValues }],
+  };
+  const sentimentPie = {
+    labels: ["Positive", "Neutral", "Negative"],
+    datasets: [{ data: sentimentCounts }],
+  };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="p-4 rounded-2xl border border-gray-200 bg-white">
-        <div className="font-semibold mb-3">Sentiment Breakdown</div>
-        <Pie data={{ labels: ["Positive","Neutral","Negative"], datasets: [{ data: sentimentCounts }] }} />
+    <div className="w-full">
+      {/* Range selector */}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="font-medium text-lg">Analytics</div>
+        <div className="ml-auto flex gap-2">
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "7d" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("7d")}
+          >
+            7 days
+          </button>
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "30d" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("30d")}
+          >
+            30 days
+          </button>
+          <button
+            className={`px-3 py-1 rounded-full border ${range === "all" ? "bg-black text-white" : "bg-white"}`}
+            onClick={() => setRange("all")}
+          >
+            All
+          </button>
+        </div>
       </div>
-      <div className="p-4 rounded-2xl border border-gray-200 bg-white">
-        <div className="font-semibold mb-3">Feedback by Source</div>
-        <Bar data={{ labels: sourceLabels, datasets: [{ label: "Count", data: sourceValues }] }}
-             options={{ responsive: true, maintainAspectRatio: false }} />
+
+      {/* Row 1 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Stacked daily feedback */}
+        <div className="p-4 rounded-2xl border border-gray-200 bg-white">
+          <div className="font-semibold mb-3">Daily Feedback (stacked)</div>
+          <div style={{ width: "100%", height: 260 }}>
+            <Bar data={stackedData} options={stackedOpts} />
+          </div>
+        </div>
+
+        {/* Avg ML score */}
+        <div className="p-4 rounded-2xl border border-gray-200 bg-white">
+          <div className="font-semibold mb-3">Avg ML Score by Day</div>
+          <div style={{ width: "100%", height: 260 }}>
+            <Line data={lineData} options={lineOpts} />
+          </div>
+        </div>
       </div>
-      <div className="p-4 rounded-2xl border border-gray-200 bg-white">
-        <div className="font-semibold mb-3">Avg ML Score by Day</div>
-        <Line data={{ labels: dayLabels, datasets: [{ label: "Avg Score", data: dayAverages }] }}
-              options={{ responsive: true, maintainAspectRatio: false }} />
+
+      {/* Row 2 */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+        <div className="p-4 rounded-2xl border border-gray-200 bg-white">
+          <div className="font-semibold mb-3">Feedback by Source</div>
+          <div style={{ width: "100%", height: 260 }}>
+            <Pie data={sourcePie} />
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl border border-gray-200 bg-white">
+          <div className="font-semibold mb-3">Sentiment Breakdown</div>
+          <div style={{ width: "100%", height: 260 }}>
+            <Pie data={sentimentPie} />
+          </div>
+        </div>
+
+        <div className="p-4 rounded-2xl border border-gray-200 bg-white flex items-center justify-center text-sm opacity-60">
+          Ready for next: “Top councils by feedback”, “Good/Bad heatmap”, etc.
+        </div>
       </div>
     </div>
   );
