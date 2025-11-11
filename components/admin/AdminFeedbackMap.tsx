@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { createClient } from "@supabase/supabase-js";
+import type { LatLngTuple } from "leaflet";
 
 // Lazy-load Leaflet parts to avoid SSR issues
 const MapContainer = dynamic(
@@ -17,7 +18,8 @@ const Popup = dynamic(async () => (await import("react-leaflet")).Popup, { ssr: 
 type CouncilPolygon = {
   id: string | number;
   name?: string;
-  coordinates: number[][][] | number[][][][];
+  // GeoJSON: Polygon | MultiPolygon
+  coordinates: any;
 };
 
 type CouncilCentroid = {
@@ -50,18 +52,30 @@ const uid = () => {
   return Math.random().toString(36).slice(2);
 };
 
-// Accepts GeoJSON Polygon or MultiPolygon coordinates
-// Input: [lng, lat]; Leaflet wants [lat, lng]
-function normalizePolygonCoords(coords: any): number[][][] {
+// A “ring” is an array of [lat,lng] tuples
+type Ring = LatLngTuple[];
+
+/**
+ * normalizePolygonCoords
+ * Accepts GeoJSON Polygon or MultiPolygon:
+ *   - GeoJSON coords are [lng,lat]; Leaflet needs [lat,lng]
+ * Returns: array of outer rings (LatLngTuple[])
+ */
+function normalizePolygonCoords(coords: any): Ring[] {
   if (!coords) return [];
-  // If it's a Polygon -> wrap to look like MultiPolygon for uniformity
-  const asMulti: any[] = Array.isArray(coords?.[0]?.[0]?.[0]) ? coords : [coords];
-  const rings: number[][][] = [];
+  // If Polygon -> wrap to MultiPolygon shape for uniform handling
+  const asMulti = Array.isArray(coords?.[0]?.[0]?.[0]) ? coords : [coords];
+
+  const rings: Ring[] = [];
   for (const poly of asMulti) {
-    if (!Array.isArray(poly?.[0])) continue;
-    // Render outer ring only (holes can be added later if needed)
-    const outer = poly[0].map((p: number[]) => [p[1], p[0]]);
-    rings.push(outer);
+    const outerRaw = poly?.[0];
+    if (!Array.isArray(outerRaw)) continue;
+
+    const outer: Ring = outerRaw
+      .filter((p: any) => Array.isArray(p) && p.length >= 2)
+      .map((p: number[]): LatLngTuple => [p[1], p[0]] as LatLngTuple);
+
+    if (outer.length >= 3) rings.push(outer);
   }
   return rings;
 }
@@ -284,7 +298,7 @@ export default function AdminFeedbackMap() {
           return rings.map((ring, idx) => (
             <Polygon
               key={`${p.id}-${idx}`}
-              positions={ring}
+              positions={ring} // Ring = LatLngTuple[] — exactly what Polygon expects
               pathOptions={{ weight: 1, opacity: 0.6 }}
             />
           ));
