@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
 
-// ✅ NEW: council util
+// ✅ council util + type (CouncilHit includes optional region/country)
 import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
 
 /* ──────────────────────────────────────────────────────────────
@@ -765,7 +765,7 @@ export default function AdminFeedback() {
               )}
             </div>
 
-            {/* Council (NEW, fixes your issue) */}
+            {/* Council (NEW) */}
             <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontWeight: 800 }}>Council</div>
