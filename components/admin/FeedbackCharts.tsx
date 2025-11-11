@@ -11,8 +11,8 @@ import { Pie, Bar, Line } from "react-chartjs-2";
 import type { FeedbackPoint } from "./FeedbackMap";
 
 ChartJS.register(
-  CategoryScale, LinearScale, PointElement, LineElement, BarElement,
-  ArcElement, Tooltip, Legend, TimeScale
+  CategoryScale, LinearScale, PointElement, LineElement,
+  BarElement, ArcElement, Tooltip, Legend, TimeScale
 );
 
 type RangeKey = "7d" | "30d" | "all";
@@ -26,24 +26,32 @@ function countBy<T extends string | number | undefined>(arr: any[], key: (x: any
   return m;
 }
 
-// Normalize sentiment regardless of upstream naming
-function getSentiment(p: any): "positive" | "neutral" | "negative" {
-  const s = (p?.sentiment ?? p?.vote ?? "").toString().toLowerCase();
+// --- Safe access helpers (avoid TS errors on optional/unknown fields) ---
+function getSentiment(p: FeedbackPoint): "positive" | "neutral" | "negative" {
+  const s = String(
+    (p as any)?.sentiment ??
+    (p as any)?.vote ??
+    ""
+  ).toLowerCase();
   if (s === "positive" || s === "good") return "positive";
   if (s === "negative" || s === "bad") return "negative";
   return "neutral";
 }
 
-// Normalize timestamp and mlScore keys
-function getISODate(p: any): string | null {
-  const raw = (p?.createdAt ?? p?.ts ?? p?.time ?? "").toString();
+function getISODate(p: FeedbackPoint): string | null {
+  const raw = String(
+    (p as any)?.createdAt ??
+    (p as any)?.ts ??
+    (p as any)?.time ??
+    ""
+  );
   const d = new Date(raw);
   if (isNaN(d.getTime())) return null;
   return d.toISOString().slice(0, 10); // YYYY-MM-DD
 }
 
-function getMlScore(p: any): number | null {
-  const v = p?.mlScore ?? p?.mlscore ?? null;
+function getMlScore(p: FeedbackPoint): number | null {
+  const v = (p as any)?.mlScore ?? (p as any)?.mlscore ?? null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -51,7 +59,7 @@ function getMlScore(p: any): number | null {
 export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) {
   const [range, setRange] = useState<RangeKey>("7d");
 
-  // Filter by range
+  // Filter by date range
   const filtered = useMemo(() => {
     if (range === "all") return points ?? [];
     const now = new Date();
@@ -59,14 +67,20 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
     if (range === "7d") start.setDate(start.getDate() - 6);
     if (range === "30d") start.setDate(start.getDate() - 29);
     start.setHours(0, 0, 0, 0);
+
     return (points ?? []).filter((p) => {
-      const raw = p?.createdAt ?? p?.ts ?? p?.time ?? "";
+      const raw = String(
+        (p as any)?.createdAt ??
+        (p as any)?.ts ??
+        (p as any)?.time ??
+        ""
+      );
       const d = new Date(raw);
       return !isNaN(d.getTime()) && d >= start;
     });
   }, [points, range]);
 
-  // --- Sentiment totals (for the small donut if you want it) ---
+  // Sentiment breakdown
   const sentiments = ["positive", "neutral", "negative"] as const;
   const sentimentCounts = useMemo(() => {
     const arr = [0, 0, 0];
@@ -79,22 +93,17 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
     return arr;
   }, [filtered]);
 
-  // --- Source distribution (bar or donut) ---
-  const sourcesMap = useMemo(() => countBy(filtered, (p) => (p?.source ?? "unknown")), [filtered]);
+  // Sources
+  const sourcesMap = useMemo(
+    () => countBy(filtered, (p) => ((p as any)?.source ?? "unknown")),
+    [filtered]
+  );
   const sourceLabels = useMemo(() => Array.from(sourcesMap.keys()), [sourcesMap]);
   const sourceValues = useMemo(() => Array.from(sourcesMap.values()), [sourcesMap]);
 
-  // --- By day aggregations ---
-  // Stacked bar (positive / neutral / negative per day)
-  // Line (avg ml score per day)
+  // By-day aggregations for stacked bars and avg line
   const { dayLabels, stackedGood, stackedNeutral, stackedBad, dayAvg } = useMemo(() => {
-    type Acc = {
-      good: number;
-      neutral: number;
-      bad: number;
-      sum: number;
-      n: number;
-    };
+    type Acc = { good: number; neutral: number; bad: number; sum: number; n: number };
     const map = new Map<string, Acc>();
 
     for (const p of filtered) {
@@ -127,7 +136,7 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
     return { dayLabels: labels, stackedGood: good, stackedNeutral: neutral, stackedBad: bad, dayAvg: avg };
   }, [filtered]);
 
-  // Chart.js datasets (no custom colors; let Chart.js pick)
+  // --- Chart configs (no custom colors) ---
   const stackedData = {
     labels: dayLabels,
     datasets: [
@@ -154,14 +163,8 @@ export default function FeedbackCharts({ points }: { points: FeedbackPoint[] }) 
     scales: { y: { min: 0, max: 1 } },
   };
 
-  const sourcePie = {
-    labels: sourceLabels,
-    datasets: [{ data: sourceValues }],
-  };
-  const sentimentPie = {
-    labels: ["Positive", "Neutral", "Negative"],
-    datasets: [{ data: sentimentCounts }],
-  };
+  const sourcePie = { labels: sourceLabels, datasets: [{ data: sourceValues }] };
+  const sentimentPie = { labels: ["Positive", "Neutral", "Negative"], datasets: [{ data: sentimentCounts }] };
 
   return (
     <div className="w-full">
