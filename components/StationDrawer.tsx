@@ -1,4 +1,6 @@
 // components/StationDrawer.tsx
+"use client";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { telemetry, scoreRequested, scoreReturned } from "../utils/telemetry";
@@ -7,6 +9,7 @@ import {
   aggregateToCanonical,
   CONNECTOR_COLORS,
 } from "../lib/connectorCatalog";
+import CouncilBadge from "./admin/CouncilBadge";
 
 /* ─────────────── UX helpers ─────────────── */
 
@@ -295,20 +298,34 @@ export default function StationDrawer({
 
   const s: any = station || {};
   const isCouncil = Boolean(s.isCouncil);
+
   // Address build (line1, town/city, postcode)
   const ai = s.AddressInfo || {};
   const line1 =
-    pick<string>(s, ["address", "AddressLine1"]) ??
-    pick<string>(ai, ["AddressLine1", "Title"]);
+    pick<string>(s, ["address", "AddressLine1"]) ?? pick<string>(ai, ["AddressLine1", "Title"]);
   const town =
-    pick<string>(s, ["town", "city", "Town", "City"]) ??
-    pick<string>(ai, ["Town", "City"]);
+    pick<string>(s, ["town", "city", "Town", "City"]) ?? pick<string>(ai, ["Town", "City"]);
   const postcode =
     pick<string>(s, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
     pick<string>(ai, ["Postcode", "PostalCode"]);
   const fullAddress = [line1, town, postcode].filter(Boolean).join(", ") || "—";
 
   const title = s.name || ai.Title || "Unknown location";
+
+  // Coordinates (robust)
+  const lat: number | null =
+    typeof s.lat === "number"
+      ? s.lat
+      : typeof s.Latitude === "number"
+      ? s.Latitude
+      : null;
+
+  const lng: number | null =
+    typeof s.lng === "number"
+      ? s.lng
+      : typeof s.Longitude === "number"
+      ? s.Longitude
+      : null;
 
   // Connectors (with robust fallbacks)
   const connectors = useMemo(() => normalizeConnectors(s), [s]);
@@ -587,6 +604,31 @@ export default function StationDrawer({
             </button>
           </div>
 
+          {/* Coordinates + Council */}
+          <div style={cardRow}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <div>
+                <div style={rowLabel}>Lat</div>
+                <div style={rowValue}>
+                  {typeof lat === "number" ? lat : "—"}
+                </div>
+              </div>
+              <div>
+                <div style={rowLabel}>Lng</div>
+                <div style={rowValue}>
+                  {typeof lng === "number" ? lng : "—"}
+                </div>
+              </div>
+            </div>
+
+            {/* council badge */}
+            {typeof lat === "number" && typeof lng === "number" && (
+              <div style={{ marginTop: 8 }}>
+                <CouncilBadge lat={lat} lng={lng} />
+              </div>
+            )}
+          </div>
+
           {/* Connectors */}
           <div style={cardRow}>
             <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
@@ -813,7 +855,7 @@ export default function StationDrawer({
                 if (!station) return;
                 const chosen = vote ?? "up";
                 onFeedbackSubmit?.(s.id, chosen, comment.trim() || undefined);
-                alert('Thanks! Your feedback was submitted.'); // ✅ one-line confirmation
+                alert("Thanks! Your feedback was submitted."); // ✅ one-line confirmation
               }}
             >
               Submit feedback
