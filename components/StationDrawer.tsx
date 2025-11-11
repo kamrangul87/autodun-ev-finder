@@ -9,7 +9,7 @@ import {
   aggregateToCanonical,
   CONNECTOR_COLORS,
 } from "../lib/connectorCatalog";
-import CouncilBadge from "./admin/CouncilBadge";
+// ❌ removed: CouncilBadge import
 
 /* ─────────────── UX helpers ─────────────── */
 
@@ -312,7 +312,7 @@ export default function StationDrawer({
 
   const title = s.name || ai.Title || "Unknown location";
 
-  // Coordinates (still computed for Directions/CouncilBadge, but not shown)
+  // Coordinates (kept for Directions; not displayed)
   const lat: number | null =
     typeof s.lat === "number"
       ? s.lat
@@ -330,7 +330,7 @@ export default function StationDrawer({
   // Connectors (with robust fallbacks)
   const connectors = useMemo(() => normalizeConnectors(s), [s]);
 
-  // total count label: try explicit sums, then known OCM fields, then council fallback
+  // total count label
   const totalNum = useMemo(() => {
     const totals = [
       sumConnectors(connectors),
@@ -349,7 +349,7 @@ export default function StationDrawer({
 
   const totalLabel = totalNum !== null ? String(totalNum) : "Unknown";
 
-  // canonical breakdown (CCS / CHAdeMO / Type 2), if we can map types
+  // canonical breakdown
   const canonical = useMemo(() => {
     if (!Array.isArray(connectors) || !connectors.length) return [];
     return aggregateToCanonical(
@@ -407,7 +407,7 @@ export default function StationDrawer({
       return;
     }
 
-    // Feature engineering (robust fallbacks)
+    // Feature engineering
     const power_kw =
       safeNumber(
         pick<number>(s, ["PowerKW", "powerKW"]),
@@ -483,7 +483,7 @@ export default function StationDrawer({
       setAiScore(score);
       if (typeof score === "number") {
         saveToCache(s, score);
-        onAiScore?.(s.id, score); // bubble up to update heat weights
+        onAiScore?.(s.id, score);
       }
       scoreReturned({
         stationId: s.id,
@@ -503,7 +503,6 @@ export default function StationDrawer({
 
   if (!open) return null;
 
-  // helpers for UI label
   const scoreLabel =
     aiScore == null
       ? ""
@@ -604,14 +603,7 @@ export default function StationDrawer({
             </button>
           </div>
 
-          {/* Council (Lat/Lng hidden; we still pass them to CouncilBadge if available) */}
-          <div style={cardRow}>
-            {typeof lat === "number" && typeof lng === "number" ? (
-              <CouncilBadge lat={lat} lng={lng} />
-            ) : (
-              <div style={{ fontSize: 12, color: "#6b7280" }}>No coordinates available.</div>
-            )}
-          </div>
+          {/* ❌ Council section removed */}
 
           {/* Connectors */}
           <div style={cardRow}>
@@ -679,7 +671,7 @@ export default function StationDrawer({
                       width: 10,
                       height: 10,
                       borderRadius: 999,
-                      background: "#9ca3af", // gray bullet for unknown
+                      background: "#9ca3af",
                       display: "inline-block",
                       flex: "0 0 10px",
                     }}
@@ -718,7 +710,12 @@ export default function StationDrawer({
             </a>
             <button
               onClick={() => {
-                const text = s.name || fullAddress || (typeof lat === "number" && typeof lng === "number" ? `${lat}, ${lng}` : "");
+                const text =
+                  s.name ||
+                  fullAddress ||
+                  (typeof lat === "number" && typeof lng === "number"
+                    ? `${lat}, ${lng}`
+                    : "");
                 navigator.clipboard?.writeText(String(text));
               }}
               style={secondaryBtn}
