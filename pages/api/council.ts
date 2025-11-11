@@ -1,13 +1,23 @@
 // pages/api/council.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
+import type { Feature, Geometry } from "geojson";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supa = createClient(url, serviceRole, { auth: { persistSession: false } });
 
 type BBox = [number, number, number, number]; // [minLng,minLat,maxLng,maxLat]
-type FC = { type: "FeatureCollection"; features: any[] };
+type FC = { type: "FeatureCollection"; features: CouncilFeature[] };
+
+type CouncilProps = {
+  id: any;
+  name: any;
+  code: any;
+  bbox?: BBox; // <-- explicitly part of the props type
+};
+
+type CouncilFeature = Feature<Geometry, CouncilProps>;
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const mode = String(req.query.mode || "bbox");
@@ -39,7 +49,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const feature = asFeatureWithBBox(one.data);
       if (!feature) return res.status(404).json({ ok: false, error: "not_found" });
 
-      const bbox = (feature.properties?.bbox as BBox) || computeBBoxFromGeometry(feature.geometry);
+      const bbox: BBox =
+        feature.properties?.bbox || computeBBoxFromGeometry(feature.geometry);
+
       res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
       return res.status(200).json({ ok: true, feature, bbox });
     }
@@ -77,7 +89,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         [lng, lat]
       );
 
-      if (!nearest) return res.status(200).json({ ok: true, feature: null });
+      if (!nearest) {
+        res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+        return res.status(200).json({ ok: true, feature: null, bbox: null });
+      }
 
       const one = await supa
         .from("council_geojson")
@@ -88,8 +103,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (one.error) return res.status(500).json({ ok: false, error: one.error.message });
 
       const feature = asFeatureWithBBox(one.data);
-      // It's valid to respond with null feature here; just avoid reading properties if null
-      const bbox = feature ? ((feature.properties?.bbox as BBox) || computeBBoxFromGeometry(feature.geometry)) : null;
+      const bbox: BBox | null = feature
+        ? feature.properties?.bbox || computeBBoxFromGeometry(feature.geometry)
+        : null;
 
       res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
       return res.status(200).json({ ok: true, feature, bbox });
@@ -105,30 +121,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 /* ---------- helpers ---------- */
 
 function asFC(rows: any[]): FC {
-  return { type: "FeatureCollection", features: (rows || []).map(asFeature).filter(Boolean) };
+  return {
+    type: "FeatureCollection",
+    features: (rows || []).map(asFeature).filter(Boolean) as CouncilFeature[],
+  };
 }
 
 function asFCWithBboxes(rows: any[]): FC {
   return {
     type: "FeatureCollection",
-    features: (rows || []).map(asFeatureWithBBox).filter(Boolean),
+    features: (rows || []).map(asFeatureWithBBox).filter(Boolean) as CouncilFeature[],
   };
 }
 
-function asFeature(r: any) {
+function asFeature(r: any): CouncilFeature | null {
   if (!r) return null;
   return {
     type: "Feature",
     properties: { id: r.id, name: r.name, code: r.code },
-    geometry: r.geometry,
+    geometry: r.geometry as Geometry,
   };
 }
 
-function asFeatureWithBBox(r: any) {
+function asFeatureWithBBox(r: any): CouncilFeature | null {
   const f = asFeature(r);
   if (!f) return null;
   const bbox = computeBBoxFromGeometry(f.geometry);
-  (f as any).properties.bbox = bbox;
+  f.properties.bbox = bbox; // safe: bbox exists in CouncilProps
   return f;
 }
 
@@ -197,7 +216,7 @@ function nearestByPoint(rows: any[], [lng, lat]: [number, number]) {
 }
 
 /** Compute [minLng,minLat,maxLng,maxLat] from a GeoJSON Polygon/MultiPolygon */
-function computeBBoxFromGeometry(geom: any): BBox {
+function computeBBoxFromGeometry(geom: Geometry | null | undefined): BBox {
   let minX = 180, minY = 90, maxX = -180, maxY = -90;
 
   const scan = (coords: number[][][]) => {
@@ -215,12 +234,12 @@ function computeBBoxFromGeometry(geom: any): BBox {
   if (!geom) return [minX, minY, maxX, maxY];
 
   if (geom.type === "Polygon") {
-    scan(geom.coordinates as number[][][]);
+    scan((geom as any).coordinates as number[][][]);
   } else if (geom.type === "MultiPolygon") {
-    for (const poly of geom.coordinates as number[][][][]) scan(poly as any);
-  } else if (geom.type === "GeometryCollection" && Array.isArray(geom.geometries)) {
-    for (const g of geom.geometries) {
-      const b = computeBBoxFromGeometry(g);
+    for (const poly of (geom as any).coordinates as number[][][][]) scan(poly as any);
+  } else if (geom.type === "GeometryCollection" && Array.isArray((geom as any).geometries)) {
+    for (const g of (geom as any).geometries) {
+      const b = computeBBoxFromGeometry(g as Geometry);
       minX = Math.min(minX, b[0]);
       minY = Math.min(minY, b[1]);
       maxX = Math.max(maxX, b[2]);
