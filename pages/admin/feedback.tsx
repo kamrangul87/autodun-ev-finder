@@ -1,6 +1,10 @@
 // pages/admin/feedback.tsx
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import type React from "react";
+
+// ✅ NEW: council util
+import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
 
 /* ──────────────────────────────────────────────────────────────
    Client-only components (avoid SSR “window is not defined”)
@@ -121,6 +125,10 @@ export default function AdminFeedback() {
   // focus on the MAIN map (optional)
   const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
   const [focusKey, setFocusKey] = useState(0);
+
+  // ✅ NEW: council state for the drawer
+  const [council, setCouncil] = useState<CouncilHit | null>(null);
+  const [councilLoading, setCouncilLoading] = useState(false);
 
   // table pagination
   const [page, setPage] = useState(1);
@@ -326,6 +334,22 @@ export default function AdminFeedback() {
       createdAt: selected.ts || undefined,
     };
   }, [selected]);
+
+  // ✅ NEW: fetch council for the selected item
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCouncil(null);
+      if (!selected || !Number.isFinite(selected.lat ?? NaN) || !Number.isFinite(selected.lng ?? NaN)) return;
+      setCouncilLoading(true);
+      const hit = await getCouncilAtPoint(Number(selected.lat), Number(selected.lng));
+      if (alive) {
+        setCouncil(hit);
+        setCouncilLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [selected?.lat, selected?.lng]);
 
   /* Pagination slice */
   const total = filteredRows.length;
@@ -734,8 +758,6 @@ export default function AdminFeedback() {
                   onClick={() => {
                     setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 14 });
                     setFocusKey((k) => k + 1);
-                    // also close drawer to show main map if you want:
-                    // setSelected(null);
                   }}
                 >
                   Zoom on main map
@@ -743,6 +765,51 @@ export default function AdminFeedback() {
               )}
             </div>
 
+            {/* Council (NEW, fixes your issue) */}
+            <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontWeight: 800 }}>Council</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    style={miniBtn}
+                    onClick={() => council?.code && copy(council.code)}
+                    disabled={!council?.code}
+                    title="Copy council code"
+                  >
+                    Copy code
+                  </button>
+                  {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
+                    <button
+                      style={miniBtn}
+                      onClick={() => {
+                        setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 11 });
+                        setFocusKey((k) => k + 1);
+                      }}
+                      title="Zoom to council area"
+                    >
+                      Zoom
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!(Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN)) ? (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No coordinates on this feedback.</div>
+              ) : councilLoading ? (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>Looking up council…</div>
+              ) : council ? (
+                <div style={{ marginTop: 6, fontSize: 14 }}>
+                  <div><span style={{ color: "#6b7280" }}>Name:</span> {council.name}</div>
+                  {council.code && <div><span style={{ color: "#6b7280" }}>Code:</span> {council.code}</div>}
+                  {council.region && <div><span style={{ color: "#6b7280" }}>Region:</span> {council.region}</div>}
+                  {council.country && <div><span style={{ color: "#6b7280" }}>Country:</span> {council.country}</div>}
+                </div>
+              ) : (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No council found for this point.</div>
+              )}
+            </div>
+
+            {/* Comment */}
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Comment</div>
               <div style={{ padding: 10, border: "1px solid #e5e7eb", borderRadius: 10, whiteSpace: "pre-wrap" }}>
@@ -750,6 +817,7 @@ export default function AdminFeedback() {
               </div>
             </div>
 
+            {/* ML Score */}
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>ML Score</div>
               <div>
