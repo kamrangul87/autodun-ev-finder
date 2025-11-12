@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
-import type { Map as LeafletMap } from "leaflet"; // type only is safe
+import type { Map as LeafletMap } from "leaflet"; // type-only import (safe in SSR)
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/router";
 
@@ -53,7 +53,7 @@ const supabase = createClient(
 export default function AdminFeedbackPage() {
   const router = useRouter();
 
-  // Filter state
+  // Filters
   const [filters, setFilters] = useState<Filters>(() => {
     const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : undefined;
     return {
@@ -76,13 +76,11 @@ export default function AdminFeedbackPage() {
   // Map
   const mapRef = useRef<LeafletMap | null>(null);
 
-  // Client-only Leaflet icon setup (no SSR import)
+  // Fix Leaflet marker icons (client-only; no top-level Leaflet import)
   useEffect(() => {
-    let mounted = true;
     (async () => {
       if (typeof window === "undefined") return;
       const L = await import("leaflet");
-      // fix default marker icons
       // @ts-ignore
       delete (L.Icon.Default.prototype as any)._getIconUrl;
       L.Icon.Default.mergeOptions({
@@ -90,9 +88,7 @@ export default function AdminFeedbackPage() {
         iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
         shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
       });
-      return () => { mounted = false; };
     })();
-    return () => { /* noop */ };
   }, []);
 
   const fitToResults = async () => {
@@ -106,6 +102,14 @@ export default function AdminFeedbackPage() {
     const b = L.latLngBounds(pts);
     map.fitBounds(b.pad(0.2));
   };
+
+  // Drawer state
+  const [openRow, setOpenRow] = useState<FeedbackRow | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpenRow(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // URL sync (optional + shallow)
   useEffect(() => {
@@ -210,7 +214,6 @@ export default function AdminFeedbackPage() {
     });
   }, [rows]);
 
-  // CSV export
   const exportCSV = () => {
     const cols: (keyof FeedbackRow)[] = [
       "created_at", "label", "ml_score", "model", "source", "station_name", "comment", "lat", "lng",
@@ -321,7 +324,6 @@ export default function AdminFeedbackPage() {
               <option>All</option>
               <option value="lgbm-v1">lgbm-v1</option>
               <option value="baseline">baseline</option>
-              {/* add your models */}
             </select>
           </Labeled>
 
@@ -333,7 +335,7 @@ export default function AdminFeedbackPage() {
               <option>All</option>
               <option value="sheet">sheet</option>
               <option value="admin">admin</option>
-              {/* add your sources */}
+              <option value="unknown">unknown</option>
             </select>
           </Labeled>
 
@@ -383,7 +385,11 @@ export default function AdminFeedbackPage() {
           >
             <TileLayer url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"} />
             {rows.filter(r => r.lat && r.lng).map(r => (
-              <Marker key={r.id} position={[r.lat!, r.lng!]}>
+              <Marker
+                key={r.id}
+                position={[r.lat!, r.lng!]}
+                eventHandlers={{ click: () => setOpenRow(r) }}
+              >
                 <Popup>
                   <div style={{ fontWeight: 600, marginBottom: 6 }}>{r.station_name || "Station"}</div>
                   <div><b>Label:</b> {r.label ?? "-"}</div>
@@ -401,7 +407,7 @@ export default function AdminFeedbackPage() {
         </div>
       </section>
 
-      {/* Table (simple preview) */}
+      {/* Table */}
       <section style={card}>
         <h3 style={{ marginBottom: 12 }}>
           Results {loading ? "· Loading…" : `· ${rows.length}`}
@@ -423,8 +429,34 @@ export default function AdminFeedbackPage() {
                   <td style={td}>{r.ml_score ?? "-"}</td>
                   <td style={td}>{r.model ?? "-"}</td>
                   <td style={td}>{r.source ?? "-"}</td>
-                  <td style={td}>{r.station_name ?? "-"}</td>
-                  <td style={td}>{r.comment ?? "-"}</td>
+
+                  {/* CLICKABLE STATION */}
+                  <td style={td}>
+                    {r.station_name ? (
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setOpenRow(r); }}
+                        style={{ textDecoration: "underline", color: "#2563eb" }}
+                        title="Open details"
+                      >
+                        {r.station_name}
+                      </a>
+                    ) : "-"}
+                  </td>
+
+                  {/* CLICKABLE COMMENT */}
+                  <td style={td}>
+                    {r.comment ? (
+                      <a
+                        href="#"
+                        onClick={(e) => { e.preventDefault(); setOpenRow(r); }}
+                        style={{ textDecoration: "underline", color: "#2563eb" }}
+                        title="Open details"
+                      >
+                        {r.comment}
+                      </a>
+                    ) : "-"}
+                  </td>
                 </tr>
               ))}
               {!rows.length && !loading && (
@@ -434,6 +466,45 @@ export default function AdminFeedbackPage() {
           </table>
         </div>
       </section>
+
+      {/* Drawer */}
+      {openRow && (
+        <div style={drawer}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <h3 style={{ margin: 0 }}>Feedback Details</h3>
+            <button onClick={() => setOpenRow(null)} style={btn}>✕</button>
+          </div>
+
+          <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+            <Row label="Date">{new Date(openRow.created_at).toLocaleString()}</Row>
+            <Row label="Label">{openRow.label ?? "-"}</Row>
+            <Row label="Score">{openRow.ml_score ?? "-"}</Row>
+            <Row label="Model">{openRow.model ?? "-"}</Row>
+            <Row label="Source">{openRow.source ?? "-"}</Row>
+            <Row label="Station">{openRow.station_name ?? "-"}</Row>
+            <Row label="Comment">{openRow.comment ?? "-"}</Row>
+            {(openRow.lat && openRow.lng) && (
+              <Row label="Coords">{openRow.lat}, {openRow.lng}</Row>
+            )}
+            {(openRow.lat && openRow.lng) && (
+              <div>
+                <button
+                  style={btnPrimary}
+                  onClick={async () => {
+                    const map = mapRef.current;
+                    if (!map) return;
+                    const L = await import("leaflet");
+                    const b = L.latLngBounds([[openRow.lat!, openRow.lng!], [openRow.lat!, openRow.lng!]]);
+                    map.fitBounds(b.pad(0.4));
+                  }}
+                >
+                  Zoom to on map
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -457,7 +528,16 @@ function Labeled({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-// ────────────────────── Inline styles (kept minimal) ──────────────────────
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
+      <div style={{ color: "#6b7280" }}>{label}</div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+// ────────────────────── Inline styles ──────────────────────
 const card: React.CSSProperties = {
   marginTop: 16,
   padding: 16,
@@ -509,4 +589,18 @@ const td: React.CSSProperties = {
   padding: "10px 8px",
   fontSize: 13,
   verticalAlign: "top",
+};
+
+const drawer: React.CSSProperties = {
+  position: "fixed",
+  top: 0,
+  right: 0,
+  height: "100vh",
+  width: 380,
+  background: "#fff",
+  borderLeft: "1px solid #e5e7eb",
+  boxShadow: "0 0 30px rgba(0,0,0,0.06)",
+  padding: 16,
+  zIndex: 1000,
+  overflowY: "auto",
 };
