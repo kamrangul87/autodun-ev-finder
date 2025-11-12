@@ -23,47 +23,105 @@ const escapeCSV = (v: unknown) => {
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // pull the same data as /api/admin/feedback
-  const r = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL ?? ""}/api/admin/feedback`, { cache: "no-store" });
-  const j = (await r.json()) as ApiData;
-  const rows = j.rows ?? [];
+  try {
+    // Build a reliable origin (works on Vercel and locally)
+    const proto =
+      (req.headers["x-forwarded-proto"] as string) ||
+      (req.headers["x-forwarded-protocol"] as string) ||
+      "https";
+    const host = (req.headers["x-forwarded-host"] as string) || req.headers.host;
+    const origin = `${proto}://${host}`;
 
-  const out: string[] = [];
-  out.push(
-    ["time_iso","station","vote","mlScore","comment","source","lat","lng","model","userAgent","council_name","council_code","region","country"].join(",")
-  );
+    // Optional: forward some simple filters to the internal API
+    const { from, to, min, max, model, source, q } = req.query;
+    const params = new URLSearchParams();
+    if (typeof from === "string" && from) params.set("from", from);
+    if (typeof to === "string" && to) params.set("to", to);
+    if (typeof min === "string" && min) params.set("min", min);
+    if (typeof max === "string" && max) params.set("max", max);
+    if (typeof model === "string" && model) params.set("model", model);
+    if (typeof source === "string" && source) params.set("source", source);
+    if (typeof q === "string" && q) params.set("q", q);
 
-  for (const r of rows) {
-    let council = { name: "", code: "", region: "", country: "" };
-    if (Number.isFinite(r.lat ?? NaN) && Number.isFinite(r.lng ?? NaN)) {
-      try {
-        const hit = await getCouncilAtPoint(Number(r.lat), Number(r.lng));
-        if (hit) council = {
-          name: hit.name ?? "",
-          code: hit.code ?? "",
-          region: (hit as any).region ?? "",
-          country: (hit as any).country ?? "",
-        };
-      } catch {}
+    const url = `${origin}/api/admin/feedback${params.toString() ? `?${params.toString()}` : ""}`;
+
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`Upstream /api/admin/feedback failed: ${r.status} ${txt}`);
     }
-    const row = [
-      r.ts ? new Date(r.ts).toISOString() : "",
-      r.stationId ?? "",
-      r.vote ?? "",
-      r.mlScore ?? "",
-      r.comment ?? "",
-      r.source ?? "",
-      Number.isFinite(r.lat ?? NaN) ? (r.lat as number).toFixed(6) : "",
-      Number.isFinite(r.lng ?? NaN) ? (r.lng as number).toFixed(6) : "",
-      r.modelVersion ?? "",
-      r.userAgent ?? "",
-      council.name, council.code, council.region, council.country,
-    ].map(escapeCSV).join(",");
-    out.push(row);
-  }
+    const j = (await r.json()) as ApiData;
+    const rows = j.rows ?? [];
 
-  const csv = "\uFEFF" + out.join("\n");
-  res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="feedback-export-${Date.now()}.csv"`);
-  res.status(200).send(csv);
+    const header = [
+      "time_iso",
+      "station",
+      "vote",
+      "mlScore",
+      "comment",
+      "source",
+      "lat",
+      "lng",
+      "model",
+      "userAgent",
+      "council_name",
+      "council_code",
+      "region",
+      "country",
+    ].join(",");
+
+    const out: string[] = [header];
+
+    for (const rr of rows) {
+      let council = { name: "", code: "", region: "", country: "" };
+      const latOk = Number.isFinite(rr.lat ?? NaN);
+      const lngOk = Number.isFinite(rr.lng ?? NaN);
+
+      if (latOk && lngOk) {
+        try {
+          const hit = await getCouncilAtPoint(Number(rr.lat), Number(rr.lng));
+          if (hit) {
+            council = {
+              name: hit.name ?? "",
+              code: hit.code ?? "",
+              // region/country are optional in your type
+              region: (hit as any).region ?? "",
+              country: (hit as any).country ?? "",
+            };
+          }
+        } catch {
+          // swallow council lookup errors per row
+        }
+      }
+
+      const row = [
+        rr.ts ? new Date(rr.ts).toISOString() : "",
+        rr.stationId ?? "",
+        rr.vote ?? "",
+        rr.mlScore ?? "",
+        rr.comment ?? "",
+        rr.source ?? "",
+        latOk ? (rr.lat as number).toFixed(6) : "",
+        lngOk ? (rr.lng as number).toFixed(6) : "",
+        rr.modelVersion ?? "",
+        rr.userAgent ?? "",
+        council.name,
+        council.code,
+        council.region,
+        council.country,
+      ]
+        .map(escapeCSV)
+        .join(",");
+
+      out.push(row);
+    }
+
+    const csv = "\uFEFF" + out.join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="feedback-export-${Date.now()}.csv"`);
+    res.status(200).send(csv);
+  } catch (e: any) {
+    console.error("[feedback-export]", e?.message || e);
+    res.status(500).json({ ok: false, error: e?.message || "export failed" });
+  }
 }
