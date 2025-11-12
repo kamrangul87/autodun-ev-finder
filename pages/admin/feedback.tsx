@@ -1,10 +1,14 @@
 // pages/admin/feedback.tsx
-import { useEffect, useMemo, useState } from "react";
+"use client";
+
+import { useEffect, useMemo, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
 
 // ✅ council util + type (CouncilHit includes optional region/country)
 import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
+// ✅ NEW: lightweight browser Supabase client
+import { supabaseBrowser } from "../../lib/supabase-browser";
 
 /* ──────────────────────────────────────────────────────────────
    Client-only components (avoid SSR “window is not defined”)
@@ -126,13 +130,17 @@ export default function AdminFeedback() {
   const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
   const [focusKey, setFocusKey] = useState(0);
 
-  // ✅ NEW: council state for the drawer
+  // ✅ council state for the drawer
   const [council, setCouncil] = useState<CouncilHit | null>(null);
   const [councilLoading, setCouncilLoading] = useState(false);
 
   // table pagination
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  // ✅ NEW: realtime refresh trigger
+  const [rtTick, setRtTick] = useState(0);
+  const triggerRefresh = useCallback(() => setRtTick((t) => t + 1), []);
 
   async function load() {
     setLoading(true);
@@ -147,9 +155,37 @@ export default function AdminFeedback() {
     }
   }
 
+  // initial load + refresh when rtTick bumps
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rtTick]);
+
+  // ✅ NEW: Supabase realtime subscription (feedback + council centroids)
+  useEffect(() => {
+    const supabase = supabaseBrowser();
+
+    // debounce multiple quick events into one refresh
+    let timer: any = null;
+    const schedule = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        triggerRefresh();
+      }, 800);
+    };
+
+    const channel = supabase
+      .channel("realtime-admin")
+      .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, schedule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "council_centroids_live" }, schedule)
+      .subscribe();
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [triggerRefresh]);
 
   // close on ESC
   useEffect(() => {
