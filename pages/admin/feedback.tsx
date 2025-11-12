@@ -2,8 +2,6 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
-import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/router";
 
 // ✅ council util + type (CouncilHit includes optional region/country)
 import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
@@ -103,19 +101,6 @@ function relativeTime(iso?: string | null) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   URL query helpers (for filter sync)
-   ────────────────────────────────────────────────────────────── */
-function getString(q: any, k: string, d = ""): string {
-  const v = q?.[k];
-  return typeof v === "string" ? v : d;
-}
-function getNum(q: any, k: string, d: number): number {
-  const v = q?.[k];
-  const n = Number(v);
-  return Number.isFinite(n) ? n : d;
-}
-
-/* ──────────────────────────────────────────────────────────────
    Page
    ────────────────────────────────────────────────────────────── */
 export default function AdminFeedback() {
@@ -130,6 +115,10 @@ export default function AdminFeedback() {
   const [dateTo, setDateTo] = useState<string>("");
   const [q, setQ] = useState<string>("");
   const [sort, setSort] = useState<SortKey>("recent");
+
+  // ✅ NEW: model & source filters
+  const [model, setModel] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
 
   // drawer state
   const [selected, setSelected] = useState<Row | null>(null);
@@ -148,8 +137,6 @@ export default function AdminFeedback() {
   // table pagination
   const [page, setPage] = useState(1);
   const pageSize = 50;
-
-  const router = useRouter();
 
   async function load() {
     setLoading(true);
@@ -177,45 +164,50 @@ export default function AdminFeedback() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  /* ── Hydrate filters from URL once ─────────────────────────── */
-  useEffect(() => {
-    if (!router.isReady) return;
-    const query = router.query;
-
-    setSentiment(getString(query, "sent", "all") as Sentiment);
-    setScoreMin(getNum(query, "smin", 0));
-    setScoreMax(getNum(query, "smax", 100));
-    setDateFrom(getString(query, "from", ""));
-    setDateTo(getString(query, "to", ""));
-    setQ(getString(query, "q", ""));
-    setSort(getString(query, "sort", "recent") as SortKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router.isReady]);
-
-  /* ── Keep URL in sync when filters change (shallow replace) ── */
-  useEffect(() => {
-    if (!router.isReady) return;
-
-    const params = new URLSearchParams();
-    if (sentiment !== "all") params.set("sent", sentiment);
-    if (scoreMin !== 0) params.set("smin", String(scoreMin));
-    if (scoreMax !== 100) params.set("smax", String(scoreMax));
-    if (dateFrom) params.set("from", dateFrom);
-    if (dateTo) params.set("to", dateTo);
-    if (q.trim()) params.set("q", q.trim());
-    if (sort !== "recent") params.set("sort", sort);
-
-    const qs = params.toString();
-    const href = qs ? `/admin/feedback?${qs}` : `/admin/feedback`;
-
-    if (href !== router.asPath) {
-      router.replace(href, undefined, { shallow: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, router.isReady]);
-
   const rows = data?.rows || [];
   const stats = data?.stats;
+
+  // ✅ NEW: distinct models & sources for dropdowns
+  const modelOptions = useMemo(() => {
+    const s = new Set<string>();
+    rows.forEach((r) => r.modelVersion && s.add(r.modelVersion));
+    return Array.from(s).sort();
+  }, [rows]);
+
+  const sourceOptions = useMemo(() => {
+    const s = new Set<string>();
+    rows.forEach((r) => r.source && s.add(r.source));
+    return Array.from(s).sort();
+  }, [rows]);
+
+  // ✅ NEW: Today counters
+  const today = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    let total = 0,
+      good = 0,
+      bad = 0,
+      sumScore = 0,
+      scoreN = 0;
+
+    for (const r of rows) {
+      const t = r.ts ? new Date(r.ts) : null;
+      if (!t || t < start || t > end) continue;
+      total++;
+      const v = (r.vote || "").toLowerCase();
+      if (v === "good" || v === "up" || v === "positive") good++;
+      if (v === "bad" || v === "down" || v === "negative") bad++;
+      if (typeof r.mlScore === "number" && isFinite(r.mlScore)) {
+        sumScore += r.mlScore;
+        scoreN++;
+      }
+    }
+    const avgScore = scoreN ? sumScore / scoreN : null;
+    return { total, good, bad, avgScore };
+  }, [rows]);
 
   /* Adapt rows → points for map/charts */
   const points: FeedbackPoint[] = useMemo(() => {
@@ -257,6 +249,7 @@ export default function AdminFeedback() {
         const s = v === "good" || v === "up" ? "positive" : v === "bad" || v === "down" ? "negative" : "neutral";
         if (s !== sentiment) return false;
       }
+
       // score range
       if (Number.isFinite(r.mlScore ?? NaN)) {
         const s = r.mlScore as number;
@@ -268,6 +261,16 @@ export default function AdminFeedback() {
         const t = r.ts ? new Date(r.ts) : null;
         if (from && (!t || t < from)) return false;
         if (to && (!t || t > to)) return false;
+      }
+
+      // ✅ NEW: model
+      if (model !== "all") {
+        if ((r.modelVersion || "") !== model) return false;
+      }
+
+      // ✅ NEW: source
+      if (sourceFilter !== "all") {
+        if ((r.source || "") !== sourceFilter) return false;
       }
 
       // search
@@ -297,7 +300,7 @@ export default function AdminFeedback() {
     });
 
     return out;
-  }, [rows, sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort]);
+  }, [rows, sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter]);
 
   /* Keep map/charts in sync with filtered table */
   const filteredPoints: FeedbackPoint[] = useMemo(() => {
@@ -314,7 +317,7 @@ export default function AdminFeedback() {
   // reset pagination when filters change
   useEffect(() => {
     setPage(1);
-  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, filteredRows.length]);
+  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter, filteredRows.length]);
 
   /* ── CSV Export (filtered rows) ─────────────────────────────── */
   function escapeCSV(v: unknown): string {
@@ -323,7 +326,11 @@ export default function AdminFeedback() {
     return s;
   }
   function toISO(ts: string | null): string {
-    try { return ts ? new Date(ts).toISOString() : ""; } catch { return ts ?? ""; }
+    try {
+      return ts ? new Date(ts).toISOString() : "";
+    } catch {
+      return ts ?? "";
+    }
   }
   function buildCSV(rowsIn: Row[]): string {
     const header = [
@@ -376,7 +383,8 @@ export default function AdminFeedback() {
     return {
       id: String(selected.stationId ?? "sel"),
       stationName: selected.stationId ? String(selected.stationId) : undefined,
-      lat, lng,
+      lat,
+      lng,
       mlScore: typeof selected.mlScore === "number" ? selected.mlScore : undefined,
       sentiment:
         (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up"
@@ -389,7 +397,7 @@ export default function AdminFeedback() {
     };
   }, [selected]);
 
-  // ✅ NEW: fetch council for the selected item
+  // fetch council for the selected item
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -402,48 +410,10 @@ export default function AdminFeedback() {
         setCouncilLoading(false);
       }
     })();
-    return () => { alive = false; };
-  }, [selected?.lat, selected?.lng]);
-
-  /* ──────────────────────────────────────────────────────────────
-     🔔 Realtime: feedback + council_centroids_live (debounced)
-     ────────────────────────────────────────────────────────────── */
-  useEffect(() => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (!url || !anon) return; // realtime only when both are present
-
-    const client = createClient(url, anon, {
-      realtime: { params: { eventsPerSecond: 5 } },
-    });
-
-    // debounce loader to avoid rapid multiple refreshes
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const schedule = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        load();
-      }, 250);
-    };
-
-    const channel = client
-      .channel("realtime-admin")
-      .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, schedule)
-      .on("postgres_changes", { event: "*", schema: "public", table: "council_centroids_live" }, schedule)
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          console.log("[realtime] subscribed to feedback + council_centroids_live");
-        }
-      });
-
     return () => {
-      try {
-        client.removeChannel(channel);
-        client.realtime.disconnect();
-      } catch {}
+      alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // run once
+  }, [selected?.lat, selected?.lng]);
 
   /* Pagination slice */
   const total = filteredRows.length;
@@ -463,7 +433,9 @@ export default function AdminFeedback() {
       <>
         {parts.map((chunk, i) =>
           chunk.toLowerCase() === needle.toLowerCase() ? (
-            <mark key={i} style={{ background: "#fde68a", padding: "0 2px", borderRadius: 3 }}>{chunk}</mark>
+            <mark key={i} style={{ background: "#fde68a", padding: "0 2px", borderRadius: 3 }}>
+              {chunk}
+            </mark>
           ) : (
             <span key={i}>{chunk}</span>
           )
@@ -483,14 +455,20 @@ export default function AdminFeedback() {
         <StatCard label="Bad" value={fmt(stats?.bad)} />
         <StatCard label="% Good" value={pct(stats?.goodPct)} />
         <StatCard label="Avg ML Score" value={score(stats?.avgScore)} />
-        <button onClick={load} style={refreshBtn}>{loading ? "Refreshing…" : "Refresh"}</button>
+        {/* ✅ NEW: today counters */}
+        <StatCard label="Today · Good" value={fmt(today.good)} />
+        <StatCard label="Today · Bad" value={fmt(today.bad)} />
+        <StatCard label="Today · Avg ML" value={score(today.avgScore)} />
+        <button onClick={load} style={refreshBtn}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </button>
       </div>
 
       {/* Filters */}
       <div style={panel}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 800 }}>Filters</div>
-        <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={() => {
                 setSentiment("all");
@@ -500,16 +478,21 @@ export default function AdminFeedback() {
                 setDateTo("");
                 setQ("");
                 setSort("recent");
+                setModel("all");        // reset new filters
+                setSourceFilter("all"); // reset new filters
               }}
               style={refreshBtn}
             >
               Reset
             </button>
-            <button onClick={downloadCSV} style={primaryBtn}>Export CSV</button>
+            <button onClick={downloadCSV} style={primaryBtn}>
+              Export CSV
+            </button>
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 10 }}>
+        {/* ✅ grid expanded to 8 columns */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, minmax(0,1fr))", gap: 10 }}>
           {/* Sentiment */}
           <div>
             <div style={label}>Sentiment</div>
@@ -569,6 +552,32 @@ export default function AdminFeedback() {
               style={input}
             />
           </div>
+
+          {/* ✅ NEW: Model */}
+          <div>
+            <div style={label}>Model</div>
+            <select value={model} onChange={(e) => setModel(e.target.value)} style={input}>
+              <option value="all">All</option>
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* ✅ NEW: Source */}
+          <div>
+            <div style={label}>Source</div>
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={input}>
+              <option value="all">All</option>
+              {sourceOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
@@ -586,9 +595,7 @@ export default function AdminFeedback() {
 
       {/* Timeline */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>
-          Timeline (last {stats?.timeline?.length ?? 0} days)
-        </div>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Timeline (last {stats?.timeline?.length ?? 0} days)</div>
         {!stats || !stats.timeline.length ? (
           <div style={{ color: "#6b7280", fontSize: 14 }}>No data yet.</div>
         ) : (
@@ -608,22 +615,13 @@ export default function AdminFeedback() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ fontWeight: 800 }}>Feedback Map</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button
-              style={refreshBtn}
-              onClick={() => setFitKey((k) => k + 1)}
-              title="Fit map to current results"
-            >
+            <button style={refreshBtn} onClick={() => setFitKey((k) => k + 1)} title="Fit map to current results">
               Fit to results
             </button>
           </div>
         </div>
         <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapClient
-            points={filteredPoints}
-            fitToPointsKey={fitKey}
-            focusPoint={focusPoint}
-            focusKey={focusKey}
-          />
+          <MapClient points={filteredPoints} fitToPointsKey={fitKey} focusPoint={focusPoint} focusKey={focusKey} />
         </div>
       </div>
 
@@ -640,16 +638,22 @@ export default function AdminFeedback() {
 
           {/* Pagination controls */}
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
-              {total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}
-            </span>
-            <button style={miniBtn} onClick={() => setPage(1)} disabled={clampedPage <= 1}>« First</button>
-            <button style={miniBtn} onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={clampedPage <= 1}>‹ Prev</button>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>{total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}</span>
+            <button style={miniBtn} onClick={() => setPage(1)} disabled={clampedPage <= 1}>
+              « First
+            </button>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={clampedPage <= 1}>
+              ‹ Prev
+            </button>
             <div style={{ fontSize: 12, fontWeight: 700, minWidth: 60, textAlign: "center" }}>
               Page {clampedPage}/{totalPages}
             </div>
-            <button style={miniBtn} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={clampedPage >= totalPages}>Next ›</button>
-            <button style={miniBtn} onClick={() => setPage(totalPages)} disabled={clampedPage >= totalPages}>Last »</button>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={clampedPage >= totalPages}>
+              Next ›
+            </button>
+            <button style={miniBtn} onClick={() => setPage(totalPages)} disabled={clampedPage >= totalPages}>
+              Last »
+            </button>
           </div>
         </div>
 
@@ -678,16 +682,12 @@ export default function AdminFeedback() {
                 const stationStr = r.stationId ?? "—";
                 return (
                   <tr key={rowKey} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
-                    <td title={r.ts || ""}>
-                      {r.ts ? new Date(r.ts).toLocaleString() : "—"}
-                    </td>
+                    <td title={r.ts || ""}>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
 
                     {/* Station + copy */}
                     <td>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-                          {highlight(stationStr)}
-                        </code>
+                        <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{highlight(stationStr)}</code>
                         {r.stationId != null && (
                           <button
                             style={copyIconBtn}
@@ -704,12 +704,7 @@ export default function AdminFeedback() {
                     </td>
 
                     {/* Vote */}
-                    <td
-                      style={{
-                        fontWeight: 700,
-                        color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b",
-                      }}
-                    >
+                    <td style={{ fontWeight: 700, color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b" }}>
                       {r.vote || "—"}
                     </td>
 
@@ -816,10 +811,10 @@ export default function AdminFeedback() {
           <div style={backdrop} onClick={() => setSelected(null)} />
           <aside style={drawer}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>
-                Station {selected.stationId ?? "—"}
-              </div>
-              <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">✕</button>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>Station {selected.stationId ?? "—"}</div>
+              <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">
+                ✕
+              </button>
             </div>
 
             {/* Relative + absolute time */}
@@ -832,17 +827,20 @@ export default function AdminFeedback() {
               <Info label="Source" value={selected.source || "—"} />
               <Info label="Model" value={selected.modelVersion || "—"} />
               <Info label="User Agent" value={selected.userAgent || "—"} />
-              <Info label="Lat" value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"} />
-              <Info label="Lng" value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"} />
+              <Info
+                label="Lat"
+                value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"}
+              />
+              <Info
+                label="Lng"
+                value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"}
+              />
             </div>
 
             {/* Copy Station ID / Zoom on main map */}
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               {selected.stationId != null && (
-                <button
-                  style={ghostBtn}
-                  onClick={() => copy(String(selected.stationId))}
-                >
+                <button style={ghostBtn} onClick={() => copy(String(selected.stationId))}>
                   Copy Station ID
                 </button>
               )}
@@ -859,7 +857,7 @@ export default function AdminFeedback() {
               )}
             </div>
 
-            {/* Council (NEW) */}
+            {/* Council */}
             <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ fontWeight: 800 }}>Council</div>
@@ -893,10 +891,24 @@ export default function AdminFeedback() {
                 <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>Looking up council…</div>
               ) : council ? (
                 <div style={{ marginTop: 6, fontSize: 14 }}>
-                  <div><span style={{ color: "#6b7280" }}>Name:</span> {council.name}</div>
-                  {council.code && <div><span style={{ color: "#6b7280" }}>Code:</span> {council.code}</div>}
-                  {council.region && <div><span style={{ color: "#6b7280" }}>Region:</span> {council.region}</div>}
-                  {council.country && <div><span style={{ color: "#6b7280" }}>Country:</span> {council.country}</div>}
+                  <div>
+                    <span style={{ color: "#6b7280" }}>Name:</span> {council.name}
+                  </div>
+                  {council.code && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Code:</span> {council.code}
+                    </div>
+                  )}
+                  {council.region && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Region:</span> {council.region}
+                    </div>
+                  )}
+                  {council.country && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Country:</span> {council.country}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No council found for this point.</div>
@@ -956,10 +968,7 @@ export default function AdminFeedback() {
                   >
                     Directions
                   </button>
-                  <button
-                    style={ghostBtn}
-                    onClick={() => copy(`${selectedPoint.lat},${selectedPoint.lng}`)}
-                  >
+                  <button style={ghostBtn} onClick={() => copy(`${selectedPoint.lat},${selectedPoint.lng}`)}>
                     Copy coords
                   </button>
                   {isNumericId(selected?.stationId) && (
@@ -1151,10 +1160,10 @@ function fmt(n?: number | null) {
   return (n ?? 0).toLocaleString();
 }
 function pct(p?: number | null) {
-  return p == null ? "—" : `${Math.round(p * 100)}%`;
+  return p == null ? "—" : `${Math.round((p as number) * 100)}%`;
 }
 function score(s?: number | null) {
-  return s == null ? "—" : s.toFixed(3);
+  return s == null ? "—" : (s as number).toFixed(3);
 }
 function escapeRegExp(s: string) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
