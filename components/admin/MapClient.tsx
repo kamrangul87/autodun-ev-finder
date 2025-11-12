@@ -1,11 +1,12 @@
 // components/admin/MapClient.tsx
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { MapContainer, TileLayer, Marker, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
+import CouncilLayer from "./CouncilLayer"; // ⬅️ NEW
 
 export type FeedbackPoint = {
   id: string;
@@ -131,13 +132,45 @@ export default function MapClient({
   const center: [number, number] =
     points.length ? [points[0].lat, points[0].lng] : [52.3555, -1.1743]; // UK fallback
 
+  // ⬅️ NEW: council overlay toggle state
+  const [showCouncils, setShowCouncils] = useState(false);
+
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
+      {/* ⬅️ NEW: tiny toggle control (doesn't affect your layout) */}
+      <div
+        style={{
+          position: "absolute",
+          top: 8,
+          left: 8,
+          zIndex: 1000,
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 8,
+          padding: "6px 8px",
+          fontSize: 12,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <input
+          id="councilToggle"
+          type="checkbox"
+          checked={showCouncils}
+          onChange={() => setShowCouncils(v => !v)}
+        />
+        <label htmlFor="councilToggle">Council overlay</label>
+      </div>
+
       <MapContainer center={center} zoom={6} scrollWheelZoom style={{ width: "100%", height: "100%" }}>
         <TileLayer
           attribution="&copy; OpenStreetMap"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
         />
+
+        {/* ⬅️ NEW: optional council polygons */}
+        {showCouncils && <CouncilLayer />}
 
         {/* Imperative fitter / focus */}
         <FitBounds points={points} trigger={fitToPointsKey} />
