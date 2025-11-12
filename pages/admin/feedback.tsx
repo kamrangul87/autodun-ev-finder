@@ -4,20 +4,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
-import type { Map as LeafletMap } from "leaflet"; // type-only import (safe in SSR)
+import type { Map as LeafletMap } from "leaflet"; // type-only import
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/router";
 
-// ────────────────────── Map dynamic imports (avoid SSR issues) ──────────────────────
+// ── Map dynamic imports (SSR-safe) ────────────────────────────────────────────────
 const MapContainer = dynamic(
   async () => (await import("react-leaflet")).MapContainer,
   { ssr: false }
 );
 const TileLayer = dynamic(async () => (await import("react-leaflet")).TileLayer, { ssr: false });
 const Marker = dynamic(async () => (await import("react-leaflet")).Marker, { ssr: false });
-const Popup = dynamic(async () => (await import("react-leaflet")).Popup, { ssr: false });
+const Popup  = dynamic(async () => (await import("react-leaflet")).Popup,  { ssr: false });
 
-// ────────────────────── Types ──────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────────
 type FeedbackRow = {
   id: string;
   created_at: string;
@@ -43,13 +43,13 @@ type Filters = {
   sort: "Recent" | "Oldest" | "Score↑" | "Score↓";
 };
 
-// ────────────────────── Supabase client ──────────────────────
+// ── Supabase ─────────────────────────────────────────────────────────────────────
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL || "",
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
 );
 
-// ────────────────────── Page ──────────────────────
+// ── Page ─────────────────────────────────────────────────────────────────────────
 export default function AdminFeedbackPage() {
   const router = useRouter();
 
@@ -76,7 +76,7 @@ export default function AdminFeedbackPage() {
   // Map
   const mapRef = useRef<LeafletMap | null>(null);
 
-  // Fix Leaflet marker icons (client-only; no top-level Leaflet import)
+  // Fix Leaflet marker icons (client-only)
   useEffect(() => {
     (async () => {
       if (typeof window === "undefined") return;
@@ -94,9 +94,7 @@ export default function AdminFeedbackPage() {
   const fitToResults = async () => {
     const map = mapRef.current;
     if (!map) return;
-    const pts = rows
-      .filter(r => r.lat && r.lng)
-      .map(r => [r.lat!, r.lng!] as [number, number]);
+    const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
     if (!pts.length) return;
     const L = await import("leaflet");
     const b = L.latLngBounds(pts);
@@ -111,7 +109,7 @@ export default function AdminFeedbackPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // URL sync (optional + shallow)
+  // URL sync
   useEffect(() => {
     const q = new URLSearchParams();
     if (filters.sentiment !== "All") q.set("sent", filters.sentiment);
@@ -132,7 +130,7 @@ export default function AdminFeedbackPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(filters)]);
 
-  // Build query from filters
+  // Build query
   function applyFilters(q: any, f: Filters) {
     if (f.sentiment !== "All") q = q.eq("label", f.sentiment.toLowerCase());
     if (Number.isFinite(f.minScore)) q = q.gte("ml_score", f.minScore);
@@ -154,7 +152,7 @@ export default function AdminFeedbackPage() {
     return q;
   }
 
-  // Fetch rows on filters change
+  // Fetch
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -174,7 +172,7 @@ export default function AdminFeedbackPage() {
     return () => { cancelled = true; };
   }, [JSON.stringify(filters)]);
 
-  // Realtime refresh
+  // Realtime
   useEffect(() => {
     const ch = supabase
       .channel("feedback-admin")
@@ -189,16 +187,16 @@ export default function AdminFeedbackPage() {
   const kpi = useMemo(() => {
     const total = rows.length;
     const good = rows.filter(r => r.label === "good").length;
-    const bad = rows.filter(r => r.label === "bad").length;
-    const avg = total ? rows.reduce((a, r) => a + (r.ml_score || 0), 0) / total : 0;
+    const bad  = rows.filter(r => r.label === "bad").length;
+    const avg  = total ? rows.reduce((a, r) => a + (r.ml_score || 0), 0) / total : 0;
     const todayStr = new Date().toDateString();
     const today = rows.filter(r => new Date(r.created_at).toDateString() === todayStr);
     const todayGood = today.filter(r => r.label === "good").length;
-    const todayBad = today.filter(r => r.label === "bad").length;
+    const todayBad  = today.filter(r => r.label === "bad").length;
     return { total, good, bad, pctGood: total ? (good / total) * 100 : 0, avg, todayGood, todayBad };
   }, [rows]);
 
-  // 3-day timeline
+  // Timeline (3d)
   const timeline3d = useMemo(() => {
     const byDay = new Map<string, { count: number; sum: number }>();
     for (const r of rows) {
@@ -214,6 +212,7 @@ export default function AdminFeedbackPage() {
     });
   }, [rows]);
 
+  // CSV
   const exportCSV = () => {
     const cols: (keyof FeedbackRow)[] = [
       "created_at", "label", "ml_score", "model", "source", "station_name", "comment", "lat", "lng",
@@ -247,7 +246,7 @@ export default function AdminFeedbackPage() {
       sort: "Recent",
     });
 
-  // ────────────────────── UI ──────────────────────
+  // ── UI ───────────────────────────────────────────────────────────────────────────
   return (
     <div style={{ padding: "24px", maxWidth: 1180, margin: "0 auto" }}>
       <h1 style={{ fontWeight: 700, fontSize: 28, marginBottom: 16 }}>Autodun Admin · Feedback</h1>
@@ -255,8 +254,8 @@ export default function AdminFeedbackPage() {
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 12 }}>
         <KPI title="Total" value={kpi.total} />
-        <KPI title="Good" value={kpi.good} />
-        <KPI title="Bad" value={kpi.bad} />
+        <KPI title="Good"  value={kpi.good} />
+        <KPI title="Bad"   value={kpi.bad} />
         <KPI title="% Good" value={`${kpi.pctGood.toFixed(0)}%`} />
         <KPI title="Avg ML Score" value={kpi.avg.toFixed(3)} />
         <KPI title="Today · Good" value={kpi.todayGood} />
@@ -361,7 +360,7 @@ export default function AdminFeedbackPage() {
             <div key={row.date} style={{ display: "grid", gridTemplateColumns: "140px 1fr 100px", alignItems: "center", gap: 12, marginBottom: 8 }}>
               <div>{row.date}</div>
               <div style={{ background: "#eee", height: 10, borderRadius: 6 }}>
-                <div style={{ width: `${Math.min(100, row.count * 12)}%`, height: "100%", borderRadius: 6, background: "#4285f4" }} />
+                <div style={{ width: `${Math.min(100, row.count * 12)}%`, height: "100%", borderRadius: 6, background: "#2563eb" }} />
               </div>
               <div style={{ textAlign: "right" }}>Avg ML: {row.avg.toFixed(3)}</div>
             </div>
@@ -376,7 +375,7 @@ export default function AdminFeedbackPage() {
           <h3>Feedback Map</h3>
           <button onClick={fitToResults} style={btn}>Fit to results</button>
         </div>
-        <div style={{ height: 420, borderRadius: 8, overflow: "hidden" }}>
+        <div style={{ height: 420, borderRadius: 12, overflow: "hidden" }}>
           <MapContainer
             ref={mapRef as unknown as React.Ref<any>}
             center={[52.8, -1.6]}
@@ -425,8 +424,16 @@ export default function AdminFeedbackPage() {
               {rows.map(r => (
                 <tr key={r.id}>
                   <td style={td}>{new Date(r.created_at).toLocaleString()}</td>
-                  <td style={td}>{r.label ?? "-"}</td>
-                  <td style={td}>{r.ml_score ?? "-"}</td>
+                  <td style={td}>
+                    {r.label
+                      ? <span style={{...chip, background: r.label === "good" ? "#dcfce7" : "#fee2e2", color: r.label === "good" ? "#166534" : "#991b1b"}}>{r.label}</span>
+                      : "-"}
+                  </td>
+                  <td style={td}>
+                    {typeof r.ml_score === "number"
+                      ? (<span style={{...chip, background:"#eff6ff", color:"#1d4ed8"}}>{r.ml_score}</span>)
+                      : "-"}
+                  </td>
                   <td style={td}>{r.model ?? "-"}</td>
                   <td style={td}>{r.source ?? "-"}</td>
 
@@ -467,49 +474,90 @@ export default function AdminFeedbackPage() {
         </div>
       </section>
 
-      {/* Drawer */}
+      {/* Drawer + overlay */}
       {openRow && (
-        <div style={drawer}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 style={{ margin: 0 }}>Feedback Details</h3>
-            <button onClick={() => setOpenRow(null)} style={btn}>✕</button>
-          </div>
+        <>
+          <div style={backdrop} onClick={() => setOpenRow(null)} />
+          <div style={drawer}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ margin: 0 }}>Feedback Details</h3>
+              <button onClick={() => setOpenRow(null)} style={btnIcon} aria-label="Close">✕</button>
+            </div>
 
-          <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-            <Row label="Date">{new Date(openRow.created_at).toLocaleString()}</Row>
-            <Row label="Label">{openRow.label ?? "-"}</Row>
-            <Row label="Score">{openRow.ml_score ?? "-"}</Row>
-            <Row label="Model">{openRow.model ?? "-"}</Row>
-            <Row label="Source">{openRow.source ?? "-"}</Row>
-            <Row label="Station">{openRow.station_name ?? "-"}</Row>
-            <Row label="Comment">{openRow.comment ?? "-"}</Row>
-            {(openRow.lat && openRow.lng) && (
-              <Row label="Coords">{openRow.lat}, {openRow.lng}</Row>
-            )}
-            {(openRow.lat && openRow.lng) && (
-              <div>
+            {/* badges row */}
+            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+              <span style={{...chip, background:"#f1f5f9", color:"#0f172a"}}>ID: {openRow.id.slice(0,8)}</span>
+              <span style={chipMuted}>{new Date(openRow.created_at).toLocaleString()}</span>
+              {openRow.label && (
+                <span style={{...chip, background: openRow.label==="good"?"#dcfce7":"#fee2e2", color: openRow.label==="good"?"#166534":"#991b1b"}}>
+                  {openRow.label}
+                </span>
+              )}
+              {typeof openRow.ml_score === "number" && (
+                <span style={{...chip, background:"#eff6ff", color:"#1d4ed8"}}>Score: {openRow.ml_score}</span>
+              )}
+              {openRow.model && <span style={chipMuted}>Model: {openRow.model}</span>}
+              {openRow.source && <span style={chipMuted}>Source: {openRow.source}</span>}
+            </div>
+
+            {/* details grid */}
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              <Row label="Station">{openRow.station_name ?? "-"}</Row>
+              <Row label="Comment">
+                {openRow.comment ? <blockquote style={blockquote}>{openRow.comment}</blockquote> : "-"}
+              </Row>
+              {(openRow.lat && openRow.lng) && (
+                <Row label="Coords">
+                  <code>{openRow.lat}, {openRow.lng}</code>
+                </Row>
+              )}
+            </div>
+
+            {/* actions */}
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              {(openRow.lat && openRow.lng) && (
+                <>
+                  <button
+                    style={btnPrimary}
+                    onClick={async () => {
+                      const map = mapRef.current;
+                      if (!map) return;
+                      const L = await import("leaflet");
+                      const b = L.latLngBounds([[openRow.lat!, openRow.lng!], [openRow.lat!, openRow.lng!]]);
+                      map.fitBounds(b.pad(0.4));
+                    }}
+                  >
+                    Zoom to on map
+                  </button>
+                  <a
+                    style={btn}
+                    href={`https://www.google.com/maps?q=${openRow.lat},${openRow.lng}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open in Google Maps
+                  </a>
+                </>
+              )}
+              {openRow.comment && (
                 <button
-                  style={btnPrimary}
+                  style={btn}
                   onClick={async () => {
-                    const map = mapRef.current;
-                    if (!map) return;
-                    const L = await import("leaflet");
-                    const b = L.latLngBounds([[openRow.lat!, openRow.lng!], [openRow.lat!, openRow.lng!]]);
-                    map.fitBounds(b.pad(0.4));
+                    await navigator.clipboard.writeText(openRow.comment || "");
                   }}
                 >
-                  Zoom to on map
+                  Copy comment
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
-// ────────────────────── Small UI helpers ──────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────────
 function KPI({ title, value }: { title: string; value: string | number }) {
   return (
     <div style={kpiCard}>
@@ -537,7 +585,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-// ────────────────────── Inline styles ──────────────────────
+// ── Styles ────────────────────────────────────────────────────────────────────────
 const card: React.CSSProperties = {
   marginTop: 16,
   padding: 16,
@@ -575,6 +623,15 @@ const btnPrimary: React.CSSProperties = {
   border: "1px solid #1d4ed8",
 };
 
+const btnIcon: React.CSSProperties = {
+  ...btn,
+  width: 36,
+  height: 36,
+  display: "grid",
+  placeItems: "center",
+  borderRadius: 12,
+};
+
 const th: React.CSSProperties = {
   textAlign: "left",
   borderBottom: "1px solid #e5e7eb",
@@ -591,16 +648,47 @@ const td: React.CSSProperties = {
   verticalAlign: "top",
 };
 
+const chip: React.CSSProperties = {
+  display: "inline-block",
+  padding: "4px 8px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const chipMuted: React.CSSProperties = {
+  ...chip,
+  background: "#f1f5f9",
+  color: "#0f172a",
+};
+
+const blockquote: React.CSSProperties = {
+  margin: 0,
+  padding: "10px 12px",
+  borderRadius: 10,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+};
+
+const backdrop: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(0,0,0,0.25)",
+  zIndex: 999,
+};
+
 const drawer: React.CSSProperties = {
   position: "fixed",
   top: 0,
   right: 0,
   height: "100vh",
-  width: 380,
+  width: 420,
   background: "#fff",
   borderLeft: "1px solid #e5e7eb",
-  boxShadow: "0 0 30px rgba(0,0,0,0.06)",
-  padding: 16,
+  boxShadow: "0 0 40px rgba(0,0,0,0.10)",
+  padding: 18,
   zIndex: 1000,
   overflowY: "auto",
+  borderTopLeftRadius: 14,
+  borderBottomLeftRadius: 14,
 };
