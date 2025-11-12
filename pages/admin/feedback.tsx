@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import type React from "react";
 import type { Map as LeafletMap } from "leaflet";
 import L from "leaflet";
 import { createClient } from "@supabase/supabase-js";
@@ -87,9 +88,9 @@ export default function AdminFeedbackPage() {
 
   // Map
   const mapRef = useRef<LeafletMap | null>(null);
- const onMapReady = (e: L.LeafletEvent) => {
-  mapRef.current = e.target as LeafletMap;
-};
+  const onMapReady = (e: L.LeafletEvent) => {
+    mapRef.current = e.target as LeafletMap;
+  };
   const fitToResults = () => {
     const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
     if (!pts.length || !mapRef.current) return;
@@ -367,11 +368,11 @@ export default function AdminFeedbackPage() {
         </div>
         <div style={{ height: 420, borderRadius: 8, overflow: "hidden" }}>
           <MapContainer
-  center={[52.8, -1.6]}
-  zoom={6}
-  style={{ height: "100%", width: "100%" }}
-  whenReady={onMapReady}
-/>
+            center={[52.8, -1.6]}
+            zoom={6}
+            style={{ height: "100%", width: "100%" }}
+            whenReady={onMapReady}
+          >
             <TileLayer url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"} />
             {rows.filter(r => r.lat && r.lng).map(r => (
               <Marker key={r.id} position={[r.lat!, r.lng!]}>
