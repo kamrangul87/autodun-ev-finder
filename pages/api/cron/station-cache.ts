@@ -87,14 +87,19 @@ export default async function handler(
 
     const okCount = parsed.filter((r) => r.ok).length;
 
+    // 👇 one-line summary in Vercel logs
+    console.log(`[CRON] station-cache ✅ success=${okCount}/${toHit.length} at ${new Date().toISOString()}`);
+
     return res.status(200).json({
       ok: true,
+      fyi: `[CRON] station-cache success=${okCount}/${toHit.length}`,
       warmed: parsed.length,
       success: okCount,
       details: parsed,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    console.error(`[CRON] station-cache ❌ error=${err?.message ?? "unknown"} at ${new Date().toISOString()}`);
     return res.status(500).json({
       ok: false,
       error: err?.message ?? "unknown error",
