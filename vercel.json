@@ -1,13 +1,15 @@
 {
   "version": 2,
-  "build": { "env": { "NODE_VERSION": "20" } },
+  "build": {
+    "env": {
+      "NODE_VERSION": "20"
+    }
+  },
   "env": {
     "STATIONS": "OPENCHARGE",
     "NEXT_PUBLIC_TILE_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
   },
   "crons": [
-    { "path": "/api/cron/station-cache",   "schedule": "0 1 * * *" },
-    { "path": "/api/cron/council-refresh", "schedule": "0 1 * * *" },
-    { "path": "/api/cron/ml-score-sync",   "schedule": "30 1 * * *" }
+    { "path": "/api/cron/council-refresh", "schedule": "0 3 * * *" }
   ]
 }
