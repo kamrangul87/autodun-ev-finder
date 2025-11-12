@@ -1106,7 +1106,7 @@ const label: React.CSSProperties = { fontSize: 12, color: "#6b7280", marginBotto
 const input: React.CSSProperties = {
   width: "100%",
   padding: "8px 10px",
-  border: "1px solid "#e5e7eb",
+  border: "1px solid #e5e7eb",
   borderRadius: 10,
   background: "#fff",
 };
