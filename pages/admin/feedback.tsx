@@ -366,7 +366,12 @@ export default function AdminFeedbackPage() {
           <button onClick={fitToResults} style={btn}>Fit to results</button>
         </div>
         <div style={{ height: 420, borderRadius: 8, overflow: "hidden" }}>
-          <MapContainer center={[52.8, -1.6]} zoom={6} style={{ height: "100%", width: "100%" }} whenCreated={onMapReady}>
+          <MapContainer
+  center={[52.8, -1.6]}
+  zoom={6}
+  style={{ height: "100%", width: "100%" }}
+  whenReady={onMapReady}
+/>
             <TileLayer url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"} />
             {rows.filter(r => r.lat && r.lng).map(r => (
               <Marker key={r.id} position={[r.lat!, r.lng!]}>
