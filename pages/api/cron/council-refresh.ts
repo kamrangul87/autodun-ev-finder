@@ -29,7 +29,6 @@ function getBaseUrl(req: NextApiRequest): string {
   return `${proto}://${host}`;
 }
 
-// Use const arrow to avoid any declaration/implementation split issues
 const warm = async (url: string): Promise<WarmResult> => {
   try {
     const ac = new AbortController();
@@ -81,14 +80,19 @@ export default async function handler(
 
     const okCount = parsed.filter((r) => r.ok).length;
 
+    // 👇 one-line summary in Vercel logs
+    console.log(`[CRON] council-refresh ✅ success=${okCount}/${toHit.length} at ${new Date().toISOString()}`);
+
     return res.status(200).json({
       ok: true,
+      fyi: `[CRON] council-refresh success=${okCount}/${toHit.length}`,
       warmed: parsed.length,
       success: okCount,
       details: parsed,
       timestamp: new Date().toISOString(),
     });
   } catch (err: any) {
+    console.error(`[CRON] council-refresh ❌ error=${err?.message ?? "unknown"} at ${new Date().toISOString()}`);
     return res.status(500).json({
       ok: false,
       error: err?.message ?? "unknown error",
