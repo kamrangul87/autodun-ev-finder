@@ -86,16 +86,14 @@ export default function AdminFeedbackPage() {
   const [rows, setRows] = useState<FeedbackRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Map
+  // Map (use ref instead of whenReady/whenCreated)
   const mapRef = useRef<LeafletMap | null>(null);
-  const onMapReady = (e: L.LeafletEvent) => {
-    mapRef.current = e.target as LeafletMap;
-  };
   const fitToResults = () => {
     const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
-    if (!pts.length || !mapRef.current) return;
+    const map = mapRef.current;
+    if (!pts.length || !map) return;
     const b = L.latLngBounds(pts);
-    mapRef.current.fitBounds(b.pad(0.2));
+    map.fitBounds(b.pad(0.2));
   };
 
   // URL sync (optional + shallow)
@@ -368,10 +366,10 @@ export default function AdminFeedbackPage() {
         </div>
         <div style={{ height: 420, borderRadius: 8, overflow: "hidden" }}>
           <MapContainer
+            ref={mapRef as unknown as React.Ref<any>}
             center={[52.8, -1.6]}
             zoom={6}
             style={{ height: "100%", width: "100%" }}
-            whenReady={onMapReady}
           >
             <TileLayer url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"} />
             {rows.filter(r => r.lat && r.lng).map(r => (
