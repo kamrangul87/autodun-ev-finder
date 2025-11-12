@@ -505,7 +505,7 @@ const th: React.CSSProperties = {
 };
 
 const td: React.CSSProperties = {
-  borderBottom: "1px solid "#f3f4f6",
+  borderBottom: "1px solid #f3f4f6",
   padding: "10px 8px",
   fontSize: 13,
   verticalAlign: "top",
