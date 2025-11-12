@@ -1,13 +1,12 @@
 // pages/admin/feedback.tsx
-"use client";
-
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
 // ✅ council util + type (CouncilHit includes optional region/country)
 import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
-// ✅ NEW: lightweight browser Supabase client
+// ✅ browser client helper (null if env missing)
 import { supabaseBrowser } from "../../lib/supabase-browser";
 
 /* ──────────────────────────────────────────────────────────────
@@ -130,17 +129,13 @@ export default function AdminFeedback() {
   const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
   const [focusKey, setFocusKey] = useState(0);
 
-  // ✅ council state for the drawer
+  // ✅ NEW: council state for the drawer
   const [council, setCouncil] = useState<CouncilHit | null>(null);
   const [councilLoading, setCouncilLoading] = useState(false);
 
   // table pagination
   const [page, setPage] = useState(1);
   const pageSize = 50;
-
-  // ✅ NEW: realtime refresh trigger
-  const [rtTick, setRtTick] = useState(0);
-  const triggerRefresh = useCallback(() => setRtTick((t) => t + 1), []);
 
   async function load() {
     setLoading(true);
@@ -155,37 +150,9 @@ export default function AdminFeedback() {
     }
   }
 
-  // initial load + refresh when rtTick bumps
   useEffect(() => {
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rtTick]);
-
-  // ✅ NEW: Supabase realtime subscription (feedback + council centroids)
-  useEffect(() => {
-    const supabase = supabaseBrowser();
-
-    // debounce multiple quick events into one refresh
-    let timer: any = null;
-    const schedule = () => {
-      if (timer) return;
-      timer = setTimeout(() => {
-        timer = null;
-        triggerRefresh();
-      }, 800);
-    };
-
-    const channel = supabase
-      .channel("realtime-admin")
-      .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, schedule)
-      .on("postgres_changes", { event: "*", schema: "public", table: "council_centroids_live" }, schedule)
-      .subscribe();
-
-    return () => {
-      if (timer) clearTimeout(timer);
-      supabase.removeChannel(channel);
-    };
-  }, [triggerRefresh]);
+  }, []);
 
   // close on ESC
   useEffect(() => {
@@ -387,6 +354,34 @@ export default function AdminFeedback() {
     return () => { alive = false; };
   }, [selected?.lat, selected?.lng]);
 
+  /* ───────────────── Realtime (guarded) ───────────────── */
+  const triggerRefresh = () => load();
+
+  useEffect(() => {
+    const client: SupabaseClient | null = supabaseBrowser();
+    if (!client) return; // keys missing -> skip realtime safely
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        triggerRefresh();
+      }, 800);
+    };
+
+    const channel: RealtimeChannel = client
+      .channel("realtime-admin")
+      .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, schedule)
+      .on("postgres_changes", { event: "*", schema: "public", table: "council_centroids_live" }, schedule)
+      .subscribe();
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      client.removeChannel(channel);
+    };
+  }, [triggerRefresh]);
+
   /* Pagination slice */
   const total = filteredRows.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -414,9 +409,19 @@ export default function AdminFeedback() {
     );
   }
 
+  const realtimeEnabled =
+    !!process.env.NEXT_PUBLIC_SUPABASE_URL && !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
   return (
     <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
       <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Autodun Admin · Feedback</h1>
+
+      {!realtimeEnabled && (
+        <div style={{marginTop:10, padding:10, border:"1px solid #fde68a", background:"#fef9c3", borderRadius:8, color:"#854d0e"}}>
+          Realtime is disabled (missing <code>NEXT_PUBLIC_SUPABASE_URL</code> or <code>NEXT_PUBLIC_SUPABASE_ANON_KEY</code>).
+          Data still loads via <code>/api/admin/feedback</code>.
+        </div>
+      )}
 
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
