@@ -87,7 +87,9 @@ export default function AdminFeedbackPage() {
 
   // Map
   const mapRef = useRef<LeafletMap | null>(null);
-  const onMapReady = (m: LeafletMap) => (mapRef.current = m);
+ const onMapReady = (e: L.LeafletEvent) => {
+  mapRef.current = e.target as LeafletMap;
+};
   const fitToResults = () => {
     const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
     if (!pts.length || !mapRef.current) return;
