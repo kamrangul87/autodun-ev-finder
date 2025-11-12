@@ -4,8 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
-import type { Map as LeafletMap } from "leaflet";
-import L from "leaflet";
+import type { Map as LeafletMap } from "leaflet"; // type only is safe
 import { createClient } from "@supabase/supabase-js";
 import { useRouter } from "next/router";
 
@@ -17,17 +16,6 @@ const MapContainer = dynamic(
 const TileLayer = dynamic(async () => (await import("react-leaflet")).TileLayer, { ssr: false });
 const Marker = dynamic(async () => (await import("react-leaflet")).Marker, { ssr: false });
 const Popup = dynamic(async () => (await import("react-leaflet")).Popup, { ssr: false });
-
-// Fix default marker icons
-if (typeof window !== "undefined") {
-  // @ts-ignore
-  delete (L.Icon.Default.prototype as any)._getIconUrl;
-  L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-  });
-}
 
 // ────────────────────── Types ──────────────────────
 type FeedbackRow = {
@@ -67,7 +55,6 @@ export default function AdminFeedbackPage() {
 
   // Filter state
   const [filters, setFilters] = useState<Filters>(() => {
-    // Hydrate from URL (optional)
     const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : undefined;
     return {
       sentiment: (q?.get("sent") as any) || "All",
@@ -86,12 +73,36 @@ export default function AdminFeedbackPage() {
   const [rows, setRows] = useState<FeedbackRow[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Map (use ref instead of whenReady/whenCreated)
+  // Map
   const mapRef = useRef<LeafletMap | null>(null);
-  const fitToResults = () => {
-    const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
+
+  // Client-only Leaflet icon setup (no SSR import)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      if (typeof window === "undefined") return;
+      const L = await import("leaflet");
+      // fix default marker icons
+      // @ts-ignore
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+      });
+      return () => { mounted = false; };
+    })();
+    return () => { /* noop */ };
+  }, []);
+
+  const fitToResults = async () => {
     const map = mapRef.current;
-    if (!pts.length || !map) return;
+    if (!map) return;
+    const pts = rows
+      .filter(r => r.lat && r.lng)
+      .map(r => [r.lat!, r.lng!] as [number, number]);
+    if (!pts.length) return;
+    const L = await import("leaflet");
     const b = L.latLngBounds(pts);
     map.fitBounds(b.pad(0.2));
   };
@@ -164,8 +175,7 @@ export default function AdminFeedbackPage() {
     const ch = supabase
       .channel("feedback-admin")
       .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, () => {
-        // trigger re-fetch via a no-op state update
-        setFilters((f) => ({ ...f }));
+        setFilters((f) => ({ ...f })); // trigger re-fetch
       })
       .subscribe();
     return () => { supabase.removeChannel(ch); };
@@ -495,7 +505,7 @@ const th: React.CSSProperties = {
 };
 
 const td: React.CSSProperties = {
-  borderBottom: "1px solid #f3f4f6",
+  borderBottom: "1px solid "#f3f4f6",
   padding: "10px 8px",
   fontSize: 13,
   verticalAlign: "top",
