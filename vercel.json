@@ -10,6 +10,7 @@
     "NEXT_PUBLIC_TILE_URL": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
   },
   "crons": [
-    { "path": "/api/cron/council-refresh", "schedule": "0 3 * * *" }
+    { "path": "/api/cron/council-refresh", "schedule": "0 3 * * *" },
+    { "path": "/api/cron/station-cache",   "schedule": "15 3 * * *" }
   ]
 }
