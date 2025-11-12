@@ -1,694 +1,1170 @@
 // pages/admin/feedback.tsx
-"use client";
-
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
-import type { Map as LeafletMap } from "leaflet"; // type-only import
-import { createClient } from "@supabase/supabase-js";
-import { useRouter } from "next/router";
 
-// ── Map dynamic imports (SSR-safe) ────────────────────────────────────────────────
-const MapContainer = dynamic(
-  async () => (await import("react-leaflet")).MapContainer,
-  { ssr: false }
-);
-const TileLayer = dynamic(async () => (await import("react-leaflet")).TileLayer, { ssr: false });
-const Marker = dynamic(async () => (await import("react-leaflet")).Marker, { ssr: false });
-const Popup  = dynamic(async () => (await import("react-leaflet")).Popup,  { ssr: false });
+// ✅ council util + type (CouncilHit includes optional region/country)
+import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
 
-// ── Types ────────────────────────────────────────────────────────────────────────
-type FeedbackRow = {
+/* ──────────────────────────────────────────────────────────────
+   Client-only components (avoid SSR “window is not defined”)
+   ────────────────────────────────────────────────────────────── */
+const MapClient = dynamic(() => import("../../components/admin/MapClient"), { ssr: false });
+const ChartsClient = dynamic(() => import("../../components/admin/ChartsClient"), { ssr: false });
+
+/* ──────────────────────────────────────────────────────────────
+   Types (matches your API)
+   ────────────────────────────────────────────────────────────── */
+type Row = {
+  ts: string | null;
+  stationId: string | number | null;
+  vote: string;
+  comment: string;
+  source: string;
+  lat: number | null;
+  lng: number | null;
+  mlScore: number | null;
+  modelVersion: string;
+  userAgent: string;
+};
+
+type ApiData = {
+  ok: boolean;
+  rows: Row[];
+  stats: {
+    total: number;
+    good: number;
+    bad: number;
+    goodPct: number; // 0..1
+    avgScore: number | null;
+    timeline: { day: string; count: number; avgScore: number | null }[];
+  };
+};
+
+/* Lightweight point used for map/charts */
+type FeedbackPoint = {
   id: string;
-  created_at: string;
-  label: "good" | "bad" | null;
-  ml_score: number | null;
-  model?: string | null;
-  source?: string | null;
-  station_name?: string | null;
-  comment?: string | null;
-  lat?: number | null;
-  lng?: number | null;
+  stationName?: string;
+  lat: number;
+  lng: number;
+  mlScore?: number;
+  sentiment?: "positive" | "neutral" | "negative";
+  source?: string;
+  createdAt?: string; // ISO
 };
 
-type Filters = {
-  sentiment: "All" | "Good" | "Bad";
-  minScore: number;
-  maxScore: number;
-  from?: string; // YYYY-MM-DD
-  to?: string;   // YYYY-MM-DD
-  q: string;
-  model: "All" | string;
-  source: "All" | string;
-  sort: "Recent" | "Oldest" | "Score↑" | "Score↓";
-};
+/* Filters/sort */
+type Sentiment = "all" | "positive" | "neutral" | "negative";
+type SortKey = "recent" | "oldest" | "scoreHigh" | "scoreLow";
 
-// ── Supabase ─────────────────────────────────────────────────────────────────────
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
-);
+/* Score badge color helper */
+function badgeColor(score?: number) {
+  if (typeof score !== "number" || !isFinite(score))
+    return { bg: "#f3f4f6", text: "#374151", border: "#e5e7eb", label: "—" };
+  const s = Math.round(score);
+  if (s >= 70) return { bg: "#dcfce7", text: "#166534", border: "#bbf7d0", label: `ML ${s}` };
+  if (s >= 40) return { bg: "#fef9c3", text: "#854d0e", border: "#fde68a", label: `ML ${s}` };
+  return { bg: "#fee2e2", text: "#991b1b", border: "#fecaca", label: `ML ${s}` };
+}
 
-// ── Page ─────────────────────────────────────────────────────────────────────────
-export default function AdminFeedbackPage() {
-  const router = useRouter();
+/* Drawer helpers */
+function gmapsUrl(lat: number, lng: number) {
+  return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+async function copy(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    alert("Copied!");
+  } catch {
+    const ok = window.confirm(`Copy this:\n\n${text}`);
+    if (ok) return;
+  }
+}
+function isNumericId(id: unknown) {
+  return typeof id === "number" || /^\d+$/.test(String(id ?? ""));
+}
 
-  // Filters
-  const [filters, setFilters] = useState<Filters>(() => {
-    const q = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : undefined;
-    return {
-      sentiment: (q?.get("sent") as any) || "All",
-      minScore: Number(q?.get("min") ?? 0),
-      maxScore: Number(q?.get("max") ?? 100),
-      from: q?.get("from") || undefined,
-      to: q?.get("to") || undefined,
-      q: q?.get("q") || "",
-      model: (q?.get("model") as any) || "All",
-      source: (q?.get("source") as any) || "All",
-      sort: (q?.get("sort") as any) || "Recent",
-    };
-  });
+/* Relative time ("x minutes ago") */
+function relativeTime(iso?: string | null) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return "—";
+  const diff = Date.now() - t;
+  const s = Math.max(1, Math.round(diff / 1000));
+  const m = Math.round(s / 60);
+  const h = Math.round(m / 60);
+  const d = Math.round(h / 24);
+  if (s < 60) return `${s}s ago`;
+  if (m < 60) return `${m}m ago`;
+  if (h < 24) return `${h}h ago`;
+  return `${d}d ago`;
+}
 
-  // Data
-  const [rows, setRows] = useState<FeedbackRow[]>([]);
-  const [loading, setLoading] = useState(false);
+/* ──────────────────────────────────────────────────────────────
+   Page
+   ────────────────────────────────────────────────────────────── */
+export default function AdminFeedback() {
+  const [data, setData] = useState<ApiData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Map
-  const mapRef = useRef<LeafletMap | null>(null);
+  // filters
+  const [sentiment, setSentiment] = useState<Sentiment>("all");
+  const [scoreMin, setScoreMin] = useState<number>(0);
+  const [scoreMax, setScoreMax] = useState<number>(100);
+  const [dateFrom, setDateFrom] = useState<string>("");
+  const [dateTo, setDateTo] = useState<string>("");
+  const [q, setQ] = useState<string>("");
+  const [sort, setSort] = useState<SortKey>("recent");
 
-  // Fix Leaflet marker icons (client-only)
+  // ✅ NEW: model & source filters
+  const [model, setModel] = useState<string>("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+
+  // drawer state
+  const [selected, setSelected] = useState<Row | null>(null);
+
+  // map fit trigger
+  const [fitKey, setFitKey] = useState(0);
+
+  // focus on the MAIN map (optional)
+  const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
+  const [focusKey, setFocusKey] = useState(0);
+
+  // ✅ council state for the drawer
+  const [council, setCouncil] = useState<CouncilHit | null>(null);
+  const [councilLoading, setCouncilLoading] = useState(false);
+
+  // table pagination
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/admin/feedback");
+      const j = await r.json();
+      setData(j);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
-    (async () => {
-      if (typeof window === "undefined") return;
-      const L = await import("leaflet");
-      // @ts-ignore
-      delete (L.Icon.Default.prototype as any)._getIconUrl;
-      L.Icon.Default.mergeOptions({
-        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-      });
-    })();
+    load();
   }, []);
 
-  const fitToResults = async () => {
-    const map = mapRef.current;
-    if (!map) return;
-    const pts = rows.filter(r => r.lat && r.lng).map(r => [r.lat!, r.lng!] as [number, number]);
-    if (!pts.length) return;
-    const L = await import("leaflet");
-    const b = L.latLngBounds(pts);
-    map.fitBounds(b.pad(0.2));
-  };
-
-  // Drawer state
-  const [openRow, setOpenRow] = useState<FeedbackRow | null>(null);
+  // close on ESC
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpenRow(null);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setSelected(null);
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // URL sync
-  useEffect(() => {
-    const q = new URLSearchParams();
-    if (filters.sentiment !== "All") q.set("sent", filters.sentiment);
-    if (filters.minScore !== 0) q.set("min", String(filters.minScore));
-    if (filters.maxScore !== 100) q.set("max", String(filters.maxScore));
-    if (filters.from) q.set("from", filters.from);
-    if (filters.to) q.set("to", filters.to);
-    if (filters.q) q.set("q", filters.q);
-    if (filters.model !== "All") q.set("model", filters.model);
-    if (filters.source !== "All") q.set("source", filters.source);
-    if (filters.sort !== "Recent") q.set("sort", filters.sort);
+  const rows = data?.rows || [];
+  const stats = data?.stats;
 
-    router.replace(
-      { pathname: router.pathname, query: Object.fromEntries(q.entries()) },
-      undefined,
-      { shallow: true }
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filters)]);
-
-  // Build query
-  function applyFilters(q: any, f: Filters) {
-    if (f.sentiment !== "All") q = q.eq("label", f.sentiment.toLowerCase());
-    if (Number.isFinite(f.minScore)) q = q.gte("ml_score", f.minScore);
-    if (Number.isFinite(f.maxScore)) q = q.lte("ml_score", f.maxScore);
-    if (f.from) q = q.gte("created_at", `${f.from}T00:00:00Z`);
-    if (f.to) q = q.lte("created_at", `${f.to}T23:59:59Z`);
-    if (f.model !== "All") q = q.eq("model", f.model);
-    if (f.source !== "All") q = q.eq("source", f.source);
-    if (f.q && f.q.trim()) {
-      const s = `%${f.q.trim()}%`;
-      q = q.or(`comment.ilike.${s},station_name.ilike.${s}`);
-    }
-    switch (f.sort) {
-      case "Oldest": q = q.order("created_at", { ascending: true }); break;
-      case "Score↑": q = q.order("ml_score", { ascending: true }); break;
-      case "Score↓": q = q.order("ml_score", { ascending: false }); break;
-      default: q = q.order("created_at", { ascending: false });
-    }
-    return q;
-  }
-
-  // Fetch
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        let q = supabase.from("feedback").select("*");
-        q = applyFilters(q, filters);
-        const { data, error } = await q.limit(2000);
-        if (!cancelled) {
-          if (error) console.error(error);
-          setRows((data as FeedbackRow[]) || []);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [JSON.stringify(filters)]);
-
-  // Realtime
-  useEffect(() => {
-    const ch = supabase
-      .channel("feedback-admin")
-      .on("postgres_changes", { event: "*", schema: "public", table: "feedback" }, () => {
-        setFilters((f) => ({ ...f })); // trigger re-fetch
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(ch); };
-  }, []);
-
-  // KPIs
-  const kpi = useMemo(() => {
-    const total = rows.length;
-    const good = rows.filter(r => r.label === "good").length;
-    const bad  = rows.filter(r => r.label === "bad").length;
-    const avg  = total ? rows.reduce((a, r) => a + (r.ml_score || 0), 0) / total : 0;
-    const todayStr = new Date().toDateString();
-    const today = rows.filter(r => new Date(r.created_at).toDateString() === todayStr);
-    const todayGood = today.filter(r => r.label === "good").length;
-    const todayBad  = today.filter(r => r.label === "bad").length;
-    return { total, good, bad, pctGood: total ? (good / total) * 100 : 0, avg, todayGood, todayBad };
+  // ✅ NEW: distinct models & sources for dropdowns
+  const modelOptions = useMemo(() => {
+    const s = new Set<string>();
+    rows.forEach((r) => r.modelVersion && s.add(r.modelVersion));
+    return Array.from(s).sort();
   }, [rows]);
 
-  // Timeline (3d)
-  const timeline3d = useMemo(() => {
-    const byDay = new Map<string, { count: number; sum: number }>();
+  const sourceOptions = useMemo(() => {
+    const s = new Set<string>();
+    rows.forEach((r) => r.source && s.add(r.source));
+    return Array.from(s).sort();
+  }, [rows]);
+
+  // ✅ NEW: Today counters
+  const today = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
+
+    let total = 0,
+      good = 0,
+      bad = 0,
+      sumScore = 0,
+      scoreN = 0;
+
     for (const r of rows) {
-      const d = new Date(r.created_at).toISOString().slice(0, 10);
-      const v = byDay.get(d) || { count: 0, sum: 0 };
-      v.count++; v.sum += r.ml_score || 0;
-      byDay.set(d, v);
+      const t = r.ts ? new Date(r.ts) : null;
+      if (!t || t < start || t > end) continue;
+      total++;
+      const v = (r.vote || "").toLowerCase();
+      if (v === "good" || v === "up" || v === "positive") good++;
+      if (v === "bad" || v === "down" || v === "negative") bad++;
+      if (typeof r.mlScore === "number" && isFinite(r.mlScore)) {
+        sumScore += r.mlScore;
+        scoreN++;
+      }
     }
-    const keys = Array.from(byDay.keys()).sort().slice(-3).reverse();
-    return keys.map(k => {
-      const v = byDay.get(k)!;
-      return { date: k, count: v.count, avg: v.count ? v.sum / v.count : 0 };
-    });
+    const avgScore = scoreN ? sumScore / scoreN : null;
+    return { total, good, bad, avgScore };
   }, [rows]);
 
-  // CSV
-  const exportCSV = () => {
-    const cols: (keyof FeedbackRow)[] = [
-      "created_at", "label", "ml_score", "model", "source", "station_name", "comment", "lat", "lng",
+  /* Adapt rows → points for map/charts */
+  const points: FeedbackPoint[] = useMemo(() => {
+    const toSentiment = (vote?: string | null): FeedbackPoint["sentiment"] => {
+      const v = (vote || "").toLowerCase();
+      if (v === "good" || v === "up" || v === "positive") return "positive";
+      if (v === "bad" || v === "down" || v === "negative") return "negative";
+      return v ? "neutral" : undefined;
+    };
+    return rows
+      .map((r, i) => {
+        const lat = Number(r.lat);
+        const lng = Number(r.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        return {
+          id: String(r.stationId ?? i),
+          stationName: r.stationId ? String(r.stationId) : undefined,
+          lat,
+          lng,
+          mlScore: typeof r.mlScore === "number" ? r.mlScore : undefined,
+          sentiment: toSentiment(r.vote),
+          source: r.source || undefined,
+          createdAt: r.ts || undefined,
+        } as FeedbackPoint;
+      })
+      .filter(Boolean) as FeedbackPoint[];
+  }, [rows]);
+
+  /* Apply filters & sorting (table) */
+  const filteredRows = useMemo(() => {
+    const from = dateFrom ? new Date(dateFrom) : null;
+    const to = dateTo ? new Date(dateTo) : null;
+    const needle = q.trim().toLowerCase();
+
+    let out = rows.filter((r) => {
+      // sentiment
+      if (sentiment !== "all") {
+        const v = (r.vote || "").toLowerCase();
+        const s = v === "good" || v === "up" ? "positive" : v === "bad" || v === "down" ? "negative" : "neutral";
+        if (s !== sentiment) return false;
+      }
+
+      // score range
+      if (Number.isFinite(r.mlScore ?? NaN)) {
+        const s = r.mlScore as number;
+        if (s < scoreMin || s > scoreMax) return false;
+      } else if (scoreMin > 0) return false;
+
+      // date range
+      if (from || to) {
+        const t = r.ts ? new Date(r.ts) : null;
+        if (from && (!t || t < from)) return false;
+        if (to && (!t || t > to)) return false;
+      }
+
+      // ✅ NEW: model
+      if (model !== "all") {
+        if ((r.modelVersion || "") !== model) return false;
+      }
+
+      // ✅ NEW: source
+      if (sourceFilter !== "all") {
+        if ((r.source || "") !== sourceFilter) return false;
+      }
+
+      // search
+      if (needle) {
+        const hay = [
+          r.comment ?? "",
+          String(r.stationId ?? ""),
+          r.source ?? "",
+          r.vote ?? "",
+          r.modelVersion ?? "",
+        ]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+
+      return true;
+    });
+
+    // sorting
+    out.sort((a, b) => {
+      if (sort === "recent") return new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime();
+      if (sort === "oldest") return new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime();
+      if (sort === "scoreHigh") return (b.mlScore ?? -Infinity) - (a.mlScore ?? -Infinity);
+      if (sort === "scoreLow") return (a.mlScore ?? Infinity) - (b.mlScore ?? Infinity);
+      return 0;
+    });
+
+    return out;
+  }, [rows, sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter]);
+
+  /* Keep map/charts in sync with filtered table */
+  const filteredPoints: FeedbackPoint[] = useMemo(() => {
+    if (!filteredRows.length) return points;
+    const set = new Set(filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`));
+    return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
+  }, [points, filteredRows]);
+
+  // bump fitKey whenever filteredPoints change (auto-fit)
+  useEffect(() => {
+    setFitKey((k) => k + 1);
+  }, [filteredPoints]);
+
+  // reset pagination when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter, filteredRows.length]);
+
+  /* ── CSV Export (filtered rows) ─────────────────────────────── */
+  function escapeCSV(v: unknown): string {
+    const s = v == null ? "" : String(v);
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+  function toISO(ts: string | null): string {
+    try {
+      return ts ? new Date(ts).toISOString() : "";
+    } catch {
+      return ts ?? "";
+    }
+  }
+  function buildCSV(rowsIn: Row[]): string {
+    const header = [
+      "time_iso",
+      "station",
+      "vote",
+      "mlScore",
+      "comment",
+      "source",
+      "lat",
+      "lng",
+      "model",
+      "userAgent",
     ];
-    const header = cols.join(",");
-    const lines = rows.map(r =>
-      cols.map(c => {
-        const raw = (r[c] ?? "") as any;
-        const safe = String(raw).replaceAll('"', '""').replaceAll("\n", " ");
-        return `"${safe}"`;
-      }).join(",")
-    );
-    const csv = [header, ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const body = rowsIn.map((r) => [
+      toISO(r.ts),
+      r.stationId ?? "",
+      r.vote ?? "",
+      r.mlScore ?? "",
+      r.comment ?? "",
+      r.source ?? "",
+      Number.isFinite(r.lat ?? NaN) ? (r.lat as number).toFixed(6) : "",
+      Number.isFinite(r.lng ?? NaN) ? (r.lng as number).toFixed(6) : "",
+      r.modelVersion ?? "",
+      r.userAgent ?? "",
+    ]);
+    const lines = [header, ...body].map((arr) => arr.map(escapeCSV).join(",")).join("\n");
+    return "\uFEFF" + lines; // Excel-friendly BOM
+  }
+  function downloadCSV() {
+    const csv = buildCSV(filteredRows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `feedback_export_${Date.now()}.csv`; a.click();
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    a.href = url;
+    a.download = `feedback-export-${stamp}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     URL.revokeObjectURL(url);
-  };
+  }
 
-  const resetFilters = () =>
-    setFilters({
-      sentiment: "All",
-      minScore: 0,
-      maxScore: 100,
-      from: undefined,
-      to: undefined,
-      q: "",
-      model: "All",
-      source: "All",
-      sort: "Recent",
-    });
+  // derived: selected row point
+  const selectedPoint: FeedbackPoint | null = useMemo(() => {
+    if (!selected) return null;
+    const lat = Number(selected.lat);
+    const lng = Number(selected.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+      id: String(selected.stationId ?? "sel"),
+      stationName: selected.stationId ? String(selected.stationId) : undefined,
+      lat,
+      lng,
+      mlScore: typeof selected.mlScore === "number" ? selected.mlScore : undefined,
+      sentiment:
+        (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up"
+          ? "positive"
+          : (selected.vote || "").toLowerCase() === "bad" || (selected.vote || "").toLowerCase() === "down"
+          ? "negative"
+          : "neutral",
+      source: selected.source || undefined,
+      createdAt: selected.ts || undefined,
+    };
+  }, [selected]);
 
-  // ── UI ───────────────────────────────────────────────────────────────────────────
+  // fetch council for the selected item
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setCouncil(null);
+      if (!selected || !Number.isFinite(selected.lat ?? NaN) || !Number.isFinite(selected.lng ?? NaN)) return;
+      setCouncilLoading(true);
+      const hit = await getCouncilAtPoint(Number(selected.lat), Number(selected.lng));
+      if (alive) {
+        setCouncil(hit);
+        setCouncilLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [selected?.lat, selected?.lng]);
+
+  /* Pagination slice */
+  const total = filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const clampedPage = Math.min(page, totalPages);
+  const startIdx = (clampedPage - 1) * pageSize;
+  const endIdx = Math.min(startIdx + pageSize, total);
+  const pageRows = filteredRows.slice(startIdx, endIdx);
+
+  /* Search highlighter */
+  function highlight(s: string | number | null | undefined) {
+    const text = String(s ?? "");
+    const needle = q.trim();
+    if (!needle) return text;
+    const parts = text.split(new RegExp(`(${escapeRegExp(needle)})`, "ig"));
+    return (
+      <>
+        {parts.map((chunk, i) =>
+          chunk.toLowerCase() === needle.toLowerCase() ? (
+            <mark key={i} style={{ background: "#fde68a", padding: "0 2px", borderRadius: 3 }}>
+              {chunk}
+            </mark>
+          ) : (
+            <span key={i}>{chunk}</span>
+          )
+        )}
+      </>
+    );
+  }
+
   return (
-    <div style={{ padding: "24px", maxWidth: 1180, margin: "0 auto" }}>
-      <h1 style={{ fontWeight: 700, fontSize: 28, marginBottom: 16 }}>Autodun Admin · Feedback</h1>
+    <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
+      <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Autodun Admin · Feedback</h1>
 
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 12 }}>
-        <KPI title="Total" value={kpi.total} />
-        <KPI title="Good"  value={kpi.good} />
-        <KPI title="Bad"   value={kpi.bad} />
-        <KPI title="% Good" value={`${kpi.pctGood.toFixed(0)}%`} />
-        <KPI title="Avg ML Score" value={kpi.avg.toFixed(3)} />
-        <KPI title="Today · Good" value={kpi.todayGood} />
-      </div>
-
-      {/* Toolbar */}
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-        <button onClick={() => setFilters(f => ({ ...f }))} style={btn}>Refresh</button>
-        <button onClick={resetFilters} style={btnSecondary}>Reset</button>
-        <button onClick={exportCSV} style={btnPrimary}>Export CSV</button>
+      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+        <StatCard label="Total" value={fmt(stats?.total)} />
+        <StatCard label="Good" value={fmt(stats?.good)} />
+        <StatCard label="Bad" value={fmt(stats?.bad)} />
+        <StatCard label="% Good" value={pct(stats?.goodPct)} />
+        <StatCard label="Avg ML Score" value={score(stats?.avgScore)} />
+        {/* ✅ NEW: today counters */}
+        <StatCard label="Today · Good" value={fmt(today.good)} />
+        <StatCard label="Today · Bad" value={fmt(today.bad)} />
+        <StatCard label="Today · Avg ML" value={score(today.avgScore)} />
+        <button onClick={load} style={refreshBtn}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </button>
       </div>
 
       {/* Filters */}
-      <section style={card}>
-        <h3 style={{ marginBottom: 12 }}>Filters</h3>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0,1fr))", gap: 10 }}>
-          <Labeled label="Sentiment">
-            <select
-              value={filters.sentiment}
-              onChange={e => setFilters(f => ({ ...f, sentiment: e.target.value as Filters["sentiment"] }))}
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontWeight: 800 }}>Filters</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              onClick={() => {
+                setSentiment("all");
+                setScoreMin(0);
+                setScoreMax(100);
+                setDateFrom("");
+                setDateTo("");
+                setQ("");
+                setSort("recent");
+                setModel("all");        // reset new filters
+                setSourceFilter("all"); // reset new filters
+              }}
+              style={refreshBtn}
             >
-              <option>All</option><option>Good</option><option>Bad</option>
-            </select>
-          </Labeled>
-
-          <Labeled label="Score ≥">
-            <input
-              type="number" value={filters.minScore}
-              onChange={e => setFilters(f => ({ ...f, minScore: Number(e.target.value || 0) }))}
-            />
-          </Labeled>
-
-          <Labeled label="Score ≤">
-            <input
-              type="number" value={filters.maxScore}
-              onChange={e => setFilters(f => ({ ...f, maxScore: Number(e.target.value || 100) }))}
-            />
-          </Labeled>
-
-          <Labeled label="From">
-            <input
-              type="date" value={filters.from || ""} onChange={e => setFilters(f => ({ ...f, from: e.target.value || undefined }))}
-            />
-          </Labeled>
-
-          <Labeled label="To">
-            <input
-              type="date" value={filters.to || ""} onChange={e => setFilters(f => ({ ...f, to: e.target.value || undefined }))}
-            />
-          </Labeled>
-
-          <Labeled label="Search">
-            <input
-              placeholder="comment / station"
-              value={filters.q}
-              onChange={e => setFilters(f => ({ ...f, q: e.target.value }))}
-            />
-          </Labeled>
-
-          <Labeled label="Model">
-            <select
-              value={filters.model}
-              onChange={e => setFilters(f => ({ ...f, model: e.target.value as any }))}
-            >
-              <option>All</option>
-              <option value="lgbm-v1">lgbm-v1</option>
-              <option value="baseline">baseline</option>
-            </select>
-          </Labeled>
-
-          <Labeled label="Source">
-            <select
-              value={filters.source}
-              onChange={e => setFilters(f => ({ ...f, source: e.target.value as any }))}
-            >
-              <option>All</option>
-              <option value="sheet">sheet</option>
-              <option value="admin">admin</option>
-              <option value="unknown">unknown</option>
-            </select>
-          </Labeled>
-
-          <Labeled label="Sort">
-            <select
-              value={filters.sort}
-              onChange={e => setFilters(f => ({ ...f, sort: e.target.value as Filters["sort"] }))}
-            >
-              <option>Recent</option>
-              <option>Oldest</option>
-              <option>Score↑</option>
-              <option>Score↓</option>
-            </select>
-          </Labeled>
+              Reset
+            </button>
+            <button onClick={downloadCSV} style={primaryBtn}>
+              Export CSV
+            </button>
+          </div>
         </div>
-      </section>
+
+        {/* ✅ grid expanded to 8 columns */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, minmax(0,1fr))", gap: 10 }}>
+          {/* Sentiment */}
+          <div>
+            <div style={label}>Sentiment</div>
+            <select value={sentiment} onChange={(e) => setSentiment(e.target.value as Sentiment)} style={input}>
+              <option value="all">All</option>
+              <option value="positive">Positive</option>
+              <option value="neutral">Neutral</option>
+              <option value="negative">Negative</option>
+            </select>
+          </div>
+
+          {/* Score min */}
+          <div>
+            <div style={label}>Score ≥</div>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={scoreMin}
+              onChange={(e) => setScoreMin(Number(e.target.value) || 0)}
+              style={input}
+            />
+          </div>
+
+          {/* Score max */}
+          <div>
+            <div style={label}>Score ≤</div>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={scoreMax}
+              onChange={(e) => setScoreMax(Number(e.target.value) || 100)}
+              style={input}
+            />
+          </div>
+
+          {/* From */}
+          <div>
+            <div style={label}>From</div>
+            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={input} />
+          </div>
+
+          {/* To */}
+          <div>
+            <div style={label}>To</div>
+            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={input} />
+          </div>
+
+          {/* Search */}
+          <div>
+            <div style={label}>Search</div>
+            <input
+              placeholder="comment / station / source"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              style={input}
+            />
+          </div>
+
+          {/* ✅ NEW: Model */}
+          <div>
+            <div style={label}>Model</div>
+            <select value={model} onChange={(e) => setModel(e.target.value)} style={input}>
+              <option value="all">All</option>
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* ✅ NEW: Source */}
+          <div>
+            <div style={label}>Source</div>
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={input}>
+              <option value="all">All</option>
+              {sourceOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
+          <div>
+            <div style={label}>Sort</div>
+            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} style={input}>
+              <option value="recent">Recent</option>
+              <option value="oldest">Oldest</option>
+              <option value="scoreHigh">Score: High → Low</option>
+              <option value="scoreLow">Score: Low → High</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
       {/* Timeline */}
-      <section style={card}>
-        <h3 style={{ marginBottom: 12 }}>Timeline (last 3 days)</h3>
-        <div>
-          {timeline3d.map(row => (
-            <div key={row.date} style={{ display: "grid", gridTemplateColumns: "140px 1fr 100px", alignItems: "center", gap: 12, marginBottom: 8 }}>
-              <div>{row.date}</div>
-              <div style={{ background: "#eee", height: 10, borderRadius: 6 }}>
-                <div style={{ width: `${Math.min(100, row.count * 12)}%`, height: "100%", borderRadius: 6, background: "#2563eb" }} />
-              </div>
-              <div style={{ textAlign: "right" }}>Avg ML: {row.avg.toFixed(3)}</div>
-            </div>
-          ))}
-          {!timeline3d.length && <div style={{ color: "#666" }}>No data in range.</div>}
-        </div>
-      </section>
+      <div style={panel}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Timeline (last {stats?.timeline?.length ?? 0} days)</div>
+        {!stats || !stats.timeline.length ? (
+          <div style={{ color: "#6b7280", fontSize: 14 }}>No data yet.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 120px", gap: 8 }}>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>Date</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>Bar (count)</div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>Avg ML</div>
+            {stats.timeline.map((d) => (
+              <FragmentRow key={d.day} day={d.day} count={d.count} avg={d.avgScore} />
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Map */}
-      <section style={card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-          <h3>Feedback Map</h3>
-          <button onClick={fitToResults} style={btn}>Fit to results</button>
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontWeight: 800 }}>Feedback Map</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button style={refreshBtn} onClick={() => setFitKey((k) => k + 1)} title="Fit map to current results">
+              Fit to results
+            </button>
+          </div>
         </div>
-        <div style={{ height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapContainer
-            ref={mapRef as unknown as React.Ref<any>}
-            center={[52.8, -1.6]}
-            zoom={6}
-            style={{ height: "100%", width: "100%" }}
-          >
-            <TileLayer url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"} />
-            {rows.filter(r => r.lat && r.lng).map(r => (
-              <Marker
-                key={r.id}
-                position={[r.lat!, r.lng!]}
-                eventHandlers={{ click: () => setOpenRow(r) }}
-              >
-                <Popup>
-                  <div style={{ fontWeight: 600, marginBottom: 6 }}>{r.station_name || "Station"}</div>
-                  <div><b>Label:</b> {r.label ?? "-"}</div>
-                  <div><b>Score:</b> {r.ml_score ?? "-"}</div>
-                  <div><b>Model:</b> {r.model ?? "-"}</div>
-                  <div><b>Source:</b> {r.source ?? "-"}</div>
-                  <div style={{ marginTop: 6 }}>{r.comment}</div>
-                  <div style={{ marginTop: 6, fontSize: 12, color: "#666" }}>
-                    {new Date(r.created_at).toLocaleString()}
-                  </div>
-                </Popup>
-              </Marker>
-            ))}
-          </MapContainer>
+        <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
+          <MapClient points={filteredPoints} fitToPointsKey={fitKey} focusPoint={focusPoint} focusKey={focusKey} />
         </div>
-      </section>
+      </div>
 
-      {/* Table */}
-      <section style={card}>
-        <h3 style={{ marginBottom: 12 }}>
-          Results {loading ? "· Loading…" : `· ${rows.length}`}
-        </h3>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      {/* Charts */}
+      <div style={panel}>
+        <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics</div>
+        <ChartsClient points={filteredPoints} />
+      </div>
+
+      {/* Table + Pagination */}
+      <div style={panel}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div style={{ fontWeight: 800 }}>Latest feedback</div>
+
+          {/* Pagination controls */}
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#6b7280" }}>{total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}</span>
+            <button style={miniBtn} onClick={() => setPage(1)} disabled={clampedPage <= 1}>
+              « First
+            </button>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={clampedPage <= 1}>
+              ‹ Prev
+            </button>
+            <div style={{ fontSize: 12, fontWeight: 700, minWidth: 60, textAlign: "center" }}>
+              Page {clampedPage}/{totalPages}
+            </div>
+            <button style={miniBtn} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={clampedPage >= totalPages}>
+              Next ›
+            </button>
+            <button style={miniBtn} onClick={() => setPage(totalPages)} disabled={clampedPage >= totalPages}>
+              Last »
+            </button>
+          </div>
+        </div>
+
+        <div style={{ overflowX: "auto", maxHeight: 520, position: "relative" }}>
+          <table style={table}>
             <thead>
               <tr>
-                {["Date", "Label", "Score", "Model", "Source", "Station", "Comment"].map(h => (
-                  <th key={h} style={th}>{h}</th>
-                ))}
+                <th style={thSticky}>Time</th>
+                <th style={thSticky}>Station</th>
+                <th style={thSticky}>Vote</th>
+                <th style={thSticky}>mlScore</th>
+                <th style={thSticky}>Comment</th>
+                <th style={thSticky}>Source</th>
+                <th style={thSticky}>Lat</th>
+                <th style={thSticky}>Lng</th>
+                <th style={thSticky}>Model</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
-                <tr key={r.id}>
-                  <td style={td}>{new Date(r.created_at).toLocaleString()}</td>
-                  <td style={td}>
-                    {r.label
-                      ? <span style={{...chip, background: r.label === "good" ? "#dcfce7" : "#fee2e2", color: r.label === "good" ? "#166534" : "#991b1b"}}>{r.label}</span>
-                      : "-"}
-                  </td>
-                  <td style={td}>
-                    {typeof r.ml_score === "number"
-                      ? (<span style={{...chip, background:"#eff6ff", color:"#1d4ed8"}}>{r.ml_score}</span>)
-                      : "-"}
-                  </td>
-                  <td style={td}>{r.model ?? "-"}</td>
-                  <td style={td}>{r.source ?? "-"}</td>
+              {pageRows.map((r, i) => {
+                const rowKey = `${startIdx + i}`;
+                const latOk = Number.isFinite(r.lat ?? NaN);
+                const lngOk = Number.isFinite(r.lng ?? NaN);
+                const latStr = latOk ? (r.lat as number).toFixed(6) : "—";
+                const lngStr = lngOk ? (r.lng as number).toFixed(6) : "—";
+                const stationStr = r.stationId ?? "—";
+                return (
+                  <tr key={rowKey} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
+                    <td title={r.ts || ""}>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
 
-                  {/* CLICKABLE STATION */}
-                  <td style={td}>
-                    {r.station_name ? (
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setOpenRow(r); }}
-                        style={{ textDecoration: "underline", color: "#2563eb" }}
-                        title="Open details"
-                      >
-                        {r.station_name}
-                      </a>
-                    ) : "-"}
-                  </td>
+                    {/* Station + copy */}
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{highlight(stationStr)}</code>
+                        {r.stationId != null && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(String(r.stationId));
+                            }}
+                            title="Copy Station ID"
+                          >
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
 
-                  {/* CLICKABLE COMMENT */}
-                  <td style={td}>
-                    {r.comment ? (
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setOpenRow(r); }}
-                        style={{ textDecoration: "underline", color: "#2563eb" }}
-                        title="Open details"
-                      >
-                        {r.comment}
-                      </a>
-                    ) : "-"}
+                    {/* Vote */}
+                    <td style={{ fontWeight: 700, color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b" }}>
+                      {r.vote || "—"}
+                    </td>
+
+                    {/* ML Score */}
+                    <td>
+                      {typeof r.mlScore === "number" ? (
+                        (() => {
+                          const c = badgeColor(r.mlScore);
+                          return (
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                padding: "2px 8px",
+                                borderRadius: 999,
+                                border: `1px solid ${c.border}`,
+                                background: c.bg,
+                                color: c.text,
+                                fontWeight: 700,
+                                fontSize: 12,
+                              }}
+                            >
+                              {c.label}
+                            </span>
+                          );
+                        })()
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+
+                    {/* Comment (ellipsized, highlight) */}
+                    <td
+                      style={{
+                        maxWidth: 360,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                      title={r.comment || ""}
+                    >
+                      {highlight(r.comment || "—")}
+                    </td>
+
+                    {/* Source (highlight) */}
+                    <td>{highlight(r.source || "—")}</td>
+
+                    {/* Lat with copy */}
+                    <td style={monoCell}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{latStr}</span>
+                        {latOk && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(latStr);
+                            }}
+                            title="Copy latitude"
+                          >
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Lng with copy */}
+                    <td style={monoCell}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{lngStr}</span>
+                        {lngOk && (
+                          <button
+                            style={copyIconBtn}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              copy(lngStr);
+                            }}
+                            title="Copy longitude"
+                          >
+                            ⧉
+                          </button>
+                        )}
+                      </div>
+                    </td>
+
+                    <td>{r.modelVersion || "—"}</td>
+                  </tr>
+                );
+              })}
+              {pageRows.length === 0 && (
+                <tr>
+                  <td colSpan={9} style={{ color: "#6b7280", textAlign: "center" }}>
+                    No rows
                   </td>
                 </tr>
-              ))}
-              {!rows.length && !loading && (
-                <tr><td style={td} colSpan={7}>No results.</td></tr>
               )}
             </tbody>
           </table>
         </div>
-      </section>
+      </div>
 
-      {/* Drawer + overlay */}
-      {openRow && (
+      {/* Drawer */}
+      {selected && (
         <>
-          <div style={backdrop} onClick={() => setOpenRow(null)} />
-          <div style={drawer}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 style={{ margin: 0 }}>Feedback Details</h3>
-              <button onClick={() => setOpenRow(null)} style={btnIcon} aria-label="Close">✕</button>
+          <div style={backdrop} onClick={() => setSelected(null)} />
+          <aside style={drawer}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 800, fontSize: 16 }}>Station {selected.stationId ?? "—"}</div>
+              <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">
+                ✕
+              </button>
             </div>
 
-            {/* badges row */}
-            <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-              <span style={{...chip, background:"#f1f5f9", color:"#0f172a"}}>ID: {openRow.id.slice(0,8)}</span>
-              <span style={chipMuted}>{new Date(openRow.created_at).toLocaleString()}</span>
-              {openRow.label && (
-                <span style={{...chip, background: openRow.label==="good"?"#dcfce7":"#fee2e2", color: openRow.label==="good"?"#166534":"#991b1b"}}>
-                  {openRow.label}
-                </span>
-              )}
-              {typeof openRow.ml_score === "number" && (
-                <span style={{...chip, background:"#eff6ff", color:"#1d4ed8"}}>Score: {openRow.ml_score}</span>
-              )}
-              {openRow.model && <span style={chipMuted}>Model: {openRow.model}</span>}
-              {openRow.source && <span style={chipMuted}>Source: {openRow.source}</span>}
+            {/* Relative + absolute time */}
+            <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
+              {relativeTime(selected.ts)} · {selected.ts ? new Date(selected.ts).toLocaleString() : "—"}
             </div>
 
-            {/* details grid */}
-            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-              <Row label="Station">{openRow.station_name ?? "-"}</Row>
-              <Row label="Comment">
-                {openRow.comment ? <blockquote style={blockquote}>{openRow.comment}</blockquote> : "-"}
-              </Row>
-              {(openRow.lat && openRow.lng) && (
-                <Row label="Coords">
-                  <code>{openRow.lat}, {openRow.lng}</code>
-                </Row>
-              )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+              <Info label="Vote" value={selected.vote || "—"} />
+              <Info label="Source" value={selected.source || "—"} />
+              <Info label="Model" value={selected.modelVersion || "—"} />
+              <Info label="User Agent" value={selected.userAgent || "—"} />
+              <Info
+                label="Lat"
+                value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"}
+              />
+              <Info
+                label="Lng"
+                value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"}
+              />
             </div>
 
-            {/* actions */}
-            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              {(openRow.lat && openRow.lng) && (
-                <>
-                  <button
-                    style={btnPrimary}
-                    onClick={async () => {
-                      const map = mapRef.current;
-                      if (!map) return;
-                      const L = await import("leaflet");
-                      const b = L.latLngBounds([[openRow.lat!, openRow.lng!], [openRow.lat!, openRow.lng!]]);
-                      map.fitBounds(b.pad(0.4));
-                    }}
-                  >
-                    Zoom to on map
-                  </button>
-                  <a
-                    style={btn}
-                    href={`https://www.google.com/maps?q=${openRow.lat},${openRow.lng}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Open in Google Maps
-                  </a>
-                </>
+            {/* Copy Station ID / Zoom on main map */}
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              {selected.stationId != null && (
+                <button style={ghostBtn} onClick={() => copy(String(selected.stationId))}>
+                  Copy Station ID
+                </button>
               )}
-              {openRow.comment && (
+              {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
                 <button
-                  style={btn}
-                  onClick={async () => {
-                    await navigator.clipboard.writeText(openRow.comment || "");
+                  style={ghostBtn}
+                  onClick={() => {
+                    setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 14 });
+                    setFocusKey((k) => k + 1);
                   }}
                 >
-                  Copy comment
+                  Zoom on main map
                 </button>
               )}
             </div>
-          </div>
+
+            {/* Council */}
+            <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ fontWeight: 800 }}>Council</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    style={miniBtn}
+                    onClick={() => council?.code && copy(council.code)}
+                    disabled={!council?.code}
+                    title="Copy council code"
+                  >
+                    Copy code
+                  </button>
+                  {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
+                    <button
+                      style={miniBtn}
+                      onClick={() => {
+                        setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 11 });
+                        setFocusKey((k) => k + 1);
+                      }}
+                      title="Zoom to council area"
+                    >
+                      Zoom
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {!(Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN)) ? (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No coordinates on this feedback.</div>
+              ) : councilLoading ? (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>Looking up council…</div>
+              ) : council ? (
+                <div style={{ marginTop: 6, fontSize: 14 }}>
+                  <div>
+                    <span style={{ color: "#6b7280" }}>Name:</span> {council.name}
+                  </div>
+                  {council.code && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Code:</span> {council.code}
+                    </div>
+                  )}
+                  {council.region && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Region:</span> {council.region}
+                    </div>
+                  )}
+                  {council.country && (
+                    <div>
+                      <span style={{ color: "#6b7280" }}>Country:</span> {council.country}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No council found for this point.</div>
+              )}
+            </div>
+
+            {/* Comment */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Comment</div>
+              <div style={{ padding: 10, border: "1px solid #e5e7eb", borderRadius: 10, whiteSpace: "pre-wrap" }}>
+                {selected.comment || "—"}
+              </div>
+            </div>
+
+            {/* ML Score */}
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>ML Score</div>
+              <div>
+                {typeof selected.mlScore === "number" ? (
+                  (() => {
+                    const c = badgeColor(selected.mlScore);
+                    return (
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          border: `1px solid ${c.border}`,
+                          background: c.bg,
+                          color: c.text,
+                          fontWeight: 700,
+                          fontSize: 13,
+                        }}
+                      >
+                        {c.label}
+                      </span>
+                    );
+                  })()
+                ) : (
+                  "—"
+                )}
+              </div>
+            </div>
+
+            {/* Mini map + actions */}
+            {selectedPoint && (
+              <div style={{ marginTop: 12 }}>
+                <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
+                <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                  <MapClient points={[selectedPoint]} />
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <button
+                    style={primaryBtn}
+                    onClick={() => window.open(gmapsUrl(selectedPoint.lat, selectedPoint.lng), "_blank")}
+                  >
+                    Directions
+                  </button>
+                  <button style={ghostBtn} onClick={() => copy(`${selectedPoint.lat},${selectedPoint.lng}`)}>
+                    Copy coords
+                  </button>
+                  {isNumericId(selected?.stationId) && (
+                    <button
+                      style={ghostBtn}
+                      onClick={() =>
+                        window.open(`https://openchargemap.org/site/poi/${selected!.stationId}`, "_blank")
+                      }
+                    >
+                      Open in OCM
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </aside>
         </>
       )}
     </div>
   );
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────────
-function KPI({ title, value }: { title: string; value: string | number }) {
+/* ─────────────── Small presentational pieces ─────────────── */
+function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div style={kpiCard}>
-      <div style={{ color: "#6b7280", fontSize: 12 }}>{title}</div>
-      <div style={{ fontSize: 24, fontWeight: 700 }}>{value}</div>
+    <div
+      style={{
+        padding: "10px 12px",
+        border: "1px solid #e5e7eb",
+        background: "#fff",
+        borderRadius: 12,
+        minWidth: 140,
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
     </div>
   );
 }
 
-function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
+function FragmentRow({ day, count, avg }: { day: string; count: number; avg: number | null }) {
+  const width = Math.min(360, 16 * count);
   return (
-    <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
-      <span style={{ color: "#374151" }}>{label}</span>
-      {children}
-    </label>
+    <>
+      <div style={{ fontSize: 13 }}>{day}</div>
+      <div style={{ height: 10, background: "#f3f4f6", borderRadius: 999 }}>
+        <div style={{ height: 10, width, background: "#2563eb", borderRadius: 999 }} />
+      </div>
+      <div style={{ fontSize: 13 }}>{avg == null ? "—" : avg.toFixed(3)}</div>
+    </>
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Info({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
-      <div style={{ color: "#6b7280" }}>{label}</div>
-      <div>{children}</div>
+    <div>
+      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
+      <div style={{ fontWeight: 700 }}>{value}</div>
     </div>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────────
-const card: React.CSSProperties = {
-  marginTop: 16,
-  padding: 16,
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  background: "#fff",
-};
-
-const kpiCard: React.CSSProperties = {
+/* ─────────────── styles ─────────────── */
+const panel: React.CSSProperties = {
+  marginTop: 14,
   padding: 12,
   border: "1px solid #e5e7eb",
-  borderRadius: 12,
   background: "#fff",
-  display: "grid",
-  gap: 4,
+  borderRadius: 12,
 };
 
-const btn: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 10,
-  border: "1px solid #d1d5db",
+const table: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "separate",
+  borderSpacing: 0,
+};
+
+const thSticky: React.CSSProperties = {
+  position: "sticky",
+  top: 0,
   background: "#fff",
+  zIndex: 1,
+  boxShadow: "inset 0 -1px 0 #e5e7eb",
+  textAlign: "left",
+  padding: "8px 6px",
+};
+
+const miniBtn: React.CSSProperties = {
+  padding: "6px 8px",
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  borderRadius: 8,
+  fontWeight: 700,
+  cursor: "pointer",
+  fontSize: 12,
+};
+
+const copyIconBtn: React.CSSProperties = {
+  width: 24,
+  height: 24,
+  borderRadius: 6,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 12,
+  lineHeight: "1",
+};
+
+const monoCell: React.CSSProperties = {
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+};
+
+const refreshBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  borderRadius: 12,
+  fontWeight: 700,
   cursor: "pointer",
 };
 
-const btnSecondary: React.CSSProperties = {
-  ...btn,
-  background: "#f3f4f6",
-};
-
-const btnPrimary: React.CSSProperties = {
-  ...btn,
+const primaryBtn: React.CSSProperties = {
+  padding: "10px 12px",
+  border: "1px solid #2563eb",
   background: "#2563eb",
   color: "#fff",
-  border: "1px solid #1d4ed8",
-};
-
-const btnIcon: React.CSSProperties = {
-  ...btn,
-  width: 36,
-  height: 36,
-  display: "grid",
-  placeItems: "center",
   borderRadius: 12,
+  fontWeight: 700,
+  cursor: "pointer",
 };
 
-const th: React.CSSProperties = {
-  textAlign: "left",
-  borderBottom: "1px solid #e5e7eb",
-  padding: "10px 8px",
-  fontWeight: 600,
-  fontSize: 13,
-  whiteSpace: "nowrap",
-};
-
-const td: React.CSSProperties = {
-  borderBottom: "1px solid #f3f4f6",
-  padding: "10px 8px",
-  fontSize: 13,
-  verticalAlign: "top",
-};
-
-const chip: React.CSSProperties = {
-  display: "inline-block",
-  padding: "4px 8px",
-  borderRadius: 999,
-  fontSize: 12,
-  fontWeight: 600,
-};
-
-const chipMuted: React.CSSProperties = {
-  ...chip,
-  background: "#f1f5f9",
-  color: "#0f172a",
-};
-
-const blockquote: React.CSSProperties = {
-  margin: 0,
+const ghostBtn: React.CSSProperties = {
   padding: "10px 12px",
-  borderRadius: 10,
-  background: "#f8fafc",
   border: "1px solid #e5e7eb",
+  background: "#fff",
+  color: "#111827",
+  borderRadius: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const label: React.CSSProperties = { fontSize: 12, color: "#6b7280", marginBottom: 4 };
+
+const input: React.CSSProperties = {
+  width: "100%",
+  padding: "8px 10px",
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+  background: "#fff",
 };
 
 const backdrop: React.CSSProperties = {
   position: "fixed",
   inset: 0,
-  background: "rgba(0,0,0,0.25)",
-  zIndex: 999,
+  background: "rgba(0,0,0,0.4)",
+  zIndex: 50,
 };
 
 const drawer: React.CSSProperties = {
   position: "fixed",
   top: 0,
   right: 0,
-  height: "100vh",
   width: 420,
+  maxWidth: "90vw",
+  height: "100%",
   background: "#fff",
   borderLeft: "1px solid #e5e7eb",
-  boxShadow: "0 0 40px rgba(0,0,0,0.10)",
-  padding: 18,
-  zIndex: 1000,
+  boxShadow: "-8px 0 24px rgba(0,0,0,0.08)",
+  zIndex: 60,
+  padding: 16,
+  display: "flex",
+  flexDirection: "column",
   overflowY: "auto",
-  borderTopLeftRadius: 14,
-  borderBottomLeftRadius: 14,
 };
+
+const iconBtn: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 8,
+  border: "1px solid #e5e7eb",
+  background: "#fff",
+  cursor: "pointer",
+  fontSize: 16,
+  lineHeight: "1",
+};
+
+/* tiny utils */
+function fmt(n?: number | null) {
+  return (n ?? 0).toLocaleString();
+}
+function pct(p?: number | null) {
+  return p == null ? "—" : `${Math.round((p as number) * 100)}%`;
+}
+function score(s?: number | null) {
+  return s == null ? "—" : (s as number).toFixed(3);
+}
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
