@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import type React from "react";
 import { createClient } from "@supabase/supabase-js";
+import { useRouter } from "next/router";
 
 // ✅ council util + type (CouncilHit includes optional region/country)
 import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
@@ -102,6 +103,19 @@ function relativeTime(iso?: string | null) {
 }
 
 /* ──────────────────────────────────────────────────────────────
+   URL query helpers (for filter sync)
+   ────────────────────────────────────────────────────────────── */
+function getString(q: any, k: string, d = ""): string {
+  const v = q?.[k];
+  return typeof v === "string" ? v : d;
+}
+function getNum(q: any, k: string, d: number): number {
+  const v = q?.[k];
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
+
+/* ──────────────────────────────────────────────────────────────
    Page
    ────────────────────────────────────────────────────────────── */
 export default function AdminFeedback() {
@@ -135,6 +149,8 @@ export default function AdminFeedback() {
   const [page, setPage] = useState(1);
   const pageSize = 50;
 
+  const router = useRouter();
+
   async function load() {
     setLoading(true);
     try {
@@ -160,6 +176,43 @@ export default function AdminFeedback() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  /* ── Hydrate filters from URL once ─────────────────────────── */
+  useEffect(() => {
+    if (!router.isReady) return;
+    const query = router.query;
+
+    setSentiment(getString(query, "sent", "all") as Sentiment);
+    setScoreMin(getNum(query, "smin", 0));
+    setScoreMax(getNum(query, "smax", 100));
+    setDateFrom(getString(query, "from", ""));
+    setDateTo(getString(query, "to", ""));
+    setQ(getString(query, "q", ""));
+    setSort(getString(query, "sort", "recent") as SortKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router.isReady]);
+
+  /* ── Keep URL in sync when filters change (shallow replace) ── */
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    const params = new URLSearchParams();
+    if (sentiment !== "all") params.set("sent", sentiment);
+    if (scoreMin !== 0) params.set("smin", String(scoreMin));
+    if (scoreMax !== 100) params.set("smax", String(scoreMax));
+    if (dateFrom) params.set("from", dateFrom);
+    if (dateTo) params.set("to", dateTo);
+    if (q.trim()) params.set("q", q.trim());
+    if (sort !== "recent") params.set("sort", sort);
+
+    const qs = params.toString();
+    const href = qs ? `/admin/feedback?${qs}` : `/admin/feedback`;
+
+    if (href !== router.asPath) {
+      router.replace(href, undefined, { shallow: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, router.isReady]);
 
   const rows = data?.rows || [];
   const stats = data?.stats;
@@ -437,7 +490,7 @@ export default function AdminFeedback() {
       <div style={panel}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
           <div style={{ fontWeight: 800 }}>Filters</div>
-          <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10 }}>
             <button
               onClick={() => {
                 setSentiment("all");
@@ -1053,7 +1106,7 @@ const label: React.CSSProperties = { fontSize: 12, color: "#6b7280", marginBotto
 const input: React.CSSProperties = {
   width: "100%",
   padding: "8px 10px",
-  border: "1px solid #e5e7eb",
+  border: "1px solid "#e5e7eb",
   borderRadius: 10,
   background: "#fff",
 };
