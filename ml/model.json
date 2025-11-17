@@ -1,16 +1,17 @@
 {
-  "version": "v1",
-  "bias": 0.0,
-  "weights": {
-    "power_kw": 0.35,
-    "n_connectors": 0.20,
-    "has_fast_dc": 0.20,
-    "rating": 0.20,
-    "has_geo": 0.05
-  },
+  "version": "v2-manual",
+  "bias": -1.4469224207016012,
   "caps": {
-    "power_kw_max": 150,
-    "n_connectors_max": 8,
-    "rating_max": 5
+    "power_kw_max": 105.99999999999999,
+    "n_connectors_max": 3.5999999999999996,
+    "rating_max": 5.0
+  },
+  "weights": {
+    "power_kw": 1.0534452839769604,
+    "n_connectors": -1.5644744948145732,
+    "has_fast_dc": 0.3475369292709697,
+    "rating": 3.3930946413081053,
+    "has_geo": -0.1420634043937615,
+    "usage_score": -0.6332463223763913
   }
 }
