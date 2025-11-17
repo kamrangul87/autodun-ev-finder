@@ -1,0 +1,48 @@
+name: Nightly ML Training
+
+on:
+  # Run every night at 02:30 UTC
+  schedule:
+    - cron: "30 2 * * *"
+  # Allow manual runs from the GitHub Actions tab
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # needed to push updated model.json
+
+jobs:
+  train-ml:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy
+
+      - name: Run ML training script
+        run: |
+          python ml/train.py
+
+      - name: Commit and push updated model.json (if changed)
+        run: |
+          # Check if model.json changed compared to HEAD
+          if git diff --quiet HEAD -- ml/model.json; then
+            echo "No changes to ml/model.json – skipping commit."
+            exit 0
+          fi
+
+          echo "Model changed – committing update."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ml/model.json
+          git commit -m "chore(ml): auto-train model"
+          git push
