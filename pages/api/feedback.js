@@ -107,35 +107,14 @@ export default async function handler(req, res) {
       zoom: normZoom,
       timestamp: ts || timestamp || new Date().toISOString(),
       userAgent: cleanStr(req.headers["user-agent"] || "", 180),
+      // ⬇ only use mlScore/modelVersion if client sends them
       mlScore: Number.isFinite(toNum(mlScore)) ? toNum(mlScore) : undefined,
       modelVersion: modelVersion || undefined,
     };
 
-    /* ── Optional local ML scoring (best-effort; non-blocking) ── */
-    try {
-      const mod = await import("../../ml/scorer");
-      const predict = mod.predict || mod.default;
-      if (typeof predict === "function") {
-        const features = {
-          power_kw: Number(power_kw ?? 50),
-          n_connectors: Number(n_connectors ?? 1),
-          has_fast_dc: has_fast_dc ? 1 : 0,
-          rating: Number(rating ?? 4.2),
-          usage_score: Number(usage_score ?? 0),
-          has_geo: Number.isFinite(normLat) && Number.isFinite(normLng) ? 1 : 0,
-        };
-        const out = await predict(features);
-        if (typeof feedbackData.mlScore !== "number" && typeof out?.score === "number") {
-          feedbackData.mlScore = out.score;
-        }
-        if (!feedbackData.modelVersion && out?.modelVersion) {
-          feedbackData.modelVersion = out.modelVersion;
-        }
-      }
-    } catch (e) {
-      // fine to skip
-      console.warn("[feedback] ML compute skipped:", e?.message || e);
-    }
+    // NOTE: We intentionally DO NOT run local ML scoring here anymore.
+    // The admin dashboard will only show an ML score if it's sent from the client
+    // (e.g. when the user has actually requested an AI score).
 
     /* ── Parallel writes: Supabase (if configured) + Webhook (if configured) ── */
     const createdAt = safeIso(feedbackData.timestamp);
