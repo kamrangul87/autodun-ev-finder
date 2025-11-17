@@ -23,7 +23,7 @@ type Row = {
   source: string;
   lat: number | null;
   lng: number | null;
-  mlScore: number | null;
+  mlScore: number | null;       // 0..1 (fraction)
   modelVersion: string;
   userAgent: string;
 };
@@ -36,7 +36,7 @@ type ApiData = {
     good: number;
     bad: number;
     goodPct: number; // 0..1
-    avgScore: number | null;
+    avgScore: number | null; // 0..1
     timeline: { day: string; count: number; avgScore: number | null }[];
   };
 };
@@ -47,7 +47,7 @@ type FeedbackPoint = {
   stationName?: string;
   lat: number;
   lng: number;
-  mlScore?: number;
+  mlScore?: number; // 0..1
   sentiment?: "positive" | "neutral" | "negative";
   source?: string;
   createdAt?: string; // ISO
@@ -57,14 +57,37 @@ type FeedbackPoint = {
 type Sentiment = "all" | "positive" | "neutral" | "negative";
 type SortKey = "recent" | "oldest" | "scoreHigh" | "scoreLow";
 
-/* Score badge color helper */
-function badgeColor(score?: number) {
-  if (typeof score !== "number" || !isFinite(score))
-    return { bg: "#f3f4f6", text: "#374151", border: "#e5e7eb", label: "—" };
-  const s = Math.round(score);
-  if (s >= 70) return { bg: "#dcfce7", text: "#166534", border: "#bbf7d0", label: `ML ${s}` };
-  if (s >= 40) return { bg: "#fef9c3", text: "#854d0e", border: "#fde68a", label: `ML ${s}` };
-  return { bg: "#fee2e2", text: "#991b1b", border: "#fecaca", label: `ML ${s}` };
+/* ───────── ML badge (shows — if missing) ───────── */
+function MlBadge({ score }: { score: number | null | undefined }) {
+  const has = typeof score === "number" && Number.isFinite(score);
+  if (!has) return <span style={{ opacity: 0.6 }}>—</span>;
+
+  const pct = Math.round((score as number) * 100);
+  const tone =
+    pct >= 70
+      ? { bg: "#dcfce7", text: "#166534", border: "#bbf7d0" }
+      : pct >= 40
+      ? { bg: "#fef9c3", text: "#854d0e", border: "#fde68a" }
+      : { bg: "#fee2e2", text: "#991b1b", border: "#fecaca" };
+
+  return (
+    <span
+      title={`Predicted reliability ${pct}%`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "2px 8px",
+        borderRadius: 999,
+        border: `1px solid ${tone.border}`,
+        background: tone.bg,
+        color: tone.text,
+        fontSize: 12,
+        fontWeight: 700,
+      }}
+    >
+      ML {pct}
+    </span>
+  );
 }
 
 /* Drawer helpers */
@@ -250,9 +273,9 @@ export default function AdminFeedback() {
         if (s !== sentiment) return false;
       }
 
-      // score range
+      // score range (mlScore is 0..1; UI sliders are 0..100)
       if (Number.isFinite(r.mlScore ?? NaN)) {
-        const s = r.mlScore as number;
+        const s = (r.mlScore as number) * 100;
         if (s < scoreMin || s > scoreMax) return false;
       } else if (scoreMin > 0) return false;
 
@@ -486,8 +509,8 @@ export default function AdminFeedback() {
               Reset
             </button>
             <a href="/api/admin/feedback-export" target="_blank" rel="noopener">
-  <button type="button" style={primaryBtn}>Export CSV</button>
-</a>
+              <button type="button" style={primaryBtn}>Export CSV</button>
+            </a>
           </div>
         </div>
 
@@ -710,29 +733,7 @@ export default function AdminFeedback() {
 
                     {/* ML Score */}
                     <td>
-                      {typeof r.mlScore === "number" ? (
-                        (() => {
-                          const c = badgeColor(r.mlScore);
-                          return (
-                            <span
-                              style={{
-                                display: "inline-flex",
-                                padding: "2px 8px",
-                                borderRadius: 999,
-                                border: `1px solid ${c.border}`,
-                                background: c.bg,
-                                color: c.text,
-                                fontWeight: 700,
-                                fontSize: 12,
-                              }}
-                            >
-                              {c.label}
-                            </span>
-                          );
-                        })()
-                      ) : (
-                        "—"
-                      )}
+                      <MlBadge score={r.mlScore} />
                     </td>
 
                     {/* Comment (ellipsized, highlight) */}
@@ -927,29 +928,7 @@ export default function AdminFeedback() {
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>ML Score</div>
               <div>
-                {typeof selected.mlScore === "number" ? (
-                  (() => {
-                    const c = badgeColor(selected.mlScore);
-                    return (
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          padding: "4px 10px",
-                          borderRadius: 999,
-                          border: `1px solid ${c.border}`,
-                          background: c.bg,
-                          color: c.text,
-                          fontWeight: 700,
-                          fontSize: 13,
-                        }}
-                      >
-                        {c.label}
-                      </span>
-                    );
-                  })()
-                ) : (
-                  "—"
-                )}
+                <MlBadge score={selected.mlScore} />
               </div>
             </div>
 
