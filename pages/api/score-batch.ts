@@ -1,42 +1,58 @@
 // pages/api/score-batch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { insertAudit, insertScore } from "../../server/db";
+// predictScore is an alias to `predict` from ml/scorer
 import { predict as predictScore } from "../../ml/scorer";
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+type Ok = { ok: true; results: { stationId: string | number; score: number }[]; model: string };
+type Err = { ok: false; error: string };
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse<Ok | Err>) {
   try {
-    const body = req.method === "POST" ? req.body : {};
-    const stationIds: string[] = body?.stationIds ?? [];
-    const council = body?.council as string | undefined;
-
-    if (!stationIds.length && !council) {
-      return res.status(400).json({ ok:false, error:"Provide stationIds[] or council" });
+    if (req.method !== "POST") {
+      return res.status(405).json({ ok: false, error: "Method not allowed" });
     }
 
-    // TODO: if council provided → resolve stationIds for that area.
-    // For MVP, we just require stationIds.
-    if (!stationIds.length && council) {
-      return res.status(400).json({ ok:false, error:"Resolver for council→stationIds not wired yet" });
+    const body = typeof req.body === "string" ? JSON.parse(req.body) : (req.body || {});
+    const stationIds: Array<string | number> = Array.isArray(body.stationIds) ? body.stationIds : [];
+
+    if (!stationIds.length) {
+      return res.status(400).json({ ok: false, error: "stationIds (array) required" });
     }
 
-    const model = process.env.MODEL_VERSION ?? "lgbm-v1";
-    const results: Array<{ stationId:string; score:number }> = [];
+    // Minimal, deterministic feature vector when you don't have per-station features here.
+    // (If/when you fetch real features for each station, populate these fields accordingly.)
+    const baseFeatures = {
+      power_kw: 0,
+      n_connectors: 0,
+      has_fast_dc: 0,
+      rating: 0,
+      usage_score: 0,
+      has_geo: 0,
+    };
+
+    const results: { stationId: string | number; score: number }[] = [];
+    let model = "unknown";
 
     for (const id of stationIds) {
       try {
-        const out = await predictScore({ stationId: id });
+        const out = await predictScore(baseFeatures);
         const score = Math.max(0, Math.min(1, Number(out.score ?? 0.5)));
+        model = (out as any).modelVersion || (out as any).model || model;
+
         await insertScore({ station_id: id, score, model_version: model });
         results.push({ stationId: id, score });
-      } catch {
-        // continue
+      } catch (e: any) {
+        // Optionally record audit for failures; keep loop going
+        await insertAudit({
+          action: "score-batch-error",
+          payload: { station_id: id, error: String(e?.message || e) },
+        });
       }
     }
 
-    await insertAudit("score_batch", { count: results.length, council, model });
-
-    return res.status(200).json({ ok: true, model, count: results.length, results });
-  } catch (e:any) {
-    return res.status(500).json({ ok:false, error: e?.message });
+    return res.status(200).json({ ok: true, results, model });
+  } catch (err: any) {
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
 }
