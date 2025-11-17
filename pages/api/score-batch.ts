@@ -1,7 +1,6 @@
 // pages/api/score-batch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { insertAudit, insertScore } from "../../server/db";
-// predictScore is an alias to `predict` from ml/scorer
 import { predict as predictScore } from "../../ml/scorer";
 
 type Ok = { ok: true; results: { stationId: string; score: number }[]; model: string };
@@ -20,7 +19,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(400).json({ ok: false, error: "stationIds (array) required" });
     }
 
-    // Minimal deterministic features (replace with real per-station features when available)
+    // Minimal deterministic features
     const baseFeatures = {
       power_kw: 0,
       n_connectors: 0,
@@ -34,21 +33,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
     let model = "unknown";
 
     for (const id of stationIds) {
+      const stationIdStr = String(id);
       try {
         const out = await predictScore(baseFeatures);
         const score = Math.max(0, Math.min(1, Number(out.score ?? 0.5)));
         model = (out as any).modelVersion || (out as any).model || model;
 
-        // 🔧 Type fix: ensure string for DB call
-        const stationIdStr = String(id);
-
         await insertScore({ station_id: stationIdStr, score, model_version: String(model) });
         results.push({ stationId: stationIdStr, score });
       } catch (e: any) {
-        await insertAudit({
-          action: "score-batch-error",
-          payload: { station_id: String(id), error: String(e?.message || e) },
-        });
+        // ✅ Fix: pass a string to insertAudit (not an object)
+        await insertAudit(
+          `score-batch-error: ${stationIdStr} - ${String(e?.message || e)}`
+        );
       }
     }
 
