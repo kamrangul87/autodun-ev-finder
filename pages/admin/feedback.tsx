@@ -485,9 +485,9 @@ export default function AdminFeedback() {
             >
               Reset
             </button>
-            <button onClick={downloadCSV} style={primaryBtn}>
-              Export CSV
-            </button>
+            <a href="/api/admin/feedback-export" target="_blank" rel="noopener">
+  <button type="button" style={primaryBtn}>Export CSV</button>
+</a>
           </div>
         </div>
 
