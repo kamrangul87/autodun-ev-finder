@@ -4,7 +4,7 @@ import { insertAudit, insertScore } from "../../server/db";
 // predictScore is an alias to `predict` from ml/scorer
 import { predict as predictScore } from "../../ml/scorer";
 
-type Ok = { ok: true; results: { stationId: string | number; score: number }[]; model: string };
+type Ok = { ok: true; results: { stationId: string; score: number }[]; model: string };
 type Err = { ok: false; error: string };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse<Ok | Err>) {
@@ -20,8 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       return res.status(400).json({ ok: false, error: "stationIds (array) required" });
     }
 
-    // Minimal, deterministic feature vector when you don't have per-station features here.
-    // (If/when you fetch real features for each station, populate these fields accordingly.)
+    // Minimal deterministic features (replace with real per-station features when available)
     const baseFeatures = {
       power_kw: 0,
       n_connectors: 0,
@@ -31,7 +30,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
       has_geo: 0,
     };
 
-    const results: { stationId: string | number; score: number }[] = [];
+    const results: { stationId: string; score: number }[] = [];
     let model = "unknown";
 
     for (const id of stationIds) {
@@ -40,13 +39,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse<
         const score = Math.max(0, Math.min(1, Number(out.score ?? 0.5)));
         model = (out as any).modelVersion || (out as any).model || model;
 
-        await insertScore({ station_id: id, score, model_version: model });
-        results.push({ stationId: id, score });
+        // 🔧 Type fix: ensure string for DB call
+        const stationIdStr = String(id);
+
+        await insertScore({ station_id: stationIdStr, score, model_version: String(model) });
+        results.push({ stationId: stationIdStr, score });
       } catch (e: any) {
-        // Optionally record audit for failures; keep loop going
         await insertAudit({
           action: "score-batch-error",
-          payload: { station_id: id, error: String(e?.message || e) },
+          payload: { station_id: String(id), error: String(e?.message || e) },
         });
       }
     }
