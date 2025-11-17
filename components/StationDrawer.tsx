@@ -223,6 +223,58 @@ function sumConnectors(list: Connector[] | null): number | null {
   return total > 0 ? total : null;
 }
 
+/* ─────────────── AI feature helper ─────────────── */
+
+type ScoreFeatures = {
+  power_kw: number;
+  n_connectors: number;
+  has_fast_dc: number;
+  rating: number;
+  usage_score: number;
+  has_geo: number;
+};
+
+function buildScoreFeatures(
+  s: any,
+  connectors: Connector[] | null,
+  canonical: any[],
+  totalNum: number | null
+): ScoreFeatures {
+  const power_kw =
+    safeNumber(
+      pick<number>(s, ["PowerKW", "powerKW"]),
+      Array.isArray(connectors)
+        ? connectors
+            .map((c: any) => safeNumber(c?.powerKW, 0) || 0)
+            .reduce((a, b) => Math.max(a, b), 0) || undefined
+        : undefined
+    ) ?? 50;
+
+  const n_connectors =
+    totalNum ?? (Array.isArray(connectors) ? connectors.length : 1);
+
+  const has_fast_dc =
+    (canonical?.some((c: any) => c.label === "CCS" || c.label === "CHAdeMO") ||
+      (Array.isArray(connectors) &&
+        connectors.some((c: any) => (c?.powerKW ?? 0) >= 50)))
+      ? 1
+      : 0;
+
+  const rating =
+    safeNumber(pick<number>(s, ["rating", "UserRating", "userRating"]), 4.2) ??
+    4.2;
+
+  const usage_score = 1;
+
+  const has_geo =
+    (typeof s.lat === "number" && typeof s.lng === "number") ||
+    (typeof s.Latitude === "number" && typeof s.Longitude === "number")
+      ? 1
+      : 0;
+
+  return { power_kw, n_connectors, has_fast_dc, rating, usage_score, has_geo };
+}
+
 /* ─────────────── Component ─────────────── */
 
 type Props = {
@@ -302,9 +354,11 @@ export default function StationDrawer({
   // Address build (line1, town/city, postcode)
   const ai = s.AddressInfo || {};
   const line1 =
-    pick<string>(s, ["address", "AddressLine1"]) ?? pick<string>(ai, ["AddressLine1", "Title"]);
+    pick<string>(s, ["address", "AddressLine1"]) ??
+    pick<string>(ai, ["AddressLine1", "Title"]);
   const town =
-    pick<string>(s, ["town", "city", "Town", "City"]) ?? pick<string>(ai, ["Town", "City"]);
+    pick<string>(s, ["town", "city", "Town", "City"]) ??
+    pick<string>(ai, ["Town", "City"]);
   const postcode =
     pick<string>(s, ["postcode", "postCode", "Postcode", "PostalCode"]) ??
     pick<string>(ai, ["Postcode", "PostalCode"]);
@@ -407,44 +461,14 @@ export default function StationDrawer({
       return;
     }
 
-    // Feature engineering
-    const power_kw =
-      safeNumber(
-        pick<number>(s, ["PowerKW", "powerKW"]),
-        Array.isArray(connectors)
-          ? connectors
-              .map((c: any) => safeNumber(c?.powerKW, 0) || 0)
-              .reduce((a, b) => Math.max(a, b), 0) || undefined
-          : undefined
-      ) ?? 50;
-
-    const n_connectors =
-      totalNum ?? (Array.isArray(connectors) ? connectors.length : 1);
-
-    const has_fast_dc =
-      (canonical?.some((c) => c.label === "CCS" || c.label === "CHAdeMO") ||
-        (Array.isArray(connectors) &&
-          connectors.some((c: any) => (c?.powerKW ?? 0) >= 50)))
-        ? 1
-        : 0;
-
-    const rating =
-      safeNumber(pick<number>(s, ["rating", "UserRating", "userRating"]), 4.2) ??
-      4.2;
-
-    const usage_score = 1;
-
-    const has_geo =
-      (typeof s.lat === "number" && typeof s.lng === "number") ||
-      (typeof s.Latitude === "number" && typeof s.Longitude === "number")
-        ? 1
-        : 0;
+    // feature engineering (shared helper)
+    const features = buildScoreFeatures(s, connectors, canonical, totalNum);
 
     // telemetry (request)
     scoreRequested({
       stationId: s.id,
       src: "drawer",
-      features: { power_kw, n_connectors, has_fast_dc, rating, usage_score, has_geo },
+      features,
     });
 
     const t0 = Date.now();
@@ -454,14 +478,7 @@ export default function StationDrawer({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            power_kw,
-            n_connectors,
-            has_fast_dc,
-            rating,
-            usage_score,
-            has_geo,
-          }),
+          body: JSON.stringify(features),
         }
       );
 
@@ -602,8 +619,6 @@ export default function StationDrawer({
               Copy
             </button>
           </div>
-
-          {/* ❌ Council section removed */}
 
           {/* Connectors */}
           <div style={cardRow}>
