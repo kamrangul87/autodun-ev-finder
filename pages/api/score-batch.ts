@@ -1,7 +1,7 @@
 // pages/api/score-batch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
 import { insertAudit, insertScore } from "../../server/db";
-import { predictScore } from "../../ml/scorer";
+import { predict as predictScore } from "../../ml/scorer";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
