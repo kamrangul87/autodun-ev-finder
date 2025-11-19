@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // pages/admin/ml.tsx
 import React, { useEffect, useState } from "react";
 
@@ -53,136 +54,107 @@ export default function AdminMlPage() {
     <main style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
       <h1 style={{ fontSize: 28, marginBottom: 8 }}>ML Training Status</h1>
       <p style={{ color: "#555", marginBottom: 24 }}>
+=======
+// serve/pages/admin/ml.tsx
+import { useEffect, useState } from "react";
+
+type Run = {
+  id: number;
+  model_version: string;
+  run_at: string;
+  samples_used: number;
+  notes: string;
+};
+
+export default function MLAdmin() {
+  const [runs, setRuns] = useState<Run[] | null>(null);
+
+  useEffect(() => {
+    fetch("/api/admin/ml-runs")
+      .then((r) => r.json())
+      .then((d) => setRuns(d.runs ?? []))
+      .catch(() => setRuns([]));
+  }, []);
+
+  if (runs === null) {
+    return (
+      <div style={{ padding: 40 }}>
+        <h1>ML Training Status</h1>
+        <p>Loading ML run history…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 40 }}>
+      <h1>ML Training Status</h1>
+      <p>
+>>>>>>> c7c6b6d6 (feat(admin/ml): add ML admin page)
         Overview of nightly ML retraining runs logged from GitHub Actions into
         Supabase <code>ml_runs</code>.
       </p>
 
-      {loading && <p>Loading…</p>}
-      {error && (
-        <p style={{ color: "red", marginBottom: 16 }}>
-          Error loading data: {error}
-        </p>
+      <div
+        style={{
+          display: "flex",
+          gap: 20,
+          marginTop: 24,
+          marginBottom: 32,
+        }}
+      >
+        <div>
+          <h3>Current model</h3>
+          <p style={{ fontSize: 20, fontWeight: 600 }}>
+            {runs[0]?.model_version ?? "—"}
+          </p>
+        </div>
+
+        <div>
+          <h3>Last run</h3>
+          <p>
+            {runs[0]?.run_at
+              ? new Date(runs[0].run_at).toLocaleString()
+              : "No runs yet"}
+          </p>
+        </div>
+
+        <div>
+          <h3>Total runs (shown)</h3>
+          <p>{runs.length}</p>
+        </div>
+      </div>
+
+      <h2>Recent runs</h2>
+
+      {runs.length === 0 ? (
+        <p>No runs logged yet.</p>
+      ) : (
+        <table
+          cellPadding={8}
+          style={{ marginTop: 16, borderCollapse: "collapse", width: "100%" }}
+        >
+          <thead>
+            <tr>
+              <th align="left">ID</th>
+              <th align="left">Version</th>
+              <th align="left">Run at</th>
+              <th align="left">Samples</th>
+              <th align="left">Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id}>
+                <td>{r.id}</td>
+                <td>{r.model_version}</td>
+                <td>{new Date(r.run_at).toLocaleString()}</td>
+                <td>{r.samples_used}</td>
+                <td>{r.notes}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
-
-      {!loading && !error && (
-        <>
-          <section
-            style={{
-              display: "flex",
-              gap: 16,
-              marginBottom: 24,
-              flexWrap: "wrap",
-            }}
-          >
-            <div
-              style={{
-                flex: "1 1 160px",
-                border: "1px solid #eee",
-                borderRadius: 8,
-                padding: 16,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  color: "#777",
-                  marginBottom: 4,
-                }}
-              >
-                Current model
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 600 }}>
-                {latest?.model_version ?? "—"}
-              </div>
-            </div>
-
-            <div
-              style={{
-                flex: "1 1 160px",
-                border: "1px solid #eee",
-                borderRadius: 8,
-                padding: 16,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  color: "#777",
-                  marginBottom: 4,
-                }}
-              >
-                Last run
-              </div>
-              <div style={{ fontSize: 16 }}>
-                {latest
-                  ? new Date(latest.run_at).toLocaleString()
-                  : "No runs yet"}
-              </div>
-            </div>
-
-            <div
-              style={{
-                flex: "1 1 160px",
-                border: "1px solid #eee",
-                borderRadius: 8,
-                padding: 16,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 12,
-                  textTransform: "uppercase",
-                  color: "#777",
-                  marginBottom: 4,
-                }}
-              >
-                Total runs (shown)
-              </div>
-              <div style={{ fontSize: 20, fontWeight: 600 }}>{runs.length}</div>
-            </div>
-          </section>
-
-          <section>
-            <h2 style={{ fontSize: 18, marginBottom: 8 }}>Recent runs</h2>
-            {runs.length === 0 ? (
-              <p>No runs logged yet.</p>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table
-                  style={{
-                    borderCollapse: "collapse",
-                    width: "100%",
-                    fontSize: 14,
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      <th style={thStyle}>Run at</th>
-                      <th style={thStyle}>Model version</th>
-                      <th style={thStyle}>Samples</th>
-                      <th style={thStyle}>Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {runs.map((run) => (
-                      <tr key={run.id}>
-                        <td style={tdStyle}>
-                          {new Date(run.run_at).toLocaleString()}
-                        </td>
-                        <td style={tdStyle}>{run.model_version}</td>
-                        <td style={tdStyle}>{run.samples_used ?? "—"}</td>
-                        <td style={tdStyle}>{run.notes ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        </>
-      )}
-    </main>
+    </div>
   );
 }
