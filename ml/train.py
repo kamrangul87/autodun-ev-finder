@@ -72,9 +72,13 @@ def normalise_features(X, caps):
     conn_cap = caps["n_connectors_max"]
     rating_cap = caps["rating_max"]
 
+    # power_kw
     Xn[:, 0] = np.clip(Xn[:, 0] / max(power_cap, 1.0), 0, 1)
+    # n_connectors
     Xn[:, 1] = np.clip(Xn[:, 1] / max(conn_cap, 1.0), 0, 1)
+    # rating
     Xn[:, 3] = np.clip(Xn[:, 3] / max(rating_cap, 1.0), 0, 1)
+    # usage_score
     Xn[:, 5] = np.clip(Xn[:, 5], 0, 1)
 
     return Xn
@@ -125,11 +129,42 @@ def main():
         },
     }
 
+    # ✅ Write model.json as before
     MODEL_PATH.write_text(json.dumps(model, indent=2))
     print(f"✅ Wrote model to {MODEL_PATH}")
     print("   Version:", model["version"])
     print("   Caps:", model["caps"])
     print("   Weights:", model["weights"])
+
+    # ✅ NEW: Log training run to Supabase ml_runs (best-effort)
+    supabase_url = os.environ.get("SUPABASE_URL")
+    supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+    if supabase_url and supabase_key:
+        try:
+            resp = requests.post(
+                f"{supabase_url}/rest/v1/ml_runs",
+                headers={
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                json={
+                    "model_version": model["version"],
+                    "samples_used": int(len(X)),
+                    "notes": "GitHub Actions nightly training",
+                },
+                timeout=10,
+            )
+            if resp.status_code >= 300:
+                print("⚠ Supabase ml_runs insert failed:", resp.status_code, resp.text)
+            else:
+                print("✅ Logged run to Supabase ml_runs")
+        except Exception as e:
+            print("⚠ Could not log ml_runs:", e)
+    else:
+        print("ℹ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set, skipping ml_runs log.")
 
 
 if __name__ == "__main__":
