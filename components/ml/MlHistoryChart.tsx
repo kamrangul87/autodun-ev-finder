@@ -1,3 +1,4 @@
+// components/ml/MlHistoryChart.tsx
 "use client";
 
 import {
@@ -10,12 +11,19 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+type MlMetrics = {
+  accuracy?: number | null;
+  precision?: number | null;
+  recall?: number | null;
+};
+
 type MlRun = {
   id: number;
   model_version: string;
   run_at: string;
   samples_used: number | null;
   notes: string | null;
+  metrics_json?: MlMetrics | null;
 };
 
 export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
@@ -36,7 +44,7 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
     <div
       style={{
         width: "100%",
-        height: 260, // 👈 explicit height so ResponsiveContainer can render
+        height: 260,
         border: "1px solid #e5e7eb",
         borderRadius: 8,
         padding: 16,
@@ -54,7 +62,8 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
           <Tooltip
             formatter={(value: any) => [`${value}`, "Samples"]}
             labelFormatter={(label, payload) => {
-              const first: any = payload && payload.length > 0 ? payload[0] : null;
+              const first: any =
+                payload && payload.length > 0 ? payload[0] : null;
               const item: any = first?.payload;
               if (!item) return String(label);
               return `${item.date} | Version: ${item.version}`;
