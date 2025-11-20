@@ -1,15 +1,9 @@
 import json
-import math
 import os
 import requests
 from pathlib import Path
 
-import csv
-
-try:
-    import numpy as np
-except ImportError:
-    raise SystemExit("Please run: pip install numpy")
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 CSV_PATH = ROOT / "training_data.csv"
@@ -17,44 +11,37 @@ MODEL_PATH = ROOT / "model.json"
 
 
 def load_training_data():
+    """
+    Load all rows from training_data.csv using numpy.
+
+    CSV format (header row + numeric rows):
+    power_kw,n_connectors,has_fast_dc,rating,has_geo,usage_score,label
+    """
     if not CSV_PATH.exists():
         raise SystemExit(f"Training data not found: {CSV_PATH}")
 
-    xs = []
-    ys = []
-    with CSV_PATH.open("r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                power_kw = float(row["power_kw"])
-                n_connectors = float(row["n_connectors"])
-                has_fast_dc = float(row["has_fast_dc"])
-                rating = float(row["rating"])
-                has_geo = float(row["has_geo"])
-                usage_score = float(row.get("usage_score", 0.0))
-                label = float(row["label"])
-            except (KeyError, ValueError):
-                continue
+    try:
+        # skip header row, comma-separated, all numeric
+        data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
+    except Exception as e:
+        raise SystemExit(f"Failed to load training data from {CSV_PATH}: {e}")
 
-            xs.append(
-                [
-                    power_kw,
-                    n_connectors,
-                    has_fast_dc,
-                    rating,
-                    has_geo,
-                    usage_score,
-                ]
-            )
-            ys.append(label)
+    if data.ndim == 1:
+        # single row edge case
+        data = data.reshape(1, -1)
 
-    if not xs:
-        raise SystemExit("No valid rows in training_data.csv")
+    if data.shape[1] < 7:
+        raise SystemExit(
+            f"Expected at least 7 columns in {CSV_PATH}, found {data.shape[1]}"
+        )
 
-    return np.array(xs, dtype=float), np.array(ys, dtype=float)
+    X = data[:, :-1]  # all columns except last
+    y = data[:, -1]   # last column is label (0/1)
+
+    return X.astype(float), y.astype(float)
 
 
-def compute_caps(X):
+def compute_caps(X: np.ndarray):
     power_kw_max = float(np.percentile(X[:, 0], 95))
     n_connectors_max = float(max(1.0, np.percentile(X[:, 1], 95)))
     rating_max = 5.0
@@ -66,7 +53,7 @@ def compute_caps(X):
     }
 
 
-def normalise_features(X, caps):
+def normalise_features(X: np.ndarray, caps: dict) -> np.ndarray:
     Xn = X.copy().astype(float)
     power_cap = caps["power_kw_max"]
     conn_cap = caps["n_connectors_max"]
@@ -78,13 +65,13 @@ def normalise_features(X, caps):
     Xn[:, 1] = np.clip(Xn[:, 1] / max(conn_cap, 1.0), 0, 1)
     # rating
     Xn[:, 3] = np.clip(Xn[:, 3] / max(rating_cap, 1.0), 0, 1)
-    # usage_score
+    # usage_score (already 0–1 but clip just in case)
     Xn[:, 5] = np.clip(Xn[:, 5], 0, 1)
 
     return Xn
 
 
-def fit_linear_model(X, y):
+def fit_linear_model(X: np.ndarray, y: np.ndarray):
     ones = np.ones((X.shape[0], 1), dtype=float)
     Xb = np.hstack([X, ones])
 
@@ -98,78 +85,36 @@ def fit_linear_model(X, y):
     return weights, float(bias)
 
 
-def clamp01(x: float | None):
-    if x is None:
-        return None
-    return max(0.0, min(1.0, float(x)))
-
-
-def evaluate_model_leave_one_out(X_raw: np.ndarray, y_raw: np.ndarray):
-    """
-    Proper evaluation: leave-one-out cross validation.
-    For each row i:
-      - train on all rows except i
-      - test on row i
-    """
-    n = len(X_raw)
-    if n < 3:
-        print("⚠ Not enough samples for evaluation; skipping metrics.")
+def evaluate_model(X: np.ndarray, y: np.ndarray, weights: np.ndarray, bias: float):
+    if len(X) == 0:
         return {"accuracy": None, "precision": None, "recall": None}
 
-    tp = fp = tn = fn = 0
+    logits = X @ weights + bias
+    preds = (logits >= 0.5).astype(float)
 
-    for i in range(n):
-        mask = np.ones(n, dtype=bool)
-        mask[i] = False
+    correct = float((preds == y).sum())
+    accuracy = correct / float(len(y))
 
-        X_train = X_raw[mask]
-        y_train = y_raw[mask]
-        X_test = X_raw[~mask]
-        y_test = y_raw[~mask]
+    # positive class = 1.0
+    tp = float(((preds == 1) & (y == 1)).sum())
+    fp = float(((preds == 1) & (y == 0)).sum())
+    fn = float(((preds == 0) & (y == 1)).sum())
 
-        # Normalise within this fold
-        caps = compute_caps(X_train)
-        X_train_n = normalise_features(X_train, caps)
-        X_test_n = normalise_features(X_test, caps)
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
-        weights, bias = fit_linear_model(X_train_n, y_train)
-
-        scores = X_test_n @ weights + bias
-        probs = np.clip(scores, 0, 1)
-        preds = (probs >= 0.5).astype(float)
-
-        for p, t in zip(preds, y_test):
-            if t == 1 and p == 1:
-                tp += 1
-            elif t == 0 and p == 1:
-                fp += 1
-            elif t == 0 and p == 0:
-                tn += 1
-            elif t == 1 and p == 0:
-                fn += 1
-
-    total = tp + tn + fp + fn
-    accuracy = (tp + tn) / total if total > 0 else None
-    precision = tp / (tp + fp) if (tp + fp) > 0 else None
-    recall = tp / (tp + fn) if (tp + fn) > 0 else None
-
-    metrics = {
-        "accuracy": clamp01(accuracy),
-        "precision": clamp01(precision),
-        "recall": clamp01(recall),
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
     }
-
-    print("📊 Evaluation (leave-one-out):", metrics)
-    return metrics
 
 
 def main():
     print("🔧 Loading training data…")
     X, y = load_training_data()
-
     print(f"  → {len(X)} samples loaded")
 
-    # Fit final model on ALL data (for production use)
     caps = compute_caps(X)
     Xn = normalise_features(X, caps)
 
@@ -192,33 +137,59 @@ def main():
         },
     }
 
-    # ✅ Write model.json as before
+    # ✅ Write model.json
     MODEL_PATH.write_text(json.dumps(model, indent=2))
     print(f"✅ Wrote model to {MODEL_PATH}")
     print("   Version:", model["version"])
     print("   Caps:", model["caps"])
     print("   Weights:", model["weights"])
 
-    # ✅ REAL metrics via leave-one-out CV
-    metrics = evaluate_model_leave_one_out(X, y)
+    # ✅ Train/test split for REAL metrics
+    n = len(Xn)
+    if n < 3:
+        # Too few rows – just evaluate on all data
+        metrics = evaluate_model(Xn, y, weights, bias)
+    else:
+        rng = np.random.default_rng(42)
+        perm = rng.permutation(n)
+        split = max(1, int(n * 0.8))  # 80% train, 20% test
+
+        train_idx = perm[:split]
+        test_idx = perm[split:]
+
+        X_test = Xn[test_idx]
+        y_test = y[test_idx]
+
+        metrics = evaluate_model(X_test, y_test, weights, bias)
+
+    acc = metrics["accuracy"]
+    prec = metrics["precision"]
+    rec = metrics["recall"]
+    print(
+        f"📊 Computing training metrics…\n"
+        f"   Accuracy: {acc:.3f}, Precision: {prec:.3f}, Recall: {rec:.3f}"
+    )
 
     # ✅ Log training run + metrics to Supabase ml_runs (best-effort)
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
     if supabase_url and supabase_key:
-        try:
-            payload = {
-                "model_version": model["version"],
-                "samples_used": int(len(X)),
-                "notes": "GitHub Actions nightly training",
-                "metrics_json": metrics,
-                # also fill numeric columns if you created them
-                "accuracy": metrics["accuracy"],
-                "precision": metrics["precision"],
-                "recall": metrics["recall"],
-            }
+        payload = {
+            "model_version": model["version"],
+            "samples_used": int(len(X)),
+            "notes": "GitHub Actions nightly training",
+            "metrics_json": {
+                "accuracy": acc,
+                "precision": prec,
+                "recall": rec,
+            },
+            "accuracy": acc,
+            "precision": prec,
+            "recall": rec,
+        }
 
+        try:
             resp = requests.post(
                 f"{supabase_url}/rest/v1/ml_runs",
                 headers={
@@ -233,7 +204,7 @@ def main():
             if resp.status_code >= 300:
                 print("⚠ Supabase ml_runs insert failed:", resp.status_code, resp.text)
             else:
-                print("✅ Logged run to Supabase ml_runs with metrics")
+                print("✅ Logged run to Supabase ml_runs")
         except Exception as e:
             print("⚠ Could not log ml_runs:", e)
     else:
