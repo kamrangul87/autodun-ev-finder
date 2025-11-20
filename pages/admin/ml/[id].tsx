@@ -42,6 +42,11 @@ export default function MlRunDetailPage() {
   useEffect(() => {
     if (!id) return;
 
+    // handle id being string | string[]
+    const idStr = Array.isArray(id) ? id[0] : id;
+    const numericId = Number(idStr);
+    if (!numericId) return;
+
     async function load() {
       try {
         setLoading(true);
@@ -55,8 +60,7 @@ export default function MlRunDetailPage() {
         const json: ApiResponse = await res.json();
         const runs = json.runs ?? [];
 
-        const numericId = Number(id);
-
+        // sort oldest → newest
         const sorted = runs
           .slice()
           .sort(
@@ -66,7 +70,7 @@ export default function MlRunDetailPage() {
 
         const idx = sorted.findIndex((r) => Number(r.id) === numericId);
         if (idx === -1) {
-          setError(`Run with id ${id} not found`);
+          setError(`Run with id ${idStr} not found`);
           setCurrent(null);
           setPrevious(null);
         } else {
