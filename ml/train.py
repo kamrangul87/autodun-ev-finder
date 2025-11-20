@@ -5,11 +5,7 @@ import requests
 from pathlib import Path
 
 import csv
-
-try:
-    import numpy as np
-except ImportError:
-    raise SystemExit("Please run: pip install numpy")
+import numpy as np
 
 ROOT = Path(__file__).resolve().parent
 CSV_PATH = ROOT / "training_data.csv"
@@ -72,13 +68,9 @@ def normalise_features(X, caps):
     conn_cap = caps["n_connectors_max"]
     rating_cap = caps["rating_max"]
 
-    # power_kw
     Xn[:, 0] = np.clip(Xn[:, 0] / max(power_cap, 1.0), 0, 1)
-    # n_connectors
     Xn[:, 1] = np.clip(Xn[:, 1] / max(conn_cap, 1.0), 0, 1)
-    # rating
     Xn[:, 3] = np.clip(Xn[:, 3] / max(rating_cap, 1.0), 0, 1)
-    # usage_score
     Xn[:, 5] = np.clip(Xn[:, 5], 0, 1)
 
     return Xn
@@ -98,53 +90,27 @@ def fit_linear_model(X, y):
     return weights, float(bias)
 
 
-def clamp01(x):
-    return max(0.0, min(1.0, float(x)))
+# ---------------------------------------------------------
+# ⭐ NEW — SIMPLE METRIC CALCULATIONS
+# ---------------------------------------------------------
+def compute_metrics(y_true, y_pred):
+    # threshold predictions at 0.5 (model outputs 0–1)
+    y_hat = (y_pred >= 0.5).astype(int)
 
+    tp = int(np.sum((y_true == 1) & (y_hat == 1)))
+    tn = int(np.sum((y_true == 0) & (y_hat == 0)))
+    fp = int(np.sum((y_true == 0) & (y_hat == 1)))
+    fn = int(np.sum((y_true == 1) & (y_hat == 0)))
 
-def predict_scores(Xn, weights, bias):
-    """
-    Use the fitted linear model to produce scores in [0,1].
-    """
-    raw = Xn @ weights + bias
-    # clamp each score to [0,1]
-    return np.vectorize(clamp01)(raw)
+    accuracy = (tp + tn) / max(len(y_true), 1)
+    precision = tp / max((tp + fp), 1)
+    recall = tp / max((tp + fn), 1)
 
-
-def compute_binary_metrics(y_true, scores, threshold=0.5):
-    """
-    Simple accuracy / precision / recall on a 0/1 label.
-
-    y_true: array of 0/1 labels
-    scores: model scores in [0,1]
-    threshold: score >= threshold → predict 1
-    """
-    y_true = np.asarray(y_true).astype(int)
-    y_pred = (np.asarray(scores) >= threshold).astype(int)
-
-    assert y_true.shape == y_pred.shape
-
-    tp = int(np.sum((y_true == 1) & (y_pred == 1)))
-    tn = int(np.sum((y_true == 0) & (y_pred == 0)))
-    fp = int(np.sum((y_true == 0) & (y_pred == 1)))
-    fn = int(np.sum((y_true == 1) & (y_pred == 0)))
-
-    n = len(y_true)
-    accuracy = (tp + tn) / n if n > 0 else 0.0
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-
-    metrics = {
-        "accuracy": float(accuracy),
-        "precision": float(precision),
-        "recall": float(recall),
-        "tp": tp,
-        "tn": tn,
-        "fp": fp,
-        "fn": fn,
-        "samples_used": n,
+    return {
+        "accuracy": round(float(accuracy), 3),
+        "precision": round(float(precision), 3),
+        "recall": round(float(recall), 3),
     }
-    return metrics
 
 
 def main():
@@ -158,40 +124,33 @@ def main():
     print("🔧 Fitting linear model…")
     weights, bias = fit_linear_model(Xn, y)
 
-    w_power, w_conn, w_fast, w_rating, w_geo, w_usage = [float(w) for w in weights]
+    # compute predictions for metrics
+    y_pred = Xn @ weights + bias
+    y_pred = np.clip(y_pred, 0, 1)
+
+    metrics = compute_metrics(y, y_pred)
 
     model = {
         "version": os.environ.get("AUTODUN_MODEL_VERSION", "v2-manual"),
         "bias": bias,
         "caps": caps,
         "weights": {
-            "power_kw": w_power,
-            "n_connectors": w_conn,
-            "has_fast_dc": w_fast,
-            "rating": w_rating,
-            "has_geo": w_geo,
-            "usage_score": w_usage,
+            "power_kw": float(weights[0]),
+            "n_connectors": float(weights[1]),
+            "has_fast_dc": float(weights[2]),
+            "rating": float(weights[3]),
+            "has_geo": float(weights[4]),
+            "usage_score": float(weights[5]),
         },
     }
 
-    # ✅ Write model.json as before
     MODEL_PATH.write_text(json.dumps(model, indent=2))
     print(f"✅ Wrote model to {MODEL_PATH}")
-    print("   Version:", model["version"])
-    print("   Caps:", model["caps"])
-    print("   Weights:", model["weights"])
+    print("Metrics:", metrics)
 
-    # ✅ NEW: compute scores + metrics
-    print("🔍 Computing training metrics…")
-    scores = predict_scores(Xn, weights, bias)
-    metrics = compute_binary_metrics(y, scores, threshold=0.5)
-    print(
-        f"   Accuracy: {metrics['accuracy']:.3f}, "
-        f"Precision: {metrics['precision']:.3f}, "
-        f"Recall: {metrics['recall']:.3f}"
-    )
-
-    # ✅ Log training run to Supabase ml_runs (best-effort)
+    # ---------------------------------------------------------
+    # ⭐ NEW — store metrics in ml_runs table
+    # ---------------------------------------------------------
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -200,13 +159,10 @@ def main():
             payload = {
                 "model_version": model["version"],
                 "samples_used": int(len(X)),
+                "accuracy": metrics["accuracy"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
                 "notes": "GitHub Actions nightly training",
-                # metrics_json is what the admin UI reads
-                "metrics_json": {
-                    "accuracy": metrics["accuracy"],
-                    "precision": metrics["precision"],
-                    "recall": metrics["recall"],
-                },
             }
 
             resp = requests.post(
@@ -220,14 +176,16 @@ def main():
                 json=payload,
                 timeout=10,
             )
+
             if resp.status_code >= 300:
-                print("⚠ Supabase ml_runs insert failed:", resp.status_code, resp.text)
+                print("⚠ Supabase insert failed:", resp.status_code, resp.text)
             else:
-                print("✅ Logged run to Supabase ml_runs")
+                print("✅ Logged run with metrics:", payload)
+
         except Exception as e:
-            print("⚠ Could not log ml_runs:", e)
+            print("⚠ Could not insert ml_runs metrics:", e)
     else:
-        print("ℹ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set, skipping ml_runs log.")
+        print("ℹ Supabase credentials missing, skipping metrics logging.")
 
 
 if __name__ == "__main__":
