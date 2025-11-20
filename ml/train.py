@@ -90,11 +90,8 @@ def fit_linear_model(X, y):
     return weights, float(bias)
 
 
-# ---------------------------------------------------------
-# ⭐ NEW — SIMPLE METRIC CALCULATIONS
-# ---------------------------------------------------------
 def compute_metrics(y_true, y_pred):
-    # threshold predictions at 0.5 (model outputs 0–1)
+    # turn scores into 0/1 predictions
     y_hat = (y_pred >= 0.5).astype(int)
 
     tp = int(np.sum((y_true == 1) & (y_hat == 1)))
@@ -124,7 +121,7 @@ def main():
     print("🔧 Fitting linear model…")
     weights, bias = fit_linear_model(Xn, y)
 
-    # compute predictions for metrics
+    # scores in [0,1] for metric calculation
     y_pred = Xn @ weights + bias
     y_pred = np.clip(y_pred, 0, 1)
 
@@ -132,7 +129,7 @@ def main():
 
     model = {
         "version": os.environ.get("AUTODUN_MODEL_VERSION", "v2-manual"),
-        "bias": bias,
+        "bias": float(bias),
         "caps": caps,
         "weights": {
             "power_kw": float(weights[0]),
@@ -148,9 +145,7 @@ def main():
     print(f"✅ Wrote model to {MODEL_PATH}")
     print("Metrics:", metrics)
 
-    # ---------------------------------------------------------
-    # ⭐ NEW — store metrics in ml_runs table
-    # ---------------------------------------------------------
+    # log run to Supabase with metrics
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -159,10 +154,10 @@ def main():
             payload = {
                 "model_version": model["version"],
                 "samples_used": int(len(X)),
+                "notes": "GitHub Actions nightly training",
                 "accuracy": metrics["accuracy"],
                 "precision": metrics["precision"],
                 "recall": metrics["recall"],
-                "notes": "GitHub Actions nightly training",
             }
 
             resp = requests.post(
@@ -176,16 +171,14 @@ def main():
                 json=payload,
                 timeout=10,
             )
-
             if resp.status_code >= 300:
-                print("⚠ Supabase insert failed:", resp.status_code, resp.text)
+                print("⚠ Supabase ml_runs insert failed:", resp.status_code, resp.text)
             else:
-                print("✅ Logged run with metrics:", payload)
-
+                print("✅ Logged run to Supabase ml_runs with metrics")
         except Exception as e:
-            print("⚠ Could not insert ml_runs metrics:", e)
+            print("⚠ Could not log ml_runs:", e)
     else:
-        print("ℹ Supabase credentials missing, skipping metrics logging.")
+        print("ℹ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set, skipping ml_runs log.")
 
 
 if __name__ == "__main__":
