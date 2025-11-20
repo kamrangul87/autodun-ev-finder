@@ -1,4 +1,4 @@
-// components/ml/MlHistoryChart.tsx
+// components/ml/MlRunMiniChart.tsx
 "use client";
 
 import {
@@ -26,8 +26,11 @@ type MlRun = {
   metrics_json?: MlMetrics | null;
 };
 
-export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
-  const data = [...runs]
+export default function MlRunMiniChart({ runs }: { runs: MlRun[] }) {
+  if (!runs.length) return null;
+
+  const data = runs
+    .slice()
     .sort(
       (a, b) => new Date(a.run_at).getTime() - new Date(b.run_at).getTime()
     )
@@ -38,22 +41,20 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
       version: r.model_version,
     }));
 
-  if (!data.length) return null;
-
   return (
     <div
       style={{
         width: "100%",
-        height: 260,
+        height: 220,
         border: "1px solid #e5e7eb",
         borderRadius: 8,
-        padding: 16,
-        marginBottom: 24,
+        padding: 12,
+        marginTop: 16,
       }}
     >
-      <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
-        ML Run Trend (Samples per run)
-      </h2>
+      <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+        Samples for this run vs previous
+      </h3>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
           <CartesianGrid strokeDasharray="3 3" />
