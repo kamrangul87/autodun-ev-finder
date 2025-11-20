@@ -102,6 +102,51 @@ def clamp01(x):
     return max(0.0, min(1.0, float(x)))
 
 
+def predict_scores(Xn, weights, bias):
+    """
+    Use the fitted linear model to produce scores in [0,1].
+    """
+    raw = Xn @ weights + bias
+    # clamp each score to [0,1]
+    return np.vectorize(clamp01)(raw)
+
+
+def compute_binary_metrics(y_true, scores, threshold=0.5):
+    """
+    Simple accuracy / precision / recall on a 0/1 label.
+
+    y_true: array of 0/1 labels
+    scores: model scores in [0,1]
+    threshold: score >= threshold → predict 1
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_pred = (np.asarray(scores) >= threshold).astype(int)
+
+    assert y_true.shape == y_pred.shape
+
+    tp = int(np.sum((y_true == 1) & (y_pred == 1)))
+    tn = int(np.sum((y_true == 0) & (y_pred == 0)))
+    fp = int(np.sum((y_true == 0) & (y_pred == 1)))
+    fn = int(np.sum((y_true == 1) & (y_pred == 0)))
+
+    n = len(y_true)
+    accuracy = (tp + tn) / n if n > 0 else 0.0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+
+    metrics = {
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "tp": tp,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "samples_used": n,
+    }
+    return metrics
+
+
 def main():
     print("🔧 Loading training data…")
     X, y = load_training_data()
@@ -136,12 +181,34 @@ def main():
     print("   Caps:", model["caps"])
     print("   Weights:", model["weights"])
 
-    # ✅ NEW: Log training run to Supabase ml_runs (best-effort)
+    # ✅ NEW: compute scores + metrics
+    print("🔍 Computing training metrics…")
+    scores = predict_scores(Xn, weights, bias)
+    metrics = compute_binary_metrics(y, scores, threshold=0.5)
+    print(
+        f"   Accuracy: {metrics['accuracy']:.3f}, "
+        f"Precision: {metrics['precision']:.3f}, "
+        f"Recall: {metrics['recall']:.3f}"
+    )
+
+    # ✅ Log training run to Supabase ml_runs (best-effort)
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
     if supabase_url and supabase_key:
         try:
+            payload = {
+                "model_version": model["version"],
+                "samples_used": int(len(X)),
+                "notes": "GitHub Actions nightly training",
+                # metrics_json is what the admin UI reads
+                "metrics_json": {
+                    "accuracy": metrics["accuracy"],
+                    "precision": metrics["precision"],
+                    "recall": metrics["recall"],
+                },
+            }
+
             resp = requests.post(
                 f"{supabase_url}/rest/v1/ml_runs",
                 headers={
@@ -150,11 +217,7 @@ def main():
                     "Content-Type": "application/json",
                     "Prefer": "return=minimal",
                 },
-                json={
-                    "model_version": model["version"],
-                    "samples_used": int(len(X)),
-                    "notes": "GitHub Actions nightly training",
-                },
+                json=payload,
                 timeout=10,
             )
             if resp.status_code >= 300:
