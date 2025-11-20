@@ -14,7 +14,7 @@ jobs:
   train-ml:
     runs-on: ubuntu-latest
 
-    # ✅ Make Supabase secrets available inside the job
+    # ✅ Supabase secrets for ml_runs + metrics logging
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -33,7 +33,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy requests
 
-      - name: Run ML training script
+      - name: Run ML training script (writes model.json + logs metrics to Supabase)
         run: |
           python ml/train.py
 
