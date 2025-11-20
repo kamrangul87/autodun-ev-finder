@@ -12,31 +12,35 @@ MODEL_PATH = ROOT / "model.json"
 
 def load_training_data():
     """
-    Load all rows from training_data.csv using numpy.
+    Load ALL rows from training_data.csv.
 
-    CSV format (header row + numeric rows):
+    CSV format:
     power_kw,n_connectors,has_fast_dc,rating,has_geo,usage_score,label
     """
     if not CSV_PATH.exists():
         raise SystemExit(f"Training data not found: {CSV_PATH}")
 
     try:
-        # skip header row, comma-separated, all numeric
+        # Read numeric data, skip the header row
         data = np.loadtxt(CSV_PATH, delimiter=",", skiprows=1)
     except Exception as e:
         raise SystemExit(f"Failed to load training data from {CSV_PATH}: {e}")
 
     if data.ndim == 1:
-        # single row edge case
+        # single-row edge case
         data = data.reshape(1, -1)
 
-    if data.shape[1] < 7:
+    # data shape: (n_samples, 7)  -> 6 features + 1 label
+    n_samples, n_cols = data.shape
+    print(f"📁 DEBUG: loaded matrix from CSV: {n_samples} rows x {n_cols} cols")
+
+    if n_cols < 7:
         raise SystemExit(
-            f"Expected at least 7 columns in {CSV_PATH}, found {data.shape[1]}"
+            f"Expected at least 7 columns in {CSV_PATH}, found {n_cols}"
         )
 
-    X = data[:, :-1]  # all columns except last
-    y = data[:, -1]   # last column is label (0/1)
+    X = data[:, :-1]  # first 6 columns
+    y = data[:, -1]   # last column = label
 
     return X.astype(float), y.astype(float)
 
@@ -65,7 +69,7 @@ def normalise_features(X: np.ndarray, caps: dict) -> np.ndarray:
     Xn[:, 1] = np.clip(Xn[:, 1] / max(conn_cap, 1.0), 0, 1)
     # rating
     Xn[:, 3] = np.clip(Xn[:, 3] / max(rating_cap, 1.0), 0, 1)
-    # usage_score (already 0–1 but clip just in case)
+    # usage_score
     Xn[:, 5] = np.clip(Xn[:, 5], 0, 1)
 
     return Xn
@@ -95,13 +99,12 @@ def evaluate_model(X: np.ndarray, y: np.ndarray, weights: np.ndarray, bias: floa
     correct = float((preds == y).sum())
     accuracy = correct / float(len(y))
 
-    # positive class = 1.0
     tp = float(((preds == 1) & (y == 1)).sum())
     fp = float(((preds == 1) & (y == 0)).sum())
     fn = float(((preds == 0) & (y == 1)).sum())
 
     precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    recall = tp / (tp + fn) > 0 and tp / (tp + fn) or 0.0
 
     return {
         "accuracy": accuracy,
@@ -113,7 +116,7 @@ def evaluate_model(X: np.ndarray, y: np.ndarray, weights: np.ndarray, bias: floa
 def main():
     print("🔧 Loading training data…")
     X, y = load_training_data()
-    print(f"  → {len(X)} samples loaded")
+    print(f"  → {len(X)} samples loaded (this should match CSV rows)")
 
     caps = compute_caps(X)
     Xn = normalise_features(X, caps)
@@ -137,24 +140,20 @@ def main():
         },
     }
 
-    # ✅ Write model.json
     MODEL_PATH.write_text(json.dumps(model, indent=2))
     print(f"✅ Wrote model to {MODEL_PATH}")
     print("   Version:", model["version"])
     print("   Caps:", model["caps"])
     print("   Weights:", model["weights"])
 
-    # ✅ Train/test split for REAL metrics
+    # ── real metrics with simple train/test split ──
     n = len(Xn)
     if n < 3:
-        # Too few rows – just evaluate on all data
         metrics = evaluate_model(Xn, y, weights, bias)
     else:
         rng = np.random.default_rng(42)
         perm = rng.permutation(n)
-        split = max(1, int(n * 0.8))  # 80% train, 20% test
-
-        train_idx = perm[:split]
+        split = max(1, int(n * 0.8))
         test_idx = perm[split:]
 
         X_test = Xn[test_idx]
@@ -165,19 +164,20 @@ def main():
     acc = metrics["accuracy"]
     prec = metrics["precision"]
     rec = metrics["recall"]
+
     print(
         f"📊 Computing training metrics…\n"
         f"   Accuracy: {acc:.3f}, Precision: {prec:.3f}, Recall: {rec:.3f}"
     )
 
-    # ✅ Log training run + metrics to Supabase ml_runs (best-effort)
+    # ── log to Supabase ml_runs ──
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
     if supabase_url and supabase_key:
         payload = {
             "model_version": model["version"],
-            "samples_used": int(len(X)),
+            "samples_used": int(len(X)),  # <-- will be 50 now
             "notes": "GitHub Actions nightly training",
             "metrics_json": {
                 "accuracy": acc,
