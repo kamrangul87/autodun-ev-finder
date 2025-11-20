@@ -92,6 +92,10 @@ export default function AdminMlPage() {
     0
   );
 
+  const latestMetrics = latest.metrics_json ?? {};
+  const fmtPct = (v?: number | null) =>
+    v != null ? `${(v * 100).toFixed(1)}%` : "n/a";
+
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-3xl font-bold">ML Training Status</h1>
@@ -101,6 +105,7 @@ export default function AdminMlPage() {
         Supabase <code>ml_runs</code>.
       </p>
 
+      {/* Summary block */}
       <div className="space-y-2 text-sm">
         <div>
           <strong>Current model</strong>
@@ -117,6 +122,13 @@ export default function AdminMlPage() {
           <strong>Total runs (shown) / Samples</strong>
           <br />
           {runs.length} • {totalSamples} samples
+        </div>
+        <div>
+          <strong>Latest metrics</strong>
+          <br />
+          Accuracy: {fmtPct(latestMetrics.accuracy)} •{" "}
+          Precision: {fmtPct(latestMetrics.precision)} •{" "}
+          Recall: {fmtPct(latestMetrics.recall)}
         </div>
       </div>
 
@@ -136,6 +148,8 @@ export default function AdminMlPage() {
             <th className="px-3 py-2 text-left border-b">Model version</th>
             <th className="px-3 py-2 text-left border-b">Samples</th>
             <th className="px-3 py-2 text-left border-b">Accuracy</th>
+            <th className="px-3 py-2 text-left border-b">Precision</th>
+            <th className="px-3 py-2 text-left border-b">Recall</th>
             <th className="px-3 py-2 text-left border-b">Notes</th>
             <th className="px-3 py-2 text-left border-b">Logs</th>
           </tr>
@@ -154,9 +168,13 @@ export default function AdminMlPage() {
                 {run.samples_used ?? "—"}
               </td>
               <td className="px-3 py-2 border-b">
-                {run.metrics_json?.accuracy != null
-                  ? `${(run.metrics_json.accuracy * 100).toFixed(1)}%`
-                  : "n/a"}
+                {fmtPct(run.metrics_json?.accuracy ?? null)}
+              </td>
+              <td className="px-3 py-2 border-b">
+                {fmtPct(run.metrics_json?.precision ?? null)}
+              </td>
+              <td className="px-3 py-2 border-b">
+                {fmtPct(run.metrics_json?.recall ?? null)}
               </td>
               <td className="px-3 py-2 border-b">
                 {run.notes || "—"}
