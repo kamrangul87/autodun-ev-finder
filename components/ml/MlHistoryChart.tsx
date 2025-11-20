@@ -33,8 +33,17 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
   if (!data.length) return null;
 
   return (
-    <div className="w-full h-64 border rounded-lg p-4 mb-6">
-      <h2 className="text-lg font-semibold mb-3">
+    <div
+      style={{
+        width: "100%",
+        height: 260, // 👈 explicit height so ResponsiveContainer can render
+        border: "1px solid #e5e7eb",
+        borderRadius: 8,
+        padding: 16,
+        marginBottom: 24,
+      }}
+    >
+      <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
         ML Run Trend (Samples per run)
       </h2>
       <ResponsiveContainer width="100%" height="100%">
@@ -44,7 +53,6 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
           <YAxis />
           <Tooltip
             formatter={(value: any) => [`${value}`, "Samples"]}
-            // 🔧 no explicit type on payload so TS accepts readonly array
             labelFormatter={(label, payload) => {
               const first: any = payload && payload.length > 0 ? payload[0] : null;
               const item: any = first?.payload;
