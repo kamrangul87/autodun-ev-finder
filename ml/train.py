@@ -1,9 +1,10 @@
 import json
+import math
 import os
-import csv
+import requests
 from pathlib import Path
 
-import requests
+import csv
 
 try:
     import numpy as np
@@ -15,18 +16,7 @@ CSV_PATH = ROOT / "training_data.csv"
 MODEL_PATH = ROOT / "model.json"
 
 
-# ──────────────────────────
-# Data loading
-# ──────────────────────────
-
-
 def load_training_data():
-    """
-    Load features + label from training_data.csv.
-
-    Expected columns:
-      power_kw, n_connectors, has_fast_dc, rating, has_geo, usage_score, label
-    """
     if not CSV_PATH.exists():
         raise SystemExit(f"Training data not found: {CSV_PATH}")
 
@@ -42,9 +32,8 @@ def load_training_data():
                 rating = float(row["rating"])
                 has_geo = float(row["has_geo"])
                 usage_score = float(row.get("usage_score", 0.0))
-                label = float(row["label"])  # expected 0–1
+                label = float(row["label"])
             except (KeyError, ValueError):
-                # Skip bad rows
                 continue
 
             xs.append(
@@ -65,13 +54,7 @@ def load_training_data():
     return np.array(xs, dtype=float), np.array(ys, dtype=float)
 
 
-# ──────────────────────────
-# Feature scaling
-# ──────────────────────────
-
-
-def compute_caps(X: np.ndarray):
-    """Compute clipping caps from the distribution (95th percentile)."""
+def compute_caps(X):
     power_kw_max = float(np.percentile(X[:, 0], 95))
     n_connectors_max = float(max(1.0, np.percentile(X[:, 1], 95)))
     rating_max = 5.0
@@ -83,8 +66,7 @@ def compute_caps(X: np.ndarray):
     }
 
 
-def normalise_features(X: np.ndarray, caps: dict) -> np.ndarray:
-    """Normalise features into roughly 0–1 range, clipping outliers."""
+def normalise_features(X, caps):
     Xn = X.copy().astype(float)
     power_cap = caps["power_kw_max"]
     conn_cap = caps["n_connectors_max"]
@@ -102,13 +84,7 @@ def normalise_features(X: np.ndarray, caps: dict) -> np.ndarray:
     return Xn
 
 
-# ──────────────────────────
-# Linear model
-# ──────────────────────────
-
-
-def fit_linear_model(X: np.ndarray, y: np.ndarray):
-    """Ridge-regularised linear regression."""
+def fit_linear_model(X, y):
     ones = np.ones((X.shape[0], 1), dtype=float)
     Xb = np.hstack([X, ones])
 
@@ -122,101 +98,86 @@ def fit_linear_model(X: np.ndarray, y: np.ndarray):
     return weights, float(bias)
 
 
-def predict_scores(X: np.ndarray, weights: np.ndarray, bias: float) -> np.ndarray:
-    """Raw linear predictions (before clamping)."""
-    return X @ weights + bias
-
-
-def clamp01(x: float) -> float:
+def clamp01(x: float | None):
+    if x is None:
+        return None
     return max(0.0, min(1.0, float(x)))
 
 
-# ──────────────────────────
-# Train/test split + metrics
-# ──────────────────────────
-
-
-def train_test_split(X: np.ndarray, y: np.ndarray, test_ratio: float = 0.4):
+def evaluate_model_leave_one_out(X_raw: np.ndarray, y_raw: np.ndarray):
     """
-    Simple deterministic split so results are reproducible.
-
-    Ensures at least 1 train and 1 test sample.
+    Proper evaluation: leave-one-out cross validation.
+    For each row i:
+      - train on all rows except i
+      - test on row i
     """
-    n = X.shape[0]
-    if n < 2:
-        raise SystemExit("Need at least 2 samples for train/test split")
+    n = len(X_raw)
+    if n < 3:
+        print("⚠ Not enough samples for evaluation; skipping metrics.")
+        return {"accuracy": None, "precision": None, "recall": None}
 
-    rng = np.random.default_rng(42)
-    idx = rng.permutation(n)
+    tp = fp = tn = fn = 0
 
-    split = int(n * (1 - test_ratio))
-    if split <= 0:
-        split = 1
-    if split >= n:
-        split = n - 1
+    for i in range(n):
+        mask = np.ones(n, dtype=bool)
+        mask[i] = False
 
-    train_idx = idx[:split]
-    test_idx = idx[split:]
+        X_train = X_raw[mask]
+        y_train = y_raw[mask]
+        X_test = X_raw[~mask]
+        y_test = y_raw[~mask]
 
-    return X[train_idx], X[test_idx], y[train_idx], y[test_idx]
+        # Normalise within this fold
+        caps = compute_caps(X_train)
+        X_train_n = normalise_features(X_train, caps)
+        X_test_n = normalise_features(X_test, caps)
 
+        weights, bias = fit_linear_model(X_train_n, y_train)
 
-def compute_classification_metrics(y_true_prob: np.ndarray, y_pred_prob: np.ndarray):
-    """
-    Turn continuous labels (0–1) into binary 0/1 using threshold 0.5,
-    then compute accuracy, precision, recall.
-    """
-    # Convert probs into 0/1 labels
-    y_true = (y_true_prob >= 0.5).astype(int)
-    y_pred = (y_pred_prob >= 0.5).astype(int)
+        scores = X_test_n @ weights + bias
+        probs = np.clip(scores, 0, 1)
+        preds = (probs >= 0.5).astype(float)
 
-    tp = int(((y_pred == 1) & (y_true == 1)).sum())
-    tn = int(((y_pred == 0) & (y_true == 0)).sum())
-    fp = int(((y_pred == 1) & (y_true == 0)).sum())
-    fn = int(((y_pred == 0) & (y_true == 1)).sum())
+        for p, t in zip(preds, y_test):
+            if t == 1 and p == 1:
+                tp += 1
+            elif t == 0 and p == 1:
+                fp += 1
+            elif t == 0 and p == 0:
+                tn += 1
+            elif t == 1 and p == 0:
+                fn += 1
 
     total = tp + tn + fp + fn
-    if total == 0:
-        accuracy = None
-    else:
-        accuracy = (tp + tn) / total
+    accuracy = (tp + tn) / total if total > 0 else None
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
 
-    if tp + fp == 0:
-        precision = None
-    else:
-        precision = tp / (tp + fp)
+    metrics = {
+        "accuracy": clamp01(accuracy),
+        "precision": clamp01(precision),
+        "recall": clamp01(recall),
+    }
 
-    if tp + fn == 0:
-        recall = None
-    else:
-        recall = tp / (tp + fn)
-
-    return accuracy, precision, recall
-
-
-# ──────────────────────────
-# Main training entrypoint
-# ──────────────────────────
+    print("📊 Evaluation (leave-one-out):", metrics)
+    return metrics
 
 
 def main():
     print("🔧 Loading training data…")
-    X_raw, y = load_training_data()
-    print(f"  → {len(X_raw)} samples loaded")
+    X, y = load_training_data()
 
-    print("🔧 Computing normalisation caps…")
-    caps = compute_caps(X_raw)
-    X = normalise_features(X_raw, caps)
+    print(f"  → {len(X)} samples loaded")
 
-    print("🔧 Splitting into train/test…")
-    X_train, X_test, y_train, y_test = train_test_split(X, y)
-    print(f"  → Train: {len(X_train)}  |  Test: {len(X_test)}")
+    # Fit final model on ALL data (for production use)
+    caps = compute_caps(X)
+    Xn = normalise_features(X, caps)
 
-    print("🔧 Fitting linear model on train set…")
-    weights, bias = fit_linear_model(X_train, y_train)
+    print("🔧 Fitting linear model…")
+    weights, bias = fit_linear_model(Xn, y)
+
     w_power, w_conn, w_fast, w_rating, w_geo, w_usage = [float(w) for w in weights]
 
-    # Save model.json (same as before)
     model = {
         "version": os.environ.get("AUTODUN_MODEL_VERSION", "v2-manual"),
         "bias": bias,
@@ -231,34 +192,17 @@ def main():
         },
     }
 
+    # ✅ Write model.json as before
     MODEL_PATH.write_text(json.dumps(model, indent=2))
     print(f"✅ Wrote model to {MODEL_PATH}")
     print("   Version:", model["version"])
     print("   Caps:", model["caps"])
     print("   Weights:", model["weights"])
 
-    # ── NEW: evaluate on test split ─────────────────
-    print("🔍 Evaluating on test set…")
-    raw_scores = predict_scores(X_test, weights, bias)
-    y_pred_prob = np.array([clamp01(v) for v in raw_scores], dtype=float)
-    y_true_prob = y_test.astype(float)
+    # ✅ REAL metrics via leave-one-out CV
+    metrics = evaluate_model_leave_one_out(X, y)
 
-    accuracy, precision, recall = compute_classification_metrics(
-        y_true_prob, y_pred_prob
-    )
-
-    print("   Metrics (test set):")
-    print("     Accuracy :", accuracy if accuracy is not None else "n/a")
-    print("     Precision:", precision if precision is not None else "n/a")
-    print("     Recall   :", recall if recall is not None else "n/a")
-
-    metrics = {
-        "accuracy": float(accuracy) if accuracy is not None else None,
-        "precision": float(precision) if precision is not None else None,
-        "recall": float(recall) if recall is not None else None,
-    }
-
-    # ── Log to Supabase ml_runs (best-effort) ───────
+    # ✅ Log training run + metrics to Supabase ml_runs (best-effort)
     supabase_url = os.environ.get("SUPABASE_URL")
     supabase_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 
@@ -266,11 +210,10 @@ def main():
         try:
             payload = {
                 "model_version": model["version"],
-                # keep total samples as before so charts don’t jump
-                "samples_used": int(len(X_raw)),
+                "samples_used": int(len(X)),
                 "notes": "GitHub Actions nightly training",
                 "metrics_json": metrics,
-                # optional numeric columns for convenience
+                # also fill numeric columns if you created them
                 "accuracy": metrics["accuracy"],
                 "precision": metrics["precision"],
                 "recall": metrics["recall"],
@@ -290,7 +233,7 @@ def main():
             if resp.status_code >= 300:
                 print("⚠ Supabase ml_runs insert failed:", resp.status_code, resp.text)
             else:
-                print("✅ Logged run to Supabase ml_runs")
+                print("✅ Logged run to Supabase ml_runs with metrics")
         except Exception as e:
             print("⚠ Could not log ml_runs:", e)
     else:
