@@ -1,6 +1,16 @@
 // pages/admin/ml.tsx
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
+
+// Lazy-load the Recharts-based chart on client only
+const MlHistoryChart = dynamic(
+  () =>
+    import("../../components/ml/MlHistoryChart").then(
+      (m) => m.MlHistoryChart
+    ),
+  { ssr: false }
+);
 
 type MlRun = {
   id: number;
@@ -66,6 +76,9 @@ export default function AdminMlPage() {
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-2xl font-semibold">ML Runs</h1>
+
+      {/* New: ML history chart */}
+      <MlHistoryChart runs={runs} />
 
       <table className="min-w-full text-sm border border-gray-200">
         <thead className="bg-gray-50">
