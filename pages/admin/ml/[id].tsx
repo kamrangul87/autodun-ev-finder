@@ -1,6 +1,15 @@
 // pages/admin/ml/[id].tsx
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+
+const MlRunMiniChart = dynamic(
+  () =>
+    import("../../../components/ml/MlRunMiniChart").then(
+      (m) => m.MlRunMiniChart
+    ),
+  { ssr: false }
+);
 
 type MlRun = {
   id: number;
@@ -18,7 +27,9 @@ export default function MlRunDetailPage() {
   const router = useRouter();
   const { id } = router.query;
 
-  const [run, setRun] = useState<MlRun | null>(null);
+  const [current, setCurrent] = useState<MlRun | null>(null);
+  const [previous, setPrevious] = useState<MlRun | null>(null);
+  const [allRuns, setAllRuns] = useState<MlRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,21 +41,33 @@ export default function MlRunDetailPage() {
         setLoading(true);
         setError(null);
 
-        // Reuse the existing endpoint, then pick the run we need
         const res = await fetch("/api/admin/ml-runs");
         if (!res.ok) {
           throw new Error(`Failed to load ml_runs (status ${res.status})`);
         }
 
         const json: ApiResponse = await res.json();
-        const numericId = Number(id);
-        const found = json.runs?.find((r) => Number(r.id) === numericId) ?? null;
+        const runs = json.runs ?? [];
+        setAllRuns(runs);
 
-        if (!found) {
+        const numericId = Number(id);
+
+        // sort oldest → newest for comparison
+        const sorted = runs
+          .slice()
+          .sort(
+            (a, b) =>
+              new Date(a.run_at).getTime() - new Date(b.run_at).getTime()
+          );
+
+        const idx = sorted.findIndex((r) => Number(r.id) === numericId);
+        if (idx === -1) {
           setError(`Run with id ${id} not found`);
-          setRun(null);
+          setCurrent(null);
+          setPrevious(null);
         } else {
-          setRun(found);
+          setCurrent(sorted[idx] ?? null);
+          setPrevious(idx > 0 ? sorted[idx - 1] : null);
         }
       } catch (err: any) {
         console.error("Failed to load ml run", err);
@@ -63,24 +86,38 @@ export default function MlRunDetailPage() {
 
   if (error) {
     return (
-      <div className="p-6 space-y-3 text-sm">
+      <div className="p-6" style={{ fontSize: 14 }}>
         <button
           onClick={() => router.push("/admin/ml")}
-          className="px-3 py-1 text-xs border rounded"
+          style={{
+            padding: "4px 10px",
+            fontSize: 12,
+            borderRadius: 4,
+            border: "1px solid #d1d5db",
+            marginBottom: 12,
+            cursor: "pointer",
+          }}
         >
           ← Back to ML runs
         </button>
-        <div className="text-red-600">Error: {error}</div>
+        <div style={{ color: "#b91c1c" }}>Error: {error}</div>
       </div>
     );
   }
 
-  if (!run) {
+  if (!current) {
     return (
-      <div className="p-6 space-y-3 text-sm">
+      <div className="p-6" style={{ fontSize: 14 }}>
         <button
           onClick={() => router.push("/admin/ml")}
-          className="px-3 py-1 text-xs border rounded"
+          style={{
+            padding: "4px 10px",
+            fontSize: 12,
+            borderRadius: 4,
+            border: "1px solid #d1d5db",
+            marginBottom: 12,
+            cursor: "pointer",
+          }}
         >
           ← Back to ML runs
         </button>
@@ -89,47 +126,167 @@ export default function MlRunDetailPage() {
     );
   }
 
+  const logsUrl =
+    "https://github.com/kamrangul87/autodun-ev-finder/actions/workflows/train-ml.yml";
+
+  const samplesCurrent = current.samples_used ?? 0;
+  const samplesPrev = previous?.samples_used ?? null;
+  const samplesDelta =
+    samplesPrev === null ? null : samplesCurrent - samplesPrev;
+
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6" style={{ fontSize: 14 }}>
       <button
         onClick={() => router.push("/admin/ml")}
-        className="px-3 py-1 text-xs border rounded"
+        style={{
+          padding: "4px 10px",
+          fontSize: 12,
+          borderRadius: 4,
+          border: "1px solid #d1d5db",
+          marginBottom: 16,
+          cursor: "pointer",
+        }}
       >
         ← Back to ML runs
       </button>
 
-      <h1 className="text-2xl font-semibold">
-        ML Run #{run.id}
+      <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>
+        ML Run #{current.id}
       </h1>
 
-      <div className="grid gap-4 md:grid-cols-2 text-sm">
-        <div className="border rounded-lg p-4 space-y-2">
-          <h2 className="font-semibold text-base">Run Info</h2>
+      <a
+        href={logsUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{
+          display: "inline-block",
+          marginBottom: 20,
+          fontSize: 13,
+          textDecoration: "underline",
+        }}
+      >
+        Open GitHub Actions logs
+      </a>
+
+      {/* Top summary + comparison */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 16,
+          marginBottom: 16,
+        }}
+      >
+        {/* Current run */}
+        <div
+          style={{
+            flex: "1 1 260px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            padding: 12,
+          }}
+        >
+          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
+            Current Run
+          </h2>
           <div>
-            <span className="font-medium">Model Version: </span>
-            <span className="font-mono">{run.model_version}</span>
+            <strong>Model Version: </strong>
+            <span>{current.model_version}</span>
           </div>
           <div>
-            <span className="font-medium">Run At: </span>
+            <strong>Run At: </strong>
             <span>
-              {run.run_at
-                ? new Date(run.run_at).toLocaleString()
+              {current.run_at
+                ? new Date(current.run_at).toLocaleString()
                 : "—"}
             </span>
           </div>
           <div>
-            <span className="font-medium">Samples Used: </span>
-            <span>{run.samples_used ?? "—"}</span>
+            <strong>Samples Used: </strong>
+            <span>{samplesCurrent}</span>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <strong>Notes:</strong>
+            <div>{current.notes || "No notes for this run."}</div>
           </div>
         </div>
 
-        <div className="border rounded-lg p-4 space-y-2">
-          <h2 className="font-semibold text-base">Notes</h2>
-          <p className="whitespace-pre-wrap">
-            {run.notes || "No notes for this run."}
-          </p>
+        {/* Comparison with previous */}
+        <div
+          style={{
+            flex: "1 1 260px",
+            border: "1px solid #e5e7eb",
+            borderRadius: 8,
+            padding: 12,
+          }}
+        >
+          <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
+            Comparison
+          </h2>
+
+          {previous ? (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <strong>Previous Run:</strong> #{previous.id}
+              </div>
+              <div>
+                <strong>Prev Model: </strong>
+                <span>{previous.model_version}</span>
+              </div>
+              <div>
+                <strong>Prev Samples: </strong>
+                <span>{previous.samples_used ?? 0}</span>
+              </div>
+
+              <div style={{ marginTop: 10 }}>
+                <strong>Changes:</strong>
+                <ul style={{ marginTop: 4, paddingLeft: 18 }}>
+                  <li>
+                    Model:{" "}
+                    {previous.model_version === current.model_version
+                      ? "same"
+                      : `changed (${previous.model_version} → ${current.model_version})`}
+                  </li>
+                  <li>
+                    Samples:{" "}
+                    {samplesDelta === null
+                      ? "n/a"
+                      : samplesDelta === 0
+                      ? "no change"
+                      : samplesDelta > 0
+                      ? `+${samplesDelta}`
+                      : `${samplesDelta}`}
+                  </li>
+                </ul>
+              </div>
+            </>
+          ) : (
+            <div>No previous runs to compare.</div>
+          )}
         </div>
       </div>
+
+      {/* Mini chart for current vs previous */}
+      <MlRunMiniChart
+        runs={
+          previous
+            ? [previous, current]
+            : [current] // if no previous, show only this run
+        }
+      />
+
+      {/* Small note */}
+      <p
+        style={{
+          marginTop: 16,
+          fontSize: 12,
+          color: "#6b7280",
+        }}
+      >
+        Data source: Supabase <code>ml_runs</code>. For full pipeline logs, see
+        the GitHub Actions workflow{" "}
+        <code>train-ml.yml</code> in the repository.
+      </p>
     </div>
   );
 }
