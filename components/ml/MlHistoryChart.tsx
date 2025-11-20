@@ -19,9 +19,10 @@ type MlRun = {
 };
 
 export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
-  // Convert Supabase rows → chart-friendly data
   const data = [...runs]
-    .sort((a, b) => new Date(a.run_at).getTime() - new Date(b.run_at).getTime())
+    .sort(
+      (a, b) => new Date(a.run_at).getTime() - new Date(b.run_at).getTime()
+    )
     .map((r) => ({
       name: `#${r.id}`,
       samples: r.samples_used ?? 0,
@@ -29,9 +30,13 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
       version: r.model_version,
     }));
 
+  if (!data.length) return null;
+
   return (
     <div className="w-full h-64 border rounded-lg p-4 mb-6">
-      <h2 className="text-lg font-semibold mb-3">ML Run Trend (Samples)</h2>
+      <h2 className="text-lg font-semibold mb-3">
+        ML Run Trend (Samples per run)
+      </h2>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data}>
           <CartesianGrid strokeDasharray="3 3" />
@@ -39,18 +44,15 @@ export function MlHistoryChart({ runs }: { runs: MlRun[] }) {
           <YAxis />
           <Tooltip
             formatter={(value: any) => [`${value}`, "Samples"]}
-            labelFormatter={(label: any, payload: any[]) => {
-              const item = payload?.[0]?.payload;
+            // 🔧 no explicit type on payload so TS accepts readonly array
+            labelFormatter={(label, payload) => {
+              const first: any = payload && payload.length > 0 ? payload[0] : null;
+              const item: any = first?.payload;
+              if (!item) return String(label);
               return `${item.date} | Version: ${item.version}`;
             }}
           />
-          <Line
-            type="monotone"
-            dataKey="samples"
-            stroke="#8884d8"
-            strokeWidth={2}
-            dot
-          />
+          <Line type="monotone" dataKey="samples" strokeWidth={2} dot />
         </LineChart>
       </ResponsiveContainer>
     </div>
