@@ -2,7 +2,6 @@
 import React, { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 
-// Client-only chart
 const MlHistoryChart = dynamic(
   () =>
     import("../../components/ml/MlHistoryChart").then(
@@ -11,12 +10,27 @@ const MlHistoryChart = dynamic(
   { ssr: false }
 );
 
+const MlAccuracyChart = dynamic(
+  () =>
+    import("../../components/ml/MlAccuracyChart").then(
+      (m) => m.MlAccuracyChart
+    ),
+  { ssr: false }
+);
+
+type MlMetrics = {
+  accuracy?: number | null;
+  precision?: number | null;
+  recall?: number | null;
+};
+
 type MlRun = {
   id: number;
   model_version: string;
   run_at: string;
   samples_used: number | null;
   notes: string | null;
+  metrics_json?: MlMetrics | null;
 };
 
 type ApiResponse = {
@@ -108,7 +122,10 @@ export default function AdminMlPage() {
 
       <h2 className="text-xl font-semibold mt-6">Recent runs</h2>
 
-      {/* Chart showing samples per run */}
+      {/* Accuracy chart (only shows once metrics exist) */}
+      <MlAccuracyChart runs={runs} />
+
+      {/* Samples chart */}
       <MlHistoryChart runs={runs} />
 
       <table className="min-w-full text-sm border border-gray-200">
@@ -118,6 +135,7 @@ export default function AdminMlPage() {
             <th className="px-3 py-2 text-left border-b">Run at</th>
             <th className="px-3 py-2 text-left border-b">Model version</th>
             <th className="px-3 py-2 text-left border-b">Samples</th>
+            <th className="px-3 py-2 text-left border-b">Accuracy</th>
             <th className="px-3 py-2 text-left border-b">Notes</th>
             <th className="px-3 py-2 text-left border-b">Logs</th>
           </tr>
@@ -134,6 +152,11 @@ export default function AdminMlPage() {
               <td className="px-3 py-2 border-b">{run.model_version}</td>
               <td className="px-3 py-2 border-b">
                 {run.samples_used ?? "—"}
+              </td>
+              <td className="px-3 py-2 border-b">
+                {run.metrics_json?.accuracy != null
+                  ? `${(run.metrics_json.accuracy * 100).toFixed(1)}%`
+                  : "n/a"}
               </td>
               <td className="px-3 py-2 border-b">
                 {run.notes || "—"}
