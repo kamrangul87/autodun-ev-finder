@@ -1,9 +1,8 @@
 // pages/admin/ml.tsx
 import React, { useEffect, useState } from "react";
-import Link from "next/link";
 import dynamic from "next/dynamic";
 
-// Lazy-load the Recharts-based chart on client only
+// Load chart only on client
 const MlHistoryChart = dynamic(
   () =>
     import("../../components/ml/MlHistoryChart").then(
@@ -73,52 +72,80 @@ export default function AdminMlPage() {
     );
   }
 
-  return (
-    <div className="p-6 space-y-4">
-      <h1 className="text-2xl font-semibold">ML Runs</h1>
+  const latest = runs[0];
+  const totalSamples = runs.reduce(
+    (sum, r) => sum + (r.samples_used ?? 0),
+    0
+  );
 
-      {/* New: ML history chart */}
+  return (
+    <div className="p-6 space-y-6">
+      <h1 className="text-3xl font-bold">ML Training Status</h1>
+
+      <p className="text-sm">
+        Overview of nightly ML retraining runs logged from GitHub Actions into
+        Supabase <code>ml_runs</code>.
+      </p>
+
+      <div className="space-y-2 text-sm">
+        <div>
+          <strong>Current model</strong>
+          <br /> {latest.model_version}
+        </div>
+        <div>
+          <strong>Last run</strong>
+          <br />
+          {latest.run_at
+            ? new Date(latest.run_at).toLocaleString()
+            : "—"}
+        </div>
+        <div>
+          <strong>Total runs (shown) / Samples</strong>
+          <br />
+          {runs.length} • {totalSamples} samples
+        </div>
+      </div>
+
+      <h2 className="text-xl font-semibold mt-6">Recent runs</h2>
+
+      {/* 📊 NEW ML CHART INSERTED HERE */}
       <MlHistoryChart runs={runs} />
 
       <table className="min-w-full text-sm border border-gray-200">
         <thead className="bg-gray-50">
           <tr>
             <th className="px-3 py-2 text-left border-b">ID</th>
-            <th className="px-3 py-2 text-left border-b">Model Version</th>
-            <th className="px-3 py-2 text-left border-b">Run At</th>
-            <th className="px-3 py-2 text-left border-b">Samples Used</th>
+            <th className="px-3 py-2 text-left border-b">Run at</th>
+            <th className="px-3 py-2 text-left border-b">Model version</th>
+            <th className="px-3 py-2 text-left border-b">Samples</th>
             <th className="px-3 py-2 text-left border-b">Notes</th>
-            <th className="px-3 py-2 text-left border-b">Details</th>
           </tr>
         </thead>
         <tbody>
           {runs.map((run) => (
             <tr key={run.id} className="hover:bg-gray-50">
               <td className="px-3 py-2 border-b">{run.id}</td>
-              <td className="px-3 py-2 border-b font-mono">
-                {run.model_version}
-              </td>
               <td className="px-3 py-2 border-b">
-                {run.run_at ? new Date(run.run_at).toLocaleString() : "—"}
+                {run.run_at
+                  ? new Date(run.run_at).toLocaleString()
+                  : "—"}
               </td>
+              <td className="px-3 py-2 border-b">{run.model_version}</td>
               <td className="px-3 py-2 border-b">
                 {run.samples_used ?? "—"}
               </td>
               <td className="px-3 py-2 border-b">
                 {run.notes || "—"}
               </td>
-              <td className="px-3 py-2 border-b">
-                <Link
-                  href={`/admin/ml/${run.id}`}
-                  className="underline"
-                >
-                  View
-                </Link>
-              </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      <p className="mt-4 text-xs text-slate-500">
+        Data source: Supabase <code>ml_runs</code> (service role), updated by
+        GitHub Actions workflow <code>train-ml.yml</code>.
+      </p>
     </div>
   );
 }
