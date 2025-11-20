@@ -4,10 +4,7 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 
 const MlRunMiniChart = dynamic(
-  () =>
-    import("../../../components/ml/MlRunMiniChart").then(
-      (m) => m.MlRunMiniChart
-    ),
+  () => import("../../../components/ml/MlRunMiniChart"),
   { ssr: false }
 );
 
@@ -310,9 +307,7 @@ export default function MlRunDetailPage() {
         </div>
       </div>
 
-      <MlRunMiniChart
-        runs={previous ? [previous, current] : [current]}
-      />
+      <MlRunMiniChart runs={previous ? [previous, current] : [current]} />
 
       <p
         style={{
