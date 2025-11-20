@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 
-// Load chart only on client
+// Client-only chart
 const MlHistoryChart = dynamic(
   () =>
     import("../../components/ml/MlHistoryChart").then(
@@ -108,7 +108,7 @@ export default function AdminMlPage() {
 
       <h2 className="text-xl font-semibold mt-6">Recent runs</h2>
 
-      {/* 📊 NEW ML CHART INSERTED HERE */}
+      {/* Chart showing samples per run */}
       <MlHistoryChart runs={runs} />
 
       <table className="min-w-full text-sm border border-gray-200">
@@ -119,6 +119,7 @@ export default function AdminMlPage() {
             <th className="px-3 py-2 text-left border-b">Model version</th>
             <th className="px-3 py-2 text-left border-b">Samples</th>
             <th className="px-3 py-2 text-left border-b">Notes</th>
+            <th className="px-3 py-2 text-left border-b">Logs</th>
           </tr>
         </thead>
         <tbody>
@@ -136,6 +137,16 @@ export default function AdminMlPage() {
               </td>
               <td className="px-3 py-2 border-b">
                 {run.notes || "—"}
+              </td>
+              <td className="px-3 py-2 border-b">
+                <a
+                  href="https://github.com/kamrangul87/autodun-ev-finder/actions/workflows/train-ml.yml"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline"
+                >
+                  View logs
+                </a>
               </td>
             </tr>
           ))}
