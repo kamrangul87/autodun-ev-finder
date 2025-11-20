@@ -11,17 +11,27 @@ const MlRunMiniChart = dynamic(
   { ssr: false }
 );
 
+type MlMetrics = {
+  accuracy?: number | null;
+  precision?: number | null;
+  recall?: number | null;
+};
+
 type MlRun = {
   id: number;
   model_version: string;
   run_at: string;
   samples_used: number | null;
   notes: string | null;
+  metrics_json?: MlMetrics | null;
 };
 
 type ApiResponse = {
   runs: MlRun[];
 };
+
+const fmtPct = (v: number | null | undefined) =>
+  v == null ? "n/a" : `${(v * 100).toFixed(1)}%`;
 
 export default function MlRunDetailPage() {
   const router = useRouter();
@@ -29,7 +39,6 @@ export default function MlRunDetailPage() {
 
   const [current, setCurrent] = useState<MlRun | null>(null);
   const [previous, setPrevious] = useState<MlRun | null>(null);
-  const [allRuns, setAllRuns] = useState<MlRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,11 +57,9 @@ export default function MlRunDetailPage() {
 
         const json: ApiResponse = await res.json();
         const runs = json.runs ?? [];
-        setAllRuns(runs);
 
         const numericId = Number(id);
 
-        // sort oldest → newest for comparison
         const sorted = runs
           .slice()
           .sort(
@@ -134,6 +141,9 @@ export default function MlRunDetailPage() {
   const samplesDelta =
     samplesPrev === null ? null : samplesCurrent - samplesPrev;
 
+  const metricsCurrent = current.metrics_json || {};
+  const metricsPrev = previous?.metrics_json || {};
+
   return (
     <div className="p-6" style={{ fontSize: 14 }}>
       <button
@@ -168,7 +178,6 @@ export default function MlRunDetailPage() {
         Open GitHub Actions logs
       </a>
 
-      {/* Top summary + comparison */}
       <div
         style={{
           display: "flex",
@@ -205,13 +214,21 @@ export default function MlRunDetailPage() {
             <strong>Samples Used: </strong>
             <span>{samplesCurrent}</span>
           </div>
+
+          <div style={{ marginTop: 8 }}>
+            <strong>Metrics:</strong>
+            <div>Accuracy: {fmtPct(metricsCurrent.accuracy)}</div>
+            <div>Precision: {fmtPct(metricsCurrent.precision)}</div>
+            <div>Recall: {fmtPct(metricsCurrent.recall)}</div>
+          </div>
+
           <div style={{ marginTop: 8 }}>
             <strong>Notes:</strong>
             <div>{current.notes || "No notes for this run."}</div>
           </div>
         </div>
 
-        {/* Comparison with previous */}
+        {/* Comparison */}
         <div
           style={{
             flex: "1 1 260px",
@@ -257,6 +274,33 @@ export default function MlRunDetailPage() {
                       ? `+${samplesDelta}`
                       : `${samplesDelta}`}
                   </li>
+                  <li>
+                    Accuracy:{" "}
+                    {metricsPrev.accuracy != null &&
+                    metricsCurrent.accuracy != null
+                      ? `${fmtPct(metricsPrev.accuracy)} → ${fmtPct(
+                          metricsCurrent.accuracy
+                        )}`
+                      : "n/a"}
+                  </li>
+                  <li>
+                    Precision:{" "}
+                    {metricsPrev.precision != null &&
+                    metricsCurrent.precision != null
+                      ? `${fmtPct(metricsPrev.precision)} → ${fmtPct(
+                          metricsCurrent.precision
+                        )}`
+                      : "n/a"}
+                  </li>
+                  <li>
+                    Recall:{" "}
+                    {metricsPrev.recall != null &&
+                    metricsCurrent.recall != null
+                      ? `${fmtPct(metricsPrev.recall)} → ${fmtPct(
+                          metricsCurrent.recall
+                        )}`
+                      : "n/a"}
+                  </li>
                 </ul>
               </div>
             </>
@@ -266,16 +310,10 @@ export default function MlRunDetailPage() {
         </div>
       </div>
 
-      {/* Mini chart for current vs previous */}
       <MlRunMiniChart
-        runs={
-          previous
-            ? [previous, current]
-            : [current] // if no previous, show only this run
-        }
+        runs={previous ? [previous, current] : [current]}
       />
 
-      {/* Small note */}
       <p
         style={{
           marginTop: 16,
@@ -284,8 +322,8 @@ export default function MlRunDetailPage() {
         }}
       >
         Data source: Supabase <code>ml_runs</code>. For full pipeline logs, see
-        the GitHub Actions workflow{" "}
-        <code>train-ml.yml</code> in the repository.
+        the GitHub Actions workflow <code>train-ml.yml</code> in the
+        repository.
       </p>
     </div>
   );
