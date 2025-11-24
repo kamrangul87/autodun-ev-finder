@@ -9,8 +9,17 @@ import { getCouncilAtPoint, type CouncilHit } from "../../lib/council";
 /* ──────────────────────────────────────────────────────────────
    Client-only components (avoid SSR “window is not defined”)
    ────────────────────────────────────────────────────────────── */
-const MapClient = dynamic(() => import("../../components/admin/MapClient"), { ssr: false });
-const ChartsClient = dynamic(() => import("../../components/admin/ChartsClient"), { ssr: false });
+const MapClient = dynamic(() => import("../../components/admin/MapClient"), {
+  ssr: false,
+});
+const ChartsClient = dynamic(
+  () => import("../../components/admin/ChartsClient"),
+  { ssr: false }
+);
+const WorstStationsClient = dynamic(
+  () => import("../../components/admin/WorstStations"),
+  { ssr: false }
+);
 
 /* ──────────────────────────────────────────────────────────────
    Types (matches your API)
@@ -23,7 +32,7 @@ type Row = {
   source: string;
   lat: number | null;
   lng: number | null;
-  mlScore: number | null;       // 0..1 (fraction)
+  mlScore: number | null; // 0..1 (fraction)
   modelVersion: string;
   userAgent: string;
 };
@@ -150,7 +159,9 @@ export default function AdminFeedback() {
   const [fitKey, setFitKey] = useState(0);
 
   // focus on the MAIN map (optional)
-  const [focusPoint, setFocusPoint] = useState<{ lat: number; lng: number; zoom?: number } | undefined>(undefined);
+  const [focusPoint, setFocusPoint] = useState<
+    { lat: number; lng: number; zoom?: number } | undefined
+  >(undefined);
   const [focusKey, setFocusKey] = useState(0);
 
   // ✅ council state for the drawer
@@ -234,7 +245,9 @@ export default function AdminFeedback() {
 
   /* Adapt rows → points for map/charts */
   const points: FeedbackPoint[] = useMemo(() => {
-    const toSentiment = (vote?: string | null): FeedbackPoint["sentiment"] => {
+    const toSentiment = (
+      vote?: string | null
+    ): FeedbackPoint["sentiment"] => {
       const v = (vote || "").toLowerCase();
       if (v === "good" || v === "up" || v === "positive") return "positive";
       if (v === "bad" || v === "down" || v === "negative") return "negative";
@@ -269,7 +282,12 @@ export default function AdminFeedback() {
       // sentiment
       if (sentiment !== "all") {
         const v = (r.vote || "").toLowerCase();
-        const s = v === "good" || v === "up" ? "positive" : v === "bad" || v === "down" ? "negative" : "neutral";
+        const s =
+          v === "good" || v === "up"
+            ? "positive"
+            : v === "bad" || v === "down"
+            ? "negative"
+            : "neutral";
         if (s !== sentiment) return false;
       }
 
@@ -315,21 +333,44 @@ export default function AdminFeedback() {
 
     // sorting
     out.sort((a, b) => {
-      if (sort === "recent") return new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime();
-      if (sort === "oldest") return new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime();
-      if (sort === "scoreHigh") return (b.mlScore ?? -Infinity) - (a.mlScore ?? -Infinity);
-      if (sort === "scoreLow") return (a.mlScore ?? Infinity) - (b.mlScore ?? Infinity);
+      if (sort === "recent")
+        return (
+          new Date(b.ts ?? 0).getTime() - new Date(a.ts ?? 0).getTime()
+        );
+      if (sort === "oldest")
+        return (
+          new Date(a.ts ?? 0).getTime() - new Date(b.ts ?? 0).getTime()
+        );
+      if (sort === "scoreHigh")
+        return (b.mlScore ?? -Infinity) - (a.mlScore ?? -Infinity);
+      if (sort === "scoreLow")
+        return (a.mlScore ?? Infinity) - (b.mlScore ?? Infinity);
       return 0;
     });
 
     return out;
-  }, [rows, sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter]);
+  }, [
+    rows,
+    sentiment,
+    scoreMin,
+    scoreMax,
+    dateFrom,
+    dateTo,
+    q,
+    sort,
+    model,
+    sourceFilter,
+  ]);
 
   /* Keep map/charts in sync with filtered table */
   const filteredPoints: FeedbackPoint[] = useMemo(() => {
     if (!filteredRows.length) return points;
-    const set = new Set(filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`));
-    return points.filter((p, i) => set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`));
+    const set = new Set(
+      filteredRows.map((r, i) => `${r.stationId}|${r.ts ?? i}`)
+    );
+    return points.filter((p, i) =>
+      set.has(`${p.stationName ?? ""}|${p.createdAt ?? i}`)
+    );
   }, [points, filteredRows]);
 
   // bump fitKey whenever filteredPoints change (auto-fit)
@@ -340,7 +381,18 @@ export default function AdminFeedback() {
   // reset pagination when filters change
   useEffect(() => {
     setPage(1);
-  }, [sentiment, scoreMin, scoreMax, dateFrom, dateTo, q, sort, model, sourceFilter, filteredRows.length]);
+  }, [
+    sentiment,
+    scoreMin,
+    scoreMax,
+    dateFrom,
+    dateTo,
+    q,
+    sort,
+    model,
+    sourceFilter,
+    filteredRows.length,
+  ]);
 
   /* ── CSV Export (filtered rows) ─────────────────────────────── */
   function escapeCSV(v: unknown): string {
@@ -380,7 +432,9 @@ export default function AdminFeedback() {
       r.modelVersion ?? "",
       r.userAgent ?? "",
     ]);
-    const lines = [header, ...body].map((arr) => arr.map(escapeCSV).join(",")).join("\n");
+    const lines = [header, ...body]
+      .map((arr) => arr.map(escapeCSV).join(","))
+      .join("\n");
     return "\uFEFF" + lines; // Excel-friendly BOM
   }
   function downloadCSV() {
@@ -405,14 +459,21 @@ export default function AdminFeedback() {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
     return {
       id: String(selected.stationId ?? "sel"),
-      stationName: selected.stationId ? String(selected.stationId) : undefined,
+      stationName: selected.stationId
+        ? String(selected.stationId)
+        : undefined,
       lat,
       lng,
-      mlScore: typeof selected.mlScore === "number" ? selected.mlScore : undefined,
+      mlScore:
+        typeof selected.mlScore === "number"
+          ? selected.mlScore
+          : undefined,
       sentiment:
-        (selected.vote || "").toLowerCase() === "good" || (selected.vote || "").toLowerCase() === "up"
+        (selected.vote || "").toLowerCase() === "good" ||
+        (selected.vote || "").toLowerCase() === "up"
           ? "positive"
-          : (selected.vote || "").toLowerCase() === "bad" || (selected.vote || "").toLowerCase() === "down"
+          : (selected.vote || "").toLowerCase() === "bad" ||
+            (selected.vote || "").toLowerCase() === "down"
           ? "negative"
           : "neutral",
       source: selected.source || undefined,
@@ -425,9 +486,17 @@ export default function AdminFeedback() {
     let alive = true;
     (async () => {
       setCouncil(null);
-      if (!selected || !Number.isFinite(selected.lat ?? NaN) || !Number.isFinite(selected.lng ?? NaN)) return;
+      if (
+        !selected ||
+        !Number.isFinite(selected.lat ?? NaN) ||
+        !Number.isFinite(selected.lng ?? NaN)
+      )
+        return;
       setCouncilLoading(true);
-      const hit = await getCouncilAtPoint(Number(selected.lat), Number(selected.lng));
+      const hit = await getCouncilAtPoint(
+        Number(selected.lat),
+        Number(selected.lng)
+      );
       if (alive) {
         setCouncil(hit);
         setCouncilLoading(false);
@@ -451,12 +520,21 @@ export default function AdminFeedback() {
     const text = String(s ?? "");
     const needle = q.trim();
     if (!needle) return text;
-    const parts = text.split(new RegExp(`(${escapeRegExp(needle)})`, "ig"));
+    const parts = text.split(
+      new RegExp(`(${escapeRegExp(needle)})`, "ig")
+    );
     return (
       <>
         {parts.map((chunk, i) =>
           chunk.toLowerCase() === needle.toLowerCase() ? (
-            <mark key={i} style={{ background: "#fde68a", padding: "0 2px", borderRadius: 3 }}>
+            <mark
+              key={i}
+              style={{
+                background: "#fde68a",
+                padding: "0 2px",
+                borderRadius: 3,
+              }}
+            >
               {chunk}
             </mark>
           ) : (
@@ -468,11 +546,27 @@ export default function AdminFeedback() {
   }
 
   return (
-    <div style={{ padding: 18, maxWidth: 1100, margin: "0 auto", fontFamily: "Inter, system-ui, sans-serif" }}>
-      <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>Autodun Admin · Feedback</h1>
+    <div
+      style={{
+        padding: 18,
+        maxWidth: 1100,
+        margin: "0 auto",
+        fontFamily: "Inter, system-ui, sans-serif",
+      }}
+    >
+      <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>
+        Autodun Admin · Feedback
+      </h1>
 
       {/* KPIs */}
-      <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginTop: 14,
+          flexWrap: "wrap",
+        }}
+      >
         <StatCard label="Total" value={fmt(stats?.total)} />
         <StatCard label="Good" value={fmt(stats?.good)} />
         <StatCard label="Bad" value={fmt(stats?.bad)} />
@@ -489,7 +583,14 @@ export default function AdminFeedback() {
 
       {/* Filters */}
       <div style={panel}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 12,
+          }}
+        >
           <div style={{ fontWeight: 800 }}>Filters</div>
           <div style={{ display: "flex", gap: 10 }}>
             <button
@@ -501,25 +602,43 @@ export default function AdminFeedback() {
                 setDateTo("");
                 setQ("");
                 setSort("recent");
-                setModel("all");        // reset new filters
+                setModel("all"); // reset new filters
                 setSourceFilter("all"); // reset new filters
               }}
               style={refreshBtn}
             >
               Reset
             </button>
-            <a href="/api/admin/feedback-export" target="_blank" rel="noopener">
-              <button type="button" style={primaryBtn}>Export CSV</button>
+            <a
+              href="/api/admin/feedback-export"
+              target="_blank"
+              rel="noopener"
+            >
+              <button type="button" style={primaryBtn}>
+                Export CSV
+              </button>
             </a>
           </div>
         </div>
 
         {/* ✅ grid expanded to 8 columns */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, minmax(0,1fr))", gap: 10 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(8, minmax(0,1fr))",
+            gap: 10,
+          }}
+        >
           {/* Sentiment */}
           <div>
             <div style={label}>Sentiment</div>
-            <select value={sentiment} onChange={(e) => setSentiment(e.target.value as Sentiment)} style={input}>
+            <select
+              value={sentiment}
+              onChange={(e) =>
+                setSentiment(e.target.value as Sentiment)
+              }
+              style={input}
+            >
               <option value="all">All</option>
               <option value="positive">Positive</option>
               <option value="neutral">Neutral</option>
@@ -556,13 +675,23 @@ export default function AdminFeedback() {
           {/* From */}
           <div>
             <div style={label}>From</div>
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={input} />
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              style={input}
+            />
           </div>
 
           {/* To */}
           <div>
             <div style={label}>To</div>
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={input} />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              style={input}
+            />
           </div>
 
           {/* Search */}
@@ -579,7 +708,11 @@ export default function AdminFeedback() {
           {/* ✅ NEW: Model */}
           <div>
             <div style={label}>Model</div>
-            <select value={model} onChange={(e) => setModel(e.target.value)} style={input}>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              style={input}
+            >
               <option value="all">All</option>
               {modelOptions.map((m) => (
                 <option key={m} value={m}>
@@ -592,7 +725,11 @@ export default function AdminFeedback() {
           {/* ✅ NEW: Source */}
           <div>
             <div style={label}>Source</div>
-            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={input}>
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value)}
+              style={input}
+            >
               <option value="all">All</option>
               {sourceOptions.map((s) => (
                 <option key={s} value={s}>
@@ -603,10 +740,23 @@ export default function AdminFeedback() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, marginTop: 12, alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            marginTop: 12,
+            alignItems: "center",
+          }}
+        >
           <div>
             <div style={label}>Sort</div>
-            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} style={input}>
+            <select
+              value={sort}
+              onChange={(e) =>
+                setSort(e.target.value as SortKey)
+              }
+              style={input}
+            >
               <option value="recent">Recent</option>
               <option value="oldest">Oldest</option>
               <option value="scoreHigh">Score: High → Low</option>
@@ -618,16 +768,39 @@ export default function AdminFeedback() {
 
       {/* Timeline */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Timeline (last {stats?.timeline?.length ?? 0} days)</div>
+        <div
+          style={{ fontWeight: 800, marginBottom: 8 }}
+        >
+          Timeline (last {stats?.timeline?.length ?? 0} days)
+        </div>
         {!stats || !stats.timeline.length ? (
-          <div style={{ color: "#6b7280", fontSize: 14 }}>No data yet.</div>
+          <div style={{ color: "#6b7280", fontSize: 14 }}>
+            No data yet.
+          </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "120px 1fr 120px", gap: 8 }}>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Date</div>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Bar (count)</div>
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Avg ML</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "120px 1fr 120px",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Date
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Bar (count)
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280" }}>
+              Avg ML
+            </div>
             {stats.timeline.map((d) => (
-              <FragmentRow key={d.day} day={d.day} count={d.count} avg={d.avgScore} />
+              <FragmentRow
+                key={d.day}
+                day={d.day}
+                count={d.count}
+                avg={d.avgScore}
+              />
             ))}
           </div>
         )}
@@ -635,52 +808,139 @@ export default function AdminFeedback() {
 
       {/* Map */}
       <div style={panel}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 8,
+          }}
+        >
           <div style={{ fontWeight: 800 }}>Feedback Map</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button style={refreshBtn} onClick={() => setFitKey((k) => k + 1)} title="Fit map to current results">
+            <button
+              style={refreshBtn}
+              onClick={() => setFitKey((k) => k + 1)}
+              title="Fit map to current results"
+            >
               Fit to results
             </button>
           </div>
         </div>
-        <div style={{ width: "100%", height: 420, borderRadius: 12, overflow: "hidden" }}>
-          <MapClient points={filteredPoints} fitToPointsKey={fitKey} focusPoint={focusPoint} focusKey={focusKey} />
+        <div
+          style={{
+            width: "100%",
+            height: 420,
+            borderRadius: 12,
+            overflow: "hidden",
+          }}
+        >
+          <MapClient
+            points={filteredPoints}
+            fitToPointsKey={fitKey}
+            focusPoint={focusPoint}
+            focusKey={focusKey}
+          />
         </div>
       </div>
 
       {/* Charts */}
       <div style={panel}>
-        <div style={{ fontWeight: 800, marginBottom: 8 }}>Analytics</div>
+        <div
+          style={{ fontWeight: 800, marginBottom: 8 }}
+        >
+          Analytics
+        </div>
         <ChartsClient points={filteredPoints} />
+      </div>
+
+      {/* Worst stations */}
+      <div style={panel}>
+        <WorstStationsClient rows={filteredRows} />
       </div>
 
       {/* Table + Pagination */}
       <div style={panel}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 8,
+          }}
+        >
           <div style={{ fontWeight: 800 }}>Latest feedback</div>
 
           {/* Pagination controls */}
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>{total === 0 ? "0–0" : `${startIdx + 1}–${endIdx}`} of {total}</span>
-            <button style={miniBtn} onClick={() => setPage(1)} disabled={clampedPage <= 1}>
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
+            }}
+          >
+            <span
+              style={{ fontSize: 12, color: "#6b7280" }}
+            >
+              {total === 0
+                ? "0–0"
+                : `${startIdx + 1}–${endIdx}`}{" "}
+              of {total}
+            </span>
+            <button
+              style={miniBtn}
+              onClick={() => setPage(1)}
+              disabled={clampedPage <= 1}
+            >
               « First
             </button>
-            <button style={miniBtn} onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={clampedPage <= 1}>
+            <button
+              style={miniBtn}
+              onClick={() =>
+                setPage((p) => Math.max(1, p - 1))
+              }
+              disabled={clampedPage <= 1}
+            >
               ‹ Prev
             </button>
-            <div style={{ fontSize: 12, fontWeight: 700, minWidth: 60, textAlign: "center" }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                minWidth: 60,
+                textAlign: "center",
+              }}
+            >
               Page {clampedPage}/{totalPages}
             </div>
-            <button style={miniBtn} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={clampedPage >= totalPages}>
+            <button
+              style={miniBtn}
+              onClick={() =>
+                setPage((p) =>
+                  Math.min(totalPages, p + 1)
+                )
+              }
+              disabled={clampedPage >= totalPages}
+            >
               Next ›
             </button>
-            <button style={miniBtn} onClick={() => setPage(totalPages)} disabled={clampedPage >= totalPages}>
+            <button
+              style={miniBtn}
+              onClick={() => setPage(totalPages)}
+              disabled={clampedPage >= totalPages}
+            >
               Last »
             </button>
           </div>
         </div>
 
-        <div style={{ overflowX: "auto", maxHeight: 520, position: "relative" }}>
+        <div
+          style={{
+            overflowX: "auto",
+            maxHeight: 520,
+            position: "relative",
+          }}
+        >
           <table style={table}>
             <thead>
               <tr>
@@ -700,17 +960,42 @@ export default function AdminFeedback() {
                 const rowKey = `${startIdx + i}`;
                 const latOk = Number.isFinite(r.lat ?? NaN);
                 const lngOk = Number.isFinite(r.lng ?? NaN);
-                const latStr = latOk ? (r.lat as number).toFixed(6) : "—";
-                const lngStr = lngOk ? (r.lng as number).toFixed(6) : "—";
+                const latStr = latOk
+                  ? (r.lat as number).toFixed(6)
+                  : "—";
+                const lngStr = lngOk
+                  ? (r.lng as number).toFixed(6)
+                  : "—";
                 const stationStr = r.stationId ?? "—";
                 return (
-                  <tr key={rowKey} onClick={() => setSelected(r)} style={{ cursor: "pointer" }}>
-                    <td title={r.ts || ""}>{r.ts ? new Date(r.ts).toLocaleString() : "—"}</td>
+                  <tr
+                    key={rowKey}
+                    onClick={() => setSelected(r)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <td title={r.ts || ""}>
+                      {r.ts
+                        ? new Date(r.ts).toLocaleString()
+                        : "—"}
+                    </td>
 
                     {/* Station + copy */}
                     <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>{highlight(stationStr)}</code>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <code
+                          style={{
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, monospace",
+                          }}
+                        >
+                          {highlight(stationStr)}
+                        </code>
                         {r.stationId != null && (
                           <button
                             style={copyIconBtn}
@@ -727,7 +1012,15 @@ export default function AdminFeedback() {
                     </td>
 
                     {/* Vote */}
-                    <td style={{ fontWeight: 700, color: r.vote === "good" || r.vote === "up" ? "#166534" : "#991b1b" }}>
+                    <td
+                      style={{
+                        fontWeight: 700,
+                        color:
+                          r.vote === "good" || r.vote === "up"
+                            ? "#166534"
+                            : "#991b1b",
+                      }}
+                    >
                       {r.vote || "—"}
                     </td>
 
@@ -754,7 +1047,13 @@ export default function AdminFeedback() {
 
                     {/* Lat with copy */}
                     <td style={monoCell}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
                         <span>{latStr}</span>
                         {latOk && (
                           <button
@@ -773,7 +1072,13 @@ export default function AdminFeedback() {
 
                     {/* Lng with copy */}
                     <td style={monoCell}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
                         <span>{lngStr}</span>
                         {lngOk && (
                           <button
@@ -796,7 +1101,10 @@ export default function AdminFeedback() {
               })}
               {pageRows.length === 0 && (
                 <tr>
-                  <td colSpan={9} style={{ color: "#6b7280", textAlign: "center" }}>
+                  <td
+                    colSpan={9}
+                    style={{ color: "#6b7280", textAlign: "center" }}
+                  >
                     No rows
                   </td>
                 </tr>
@@ -809,124 +1117,272 @@ export default function AdminFeedback() {
       {/* Drawer */}
       {selected && (
         <>
-          <div style={backdrop} onClick={() => setSelected(null)} />
+          <div
+            style={backdrop}
+            onClick={() => setSelected(null)}
+          />
           <aside style={drawer}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>Station {selected.stationId ?? "—"}</div>
-              <button onClick={() => setSelected(null)} style={iconBtn} aria-label="Close">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div
+                style={{ fontWeight: 800, fontSize: 16 }}
+              >
+                Station {selected.stationId ?? "—"}
+              </div>
+              <button
+                onClick={() => setSelected(null)}
+                style={iconBtn}
+                aria-label="Close"
+              >
                 ✕
               </button>
             </div>
 
             {/* Relative + absolute time */}
-            <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
-              {relativeTime(selected.ts)} · {selected.ts ? new Date(selected.ts).toLocaleString() : "—"}
+            <div
+              style={{
+                marginTop: 8,
+                color: "#6b7280",
+                fontSize: 13,
+              }}
+            >
+              {relativeTime(selected.ts)} ·{" "}
+              {selected.ts
+                ? new Date(selected.ts).toLocaleString()
+                : "—"}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 8,
+                marginTop: 12,
+              }}
+            >
               <Info label="Vote" value={selected.vote || "—"} />
-              <Info label="Source" value={selected.source || "—"} />
-              <Info label="Model" value={selected.modelVersion || "—"} />
-              <Info label="User Agent" value={selected.userAgent || "—"} />
+              <Info
+                label="Source"
+                value={selected.source || "—"}
+              />
+              <Info
+                label="Model"
+                value={selected.modelVersion || "—"}
+              />
+              <Info
+                label="User Agent"
+                value={selected.userAgent || "—"}
+              />
               <Info
                 label="Lat"
-                value={Number.isFinite(selected.lat ?? NaN) ? (selected.lat as number).toFixed(6) : "—"}
+                value={
+                  Number.isFinite(selected.lat ?? NaN)
+                    ? (selected.lat as number).toFixed(6)
+                    : "—"
+                }
               />
               <Info
                 label="Lng"
-                value={Number.isFinite(selected.lng ?? NaN) ? (selected.lng as number).toFixed(6) : "—"}
+                value={
+                  Number.isFinite(selected.lng ?? NaN)
+                    ? (selected.lng as number).toFixed(6)
+                    : "—"
+                }
               />
             </div>
 
             {/* Copy Station ID / Zoom on main map */}
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <div
+              style={{ display: "flex", gap: 8, marginTop: 8 }}
+            >
               {selected.stationId != null && (
-                <button style={ghostBtn} onClick={() => copy(String(selected.stationId))}>
+                <button
+                  style={ghostBtn}
+                  onClick={() =>
+                    copy(String(selected.stationId))
+                  }
+                >
                   Copy Station ID
                 </button>
               )}
-              {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
-                <button
-                  style={ghostBtn}
-                  onClick={() => {
-                    setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 14 });
-                    setFocusKey((k) => k + 1);
-                  }}
-                >
-                  Zoom on main map
-                </button>
-              )}
+              {Number.isFinite(selected.lat ?? NaN) &&
+                Number.isFinite(selected.lng ?? NaN) && (
+                  <button
+                    style={ghostBtn}
+                    onClick={() => {
+                      setFocusPoint({
+                        lat: Number(selected.lat),
+                        lng: Number(selected.lng),
+                        zoom: 14,
+                      });
+                      setFocusKey((k) => k + 1);
+                    }}
+                  >
+                    Zoom on main map
+                  </button>
+                )}
             </div>
 
             {/* Council */}
-            <div style={{ marginTop: 12, border: "1px solid #e5e7eb", borderRadius: 12, padding: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div
+              style={{
+                marginTop: 12,
+                border: "1px solid #e5e7eb",
+                borderRadius: 12,
+                padding: 10,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
                 <div style={{ fontWeight: 800 }}>Council</div>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div
+                  style={{ display: "flex", gap: 6 }}
+                >
                   <button
                     style={miniBtn}
-                    onClick={() => council?.code && copy(council.code)}
+                    onClick={() =>
+                      council?.code && copy(council.code)
+                    }
                     disabled={!council?.code}
                     title="Copy council code"
                   >
                     Copy code
                   </button>
-                  {Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN) && (
-                    <button
-                      style={miniBtn}
-                      onClick={() => {
-                        setFocusPoint({ lat: Number(selected.lat), lng: Number(selected.lng), zoom: 11 });
-                        setFocusKey((k) => k + 1);
-                      }}
-                      title="Zoom to council area"
-                    >
-                      Zoom
-                    </button>
-                  )}
+                  {Number.isFinite(selected.lat ?? NaN) &&
+                    Number.isFinite(selected.lng ?? NaN) && (
+                      <button
+                        style={miniBtn}
+                        onClick={() => {
+                          setFocusPoint({
+                            lat: Number(selected.lat),
+                            lng: Number(selected.lng),
+                            zoom: 11,
+                          });
+                          setFocusKey((k) => k + 1);
+                        }}
+                        title="Zoom to council area"
+                      >
+                        Zoom
+                      </button>
+                    )}
                 </div>
               </div>
 
-              {!(Number.isFinite(selected.lat ?? NaN) && Number.isFinite(selected.lng ?? NaN)) ? (
-                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No coordinates on this feedback.</div>
+              {!(
+                Number.isFinite(selected.lat ?? NaN) &&
+                Number.isFinite(selected.lng ?? NaN)
+              ) ? (
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "#6b7280",
+                    fontSize: 13,
+                  }}
+                >
+                  No coordinates on this feedback.
+                </div>
               ) : councilLoading ? (
-                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>Looking up council…</div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "#6b7280",
+                    fontSize: 13,
+                  }}
+                >
+                  Looking up council…
+                </div>
               ) : council ? (
-                <div style={{ marginTop: 6, fontSize: 14 }}>
+                <div
+                  style={{ marginTop: 6, fontSize: 14 }}
+                >
                   <div>
-                    <span style={{ color: "#6b7280" }}>Name:</span> {council.name}
+                    <span style={{ color: "#6b7280" }}>
+                      Name:
+                    </span>{" "}
+                    {council.name}
                   </div>
                   {council.code && (
                     <div>
-                      <span style={{ color: "#6b7280" }}>Code:</span> {council.code}
+                      <span style={{ color: "#6b7280" }}>
+                        Code:
+                      </span>{" "}
+                      {council.code}
                     </div>
                   )}
                   {council.region && (
                     <div>
-                      <span style={{ color: "#6b7280" }}>Region:</span> {council.region}
+                      <span style={{ color: "#6b7280" }}>
+                        Region:
+                      </span>{" "}
+                      {council.region}
                     </div>
                   )}
                   {council.country && (
                     <div>
-                      <span style={{ color: "#6b7280" }}>Country:</span> {council.country}
+                      <span style={{ color: "#6b7280" }}>
+                        Country:
+                      </span>{" "}
+                      {council.country}
                     </div>
                   )}
                 </div>
               ) : (
-                <div style={{ marginTop: 6, color: "#6b7280", fontSize: 13 }}>No council found for this point.</div>
+                <div
+                  style={{
+                    marginTop: 6,
+                    color: "#6b7280",
+                    fontSize: 13,
+                  }}
+                >
+                  No council found for this point.
+                </div>
               )}
             </div>
 
             {/* Comment */}
             <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Comment</div>
-              <div style={{ padding: 10, border: "1px solid #e5e7eb", borderRadius: 10, whiteSpace: "pre-wrap" }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "#6b7280",
+                  marginBottom: 4,
+                }}
+              >
+                Comment
+              </div>
+              <div
+                style={{
+                  padding: 10,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 10,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
                 {selected.comment || "—"}
               </div>
             </div>
 
             {/* ML Score */}
             <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>ML Score</div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "#6b7280",
+                  marginBottom: 4,
+                }}
+              >
+                ML Score
+              </div>
               <div>
                 <MlBadge score={selected.mlScore} />
               </div>
@@ -935,26 +1391,65 @@ export default function AdminFeedback() {
             {/* Mini map + actions */}
             {selectedPoint && (
               <div style={{ marginTop: 12 }}>
-                <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>Location</div>
-                <div style={{ height: 240, borderRadius: 12, overflow: "hidden", border: "1px solid #e5e7eb" }}>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "#6b7280",
+                    marginBottom: 4,
+                  }}
+                >
+                  Location
+                </div>
+                <div
+                  style={{
+                    height: 240,
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    border: "1px solid #e5e7eb",
+                  }}
+                >
                   <MapClient points={[selectedPoint]} />
                 </div>
 
-                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    marginTop: 10,
+                  }}
+                >
                   <button
                     style={primaryBtn}
-                    onClick={() => window.open(gmapsUrl(selectedPoint.lat, selectedPoint.lng), "_blank")}
+                    onClick={() =>
+                      window.open(
+                        gmapsUrl(
+                          selectedPoint.lat,
+                          selectedPoint.lng
+                        ),
+                        "_blank"
+                      )
+                    }
                   >
                     Directions
                   </button>
-                  <button style={ghostBtn} onClick={() => copy(`${selectedPoint.lat},${selectedPoint.lng}`)}>
+                  <button
+                    style={ghostBtn}
+                    onClick={() =>
+                      copy(
+                        `${selectedPoint.lat},${selectedPoint.lng}`
+                      )
+                    }
+                  >
                     Copy coords
                   </button>
                   {isNumericId(selected?.stationId) && (
                     <button
                       style={ghostBtn}
                       onClick={() =>
-                        window.open(`https://openchargemap.org/site/poi/${selected!.stationId}`, "_blank")
+                        window.open(
+                          `https://openchargemap.org/site/poi/${selected!.stationId}`,
+                          "_blank"
+                        )
                       }
                     >
                       Open in OCM
@@ -988,15 +1483,38 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function FragmentRow({ day, count, avg }: { day: string; count: number; avg: number | null }) {
+function FragmentRow({
+  day,
+  count,
+  avg,
+}: {
+  day: string;
+  count: number;
+  avg: number | null;
+}) {
   const width = Math.min(360, 16 * count);
   return (
     <>
       <div style={{ fontSize: 13 }}>{day}</div>
-      <div style={{ height: 10, background: "#f3f4f6", borderRadius: 999 }}>
-        <div style={{ height: 10, width, background: "#2563eb", borderRadius: 999 }} />
+      <div
+        style={{
+          height: 10,
+          background: "#f3f4f6",
+          borderRadius: 999,
+        }}
+      >
+        <div
+          style={{
+            height: 10,
+            width,
+            background: "#2563eb",
+            borderRadius: 999,
+          }}
+        />
       </div>
-      <div style={{ fontSize: 13 }}>{avg == null ? "—" : avg.toFixed(3)}</div>
+      <div style={{ fontSize: 13 }}>
+        {avg == null ? "—" : avg.toFixed(3)}
+      </div>
     </>
   );
 }
@@ -1037,7 +1555,7 @@ const thSticky: React.CSSProperties = {
 
 const miniBtn: React.CSSProperties = {
   padding: "6px 8px",
-  border: "1px solid #e5e7eb",
+  border: "1px solid "#e5e7eb",
   background: "#fff",
   borderRadius: 8,
   fontWeight: 700,
@@ -1089,7 +1607,11 @@ const ghostBtn: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const label: React.CSSProperties = { fontSize: 12, color: "#6b7280", marginBottom: 4 };
+const label: React.CSSProperties = {
+  fontSize: 12,
+  color: "#6b7280",
+  marginBottom: 4,
+};
 
 const input: React.CSSProperties = {
   width: "100%",
