@@ -104,16 +104,21 @@ function groupBySource(points: FeedbackPoint[]) {
   for (const p of points) {
     const raw = (p.source ?? "").trim();
     if (!raw || raw.toLowerCase() === "unknown") continue; // ❌ unknown / empty skip
-    const k = raw.toLowerCase();                           // e.g. "app", "admin"
+    const k = raw.toLowerCase(); // e.g. "app", "admin"
     bucket.set(k, (bucket.get(k) ?? 0) + 1);
-   }
   }
-  const entries = Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+
+  if (!bucket.size) {
+    return { labels: [], values: [] };
+  }
+
+  const entries = Array.from(bucket.entries()).sort((a, b) => b[1] - a[1]);
   const TOP = 8;
   const top = entries.slice(0, TOP);
   const rest = entries.slice(TOP);
   const otherCount = rest.reduce((acc, [, v]) => acc + v, 0);
   if (otherCount > 0) top.push(["other", otherCount]);
+
   const labels = top.map(([k]) => k);
   const values = top.map(([, v]) => v);
   return { labels, values };
@@ -183,7 +188,6 @@ const stackedBarOpts = {
     x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
     y: { grid: { color: "rgba(0,0,0,0.05)" }, beginAtZero: true, stacked: true },
   },
-  scalesId: "stacked",
 };
 
 const lineOpts = {
@@ -278,9 +282,15 @@ export default function ChartsClient({ points }: Props) {
       {/* Range controls */}
       <div style={pillRow}>
         <div style={{ fontWeight: 800, marginRight: 6 }}>Range</div>
-        <button style={pillBtn(range === "7")} onClick={() => setRange("7")}>7 days</button>
-        <button style={pillBtn(range === "30")} onClick={() => setRange("30")}>30 days</button>
-        <button style={pillBtn(range === "all")} onClick={() => setRange("all")}>All</button>
+        <button style={pillBtn(range === "7")} onClick={() => setRange("7")}>
+          7 days
+        </button>
+        <button style={pillBtn(range === "30")} onClick={() => setRange("30")}>
+          30 days
+        </button>
+        <button style={pillBtn(range === "all")} onClick={() => setRange("all")}>
+          All
+        </button>
       </div>
 
       <div style={grid}>
@@ -288,7 +298,12 @@ export default function ChartsClient({ points }: Props) {
         <Card title="Daily Feedback (stacked)">
           <ChartWrap>
             <Bar
-              data={stackedBarData(s1.labels, s1.data as number[], s2.data as number[], s3.data as number[])}
+              data={stackedBarData(
+                s1.labels,
+                s1.data as number[],
+                s2.data as number[],
+                s3.data as number[]
+              )}
               options={stackedBarOpts}
             />
           </ChartWrap>
@@ -297,7 +312,10 @@ export default function ChartsClient({ points }: Props) {
         {/* Avg ML score by day */}
         <Card title="Avg ML Score by Day">
           <ChartWrap>
-            <Line data={lineData({ labels: sAvg.labels, values: sAvg.data as number[] })} options={lineOpts} />
+            <Line
+              data={lineData({ labels: sAvg.labels, values: sAvg.data as number[] })}
+              options={lineOpts}
+            />
           </ChartWrap>
         </Card>
 
