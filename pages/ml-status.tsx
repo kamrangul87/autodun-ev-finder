@@ -1,15 +1,19 @@
 // pages/ml-status.tsx
 import React, { useEffect, useState } from "react";
 
+type MlMetrics = {
+  accuracy?: number | null;
+  precision?: number | null;
+  recall?: number | null;
+};
+
 type MlRun = {
   id: number;
   model_version: string;
   run_at: string;
   samples_used: number | null;
   notes: string | null;
-  accuracy: number | null;
-  precision: number | null;
-  recall: number | null;
+  metrics_json?: MlMetrics | null;
 };
 
 type ApiResponse = {
@@ -34,7 +38,7 @@ export default function MlStatusPage() {
 
         const json: ApiResponse = await res.json();
         setRuns(json.runs ?? []);
-      } catch (err: unknown) {
+      } catch (err: any) {
         console.error(err);
         setError("Could not load model status. Please try again later.");
       } finally {
@@ -48,7 +52,7 @@ export default function MlStatusPage() {
   const latest = runs[0];
 
   function fmtPct(x: number | null | undefined) {
-    if (x == null) return "—";
+    if (x == null || !Number.isFinite(x)) return "—";
     return `${Math.round(x * 100)}%`;
   }
 
@@ -61,13 +65,19 @@ export default function MlStatusPage() {
     }
   }
 
+  const latestMetrics: MlMetrics = latest?.metrics_json ?? {};
+  const latestAcc = latestMetrics.accuracy ?? null;
+  const latestPrec = latestMetrics.precision ?? null;
+  const latestRec = latestMetrics.recall ?? null;
+
   return (
     <div
       style={{
         padding: 24,
         maxWidth: 900,
         margin: "0 auto",
-        fontFamily: "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        fontFamily:
+          "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
       }}
     >
       <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 8 }}>
@@ -75,14 +85,16 @@ export default function MlStatusPage() {
       </h1>
 
       <p style={{ maxWidth: 640, fontSize: 14, color: "#4b5563" }}>
-        This page shows the current status of the machine learning model that scores
-        EV charging feedback (good / bad / reliability). The model is retrained
-        automatically from recent feedback data.
+        This page shows the current status of the machine learning model that
+        scores EV charging feedback (good / bad / reliability). The model is
+        retrained automatically from recent feedback data.
       </p>
 
       {loading && <p style={{ marginTop: 16 }}>Loading model status…</p>}
       {error && (
-        <p style={{ marginTop: 16, color: "#b91c1c", fontWeight: 600 }}>{error}</p>
+        <p style={{ marginTop: 16, color: "#b91c1c", fontWeight: 600 }}>
+          {error}
+        </p>
       )}
 
       {!loading && !error && latest && (
@@ -99,10 +111,13 @@ export default function MlStatusPage() {
           >
             <KpiCard label="Current model" value={latest.model_version} />
             <KpiCard label="Last training run" value={fmtDate(latest.run_at)} />
-            <KpiCard label="Samples used" value={latest.samples_used?.toString() ?? "—"} />
-            <KpiCard label="Accuracy" value={fmtPct(latest.accuracy)} />
-            <KpiCard label="Precision" value={fmtPct(latest.precision)} />
-            <KpiCard label="Recall" value={fmtPct(latest.recall)} />
+            <KpiCard
+              label="Samples used"
+              value={latest.samples_used?.toString() ?? "—"}
+            />
+            <KpiCard label="Accuracy" value={fmtPct(latestAcc)} />
+            <KpiCard label="Precision" value={fmtPct(latestPrec)} />
+            <KpiCard label="Recall" value={fmtPct(latestRec)} />
           </div>
 
           {latest.notes && (
@@ -116,7 +131,9 @@ export default function MlStatusPage() {
                 fontSize: 13,
               }}
             >
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}>
+              <div
+                style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}
+              >
                 Notes
               </div>
               <div>{latest.notes}</div>
@@ -163,18 +180,21 @@ export default function MlStatusPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.slice(0, 20).map((run) => (
-                    <tr key={run.id}>
-                      <Td>{run.id}</Td>
-                      <Td>{fmtDate(run.run_at)}</Td>
-                      <Td>{run.model_version}</Td>
-                      <Td>{run.samples_used ?? "—"}</Td>
-                      <Td>{fmtPct(run.accuracy)}</Td>
-                      <Td>{fmtPct(run.precision)}</Td>
-                      <Td>{fmtPct(run.recall)}</Td>
-                      <Td>{run.notes ?? "—"}</Td>
-                    </tr>
-                  ))}
+                  {runs.slice(0, 20).map((run) => {
+                    const m: MlMetrics = run.metrics_json ?? {};
+                    return (
+                      <tr key={run.id}>
+                        <Td>{run.id}</Td>
+                        <Td>{fmtDate(run.run_at)}</Td>
+                        <Td>{run.model_version}</Td>
+                        <Td>{run.samples_used ?? "—"}</Td>
+                        <Td>{fmtPct(m.accuracy ?? null)}</Td>
+                        <Td>{fmtPct(m.precision ?? null)}</Td>
+                        <Td>{fmtPct(m.recall ?? null)}</Td>
+                        <Td>{run.notes ?? "—"}</Td>
+                      </tr>
+                    );
+                  })}
                   {runs.length === 0 && (
                     <tr>
                       <Td colSpan={8}>No runs recorded yet.</Td>
