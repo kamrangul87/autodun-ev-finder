@@ -253,23 +253,23 @@ export default function AdminFeedback() {
       if (v === "bad" || v === "down" || v === "negative") return "negative";
       return v ? "neutral" : undefined;
     };
-    return rows
-      .map((r, i) => {
-        const lat = Number(r.lat);
-        const lng = Number(r.lng);
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-        return {
-          id: String(r.stationId ?? i),
-          stationName: r.stationId ? String(r.stationId) : undefined,
-          lat,
-          lng,
-          mlScore: typeof r.mlScore === "number" ? r.mlScore : undefined,
-          sentiment: toSentiment(r.vote),
-          source: r.source || undefined,
-          createdAt: r.ts || undefined,
-        } as FeedbackPoint;
-      })
-      .filter(Boolean) as FeedbackPoint[];
+ return rows
+  .map((r, i) => {
+    const lat = Number(r.lat);
+    const lng = Number(r.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return {
+      id: String(r.stationId ?? i),
+      stationName: r.stationId ? String(r.stationId) : undefined,
+      lat,
+      lng,
+      mlScore: typeof r.mlScore === "number" ? r.mlScore : undefined,
+      sentiment: toSentiment(r.vote),
+      source: r.source && r.source !== "unknown" ? r.source : undefined,
+      createdAt: r.ts || undefined,
+    } as FeedbackPoint;
+  })
+  .filter(Boolean) as FeedbackPoint[];
   }, [rows]);
 
   /* Apply filters & sorting (table) */
