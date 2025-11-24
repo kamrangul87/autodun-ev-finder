@@ -98,11 +98,15 @@ function groupByDayAvg(points: FeedbackPoint[]): { labels: string[]; values: num
 }
 
 /** Source mix (top 8, rest -> "other") */
-function groupBySource(points: FeedbackPoint[]): { labels: string[]; values: number[] } {
-  const map = new Map<string, number>();
+function groupBySource(points: FeedbackPoint[]) {
+  const bucket = new Map<string, number>();
+
   for (const p of points) {
-    const k = (p.source || "unknown").toLowerCase();
-    map.set(k, (map.get(k) || 0) + 1);
+    const raw = (p.source ?? "").trim();
+    if (!raw || raw.toLowerCase() === "unknown") continue; // ❌ unknown / empty skip
+    const k = raw.toLowerCase();                           // e.g. "app", "admin"
+    bucket.set(k, (bucket.get(k) ?? 0) + 1);
+   }
   }
   const entries = Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
   const TOP = 8;
