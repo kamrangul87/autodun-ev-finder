@@ -6,14 +6,14 @@ import { MapContainer, TileLayer, Marker, Tooltip, useMap } from "react-leaflet"
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
-import CouncilLayer from "./CouncilLayer"; // ⬅️ NEW
+import CouncilLayer from "./CouncilLayer"; // ⬅️ Council overlay
 
 export type FeedbackPoint = {
   id: string;
   stationName?: string;
   lat: number;
   lng: number;
-  mlScore?: number;
+  mlScore?: number; // 0..1
   sentiment?: "positive" | "neutral" | "negative";
   source?: string;
   createdAt?: string;
@@ -32,15 +32,19 @@ if (typeof window !== "undefined") {
 
 /* ───────── helpers ───────── */
 
-function pinColor(s?: FeedbackPoint["sentiment"]) {
-  if (s === "positive") return "#16a34a"; // green
-  if (s === "negative") return "#dc2626"; // red
-  if (s === "neutral") return "#6b7280";  // gray
-  return "#2563eb";                       // unknown
+/** Marker colour based on ML score (0–1 or 0–100) */
+function pinColorFromScore(score?: number | null) {
+  if (typeof score === "number" && isFinite(score)) {
+    const pct = score <= 1 ? score * 100 : score;
+    if (pct >= 70) return "#16a34a"; // high score
+    if (pct >= 40) return "#facc15"; // medium score
+    return "#dc2626"; // low score
+  }
+  return "#6b7280"; // no score / unknown
 }
 
-function iconFor(s?: FeedbackPoint["sentiment"]) {
-  const color = pinColor(s);
+function iconForScore(score?: number | null) {
+  const color = pinColorFromScore(score);
   const svg = encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="38" viewBox="0 0 26 38">
        <path d="M13 0C6 0 0.8 5.2 0.8 12.1c0 8.5 10.8 23 11.2 23.5.3.4.9.4 1.2 0 .4-.5 11.2-15 11.2-23.5C25.6 5.2 20.4 0 13 0z" fill="${color}"/>
@@ -64,7 +68,7 @@ function FitBounds({ points, trigger }: { points: FeedbackPoint[]; trigger: numb
       map.setView([points[0].lat, points[0].lng], Math.max(map.getZoom(), 12), { animate: true });
       return;
     }
-    const bounds = L.latLngBounds(points.map(p => [p.lat, p.lng] as [number, number]));
+    const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng] as [number, number]));
     if (!bounds.isValid()) return;
     map.fitBounds(bounds.pad(0.2), { animate: true });
   }, [trigger, points, map]);
@@ -88,9 +92,11 @@ function FocusPoint({
   return null;
 }
 
+/** Badge showing ML score as % with colour bands */
 function ScoreBadge({ value }: { value?: number }) {
   if (typeof value !== "number" || !isFinite(value)) return null;
-  const s = Math.round(value);
+  const pctRaw = value <= 1 ? value * 100 : value;
+  const s = Math.round(pctRaw);
   const tone =
     s >= 70
       ? { bg: "#dcfce7", text: "#166534", border: "#bbf7d0" }
@@ -111,18 +117,19 @@ function ScoreBadge({ value }: { value?: number }) {
         fontWeight: 700,
       }}
     >
-      ML {s}
+      <span style={{ marginRight: 4 }}>Score</span>
+      <span>{s}</span>
     </span>
   );
 }
 
-/* ───────── component ───────── */
+/* ───────── main component ───────── */
 
 export default function MapClient({
   points,
   fitToPointsKey = 0,
-  focusPoint,          // optional
-  focusKey = 0,        // optional
+  focusPoint, // optional
+  focusKey = 0, // optional
 }: {
   points: FeedbackPoint[];
   fitToPointsKey?: number;
@@ -132,33 +139,33 @@ export default function MapClient({
   const center: [number, number] =
     points.length ? [points[0].lat, points[0].lng] : [52.3555, -1.1743]; // UK fallback
 
-  // ⬅️ NEW: council overlay toggle state
+  // Council overlay toggle state
   const [showCouncils, setShowCouncils] = useState(false);
 
   return (
-    <div style={{ width: "100%", height: "100%", position: "relative" }}>
-      {/* ⬅️ NEW: tiny toggle control (doesn't affect your layout) */}
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {/* Simple top-left controls */}
       <div
         style={{
           position: "absolute",
-          top: 8,
-          left: 8,
+          left: 10,
+          top: 10,
           zIndex: 1000,
           background: "#fff",
+          padding: "6px 10px",
+          borderRadius: 999,
           border: "1px solid #e5e7eb",
-          borderRadius: 8,
-          padding: "6px 8px",
-          fontSize: 12,
           display: "flex",
           alignItems: "center",
           gap: 6,
+          fontSize: 12,
         }}
       >
         <input
           id="councilToggle"
           type="checkbox"
           checked={showCouncils}
-          onChange={() => setShowCouncils(v => !v)}
+          onChange={() => setShowCouncils((v) => !v)}
         />
         <label htmlFor="councilToggle">Council overlay</label>
       </div>
@@ -169,7 +176,7 @@ export default function MapClient({
           url={process.env.NEXT_PUBLIC_TILE_URL || "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"}
         />
 
-        {/* ⬅️ NEW: optional council polygons */}
+        {/* Optional council polygons */}
         {showCouncils && <CouncilLayer />}
 
         {/* Imperative fitter / focus */}
@@ -181,7 +188,7 @@ export default function MapClient({
             <Marker
               key={`${p.id}-${p.createdAt ?? ""}`}
               position={[p.lat, p.lng]}
-              icon={iconFor(p.sentiment)}
+              icon={iconForScore(p.mlScore)}
             >
               <Tooltip direction="top" offset={[0, -6]} opacity={1}>
                 <div style={{ fontSize: 12 }}>
@@ -226,10 +233,10 @@ export default function MapClient({
           boxShadow: "0 4px 16px rgba(0,0,0,0.06)",
         }}
       >
-        <LegendItem color="#16a34a" label="Positive" />
-        <LegendItem color="#6b7280" label="Neutral" />
-        <LegendItem color="#dc2626" label="Negative" />
-        <LegendItem color="#2563eb" label="Unknown" />
+        <LegendItem color="#16a34a" label="Score ≥ 70" />
+        <LegendItem color="#facc15" label="Score 40–69" />
+        <LegendItem color="#dc2626" label="Score &lt; 40" />
+        <LegendItem color="#6b7280" label="No score" />
       </div>
     </div>
   );
