@@ -29,7 +29,7 @@ type Aggregated = {
 };
 
 export default function WorstStations({ rows }: Props) {
-  const items = useMemo(() => {
+  const items = useMemo<Aggregated[]>(() => {
     const byStation = new Map<string, Aggregated>();
 
     for (const r of rows) {
@@ -106,64 +106,118 @@ export default function WorstStations({ rows }: Props) {
         >
           <thead>
             <tr>
-              <Th>Station</Th>
-              <Th>Feedback</Th>
-              <Th>Avg score</Th>
-              <Th>Bad %</Th>
-              <Th>Last feedback</Th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "6px 8px",
+                  borderBottom: "1px solid #e5e7eb",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Station
+              </th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "6px 8px",
+                  borderBottom: "1px solid #e5e7eb",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Feedback
+              </th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "6px 8px",
+                  borderBottom: "1px solid #e5e7eb",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Avg score
+              </th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "6px 8px",
+                  borderBottom: "1px solid #e5e7eb",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Bad %
+              </th>
+              <th
+                style={{
+                  textAlign: "left",
+                  padding: "6px 8px",
+                  borderBottom: "1px solid #e5e7eb",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Last feedback
+              </th>
             </tr>
           </thead>
           <tbody>
             {items.map((it) => (
               <tr key={it.stationId}>
-                <Td>{it.stationId}</Td>
-                <Td>{it.count}</Td>
-                <Td>{it.avgScorePct.toFixed(1)}%</Td>
-                <Td>{it.badPct.toFixed(0)}%</Td>
-                <Td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #f3f4f6",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {it.stationId}
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #f3f4f6",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {it.count}
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #f3f4f6",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {it.avgScorePct.toFixed(1)}%
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #f3f4f6",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {it.badPct.toFixed(0)}%
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    borderBottom: "1px solid #f3f4f6",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {it.lastTs ? (
-                    <span>
+                    <>
                       {it.lastTs.slice(0, 10)}
                       {it.lastSource ? ` · ${it.lastSource}` : ""}
-                    </span>
+                    </>
                   ) : (
                     "—"
                   )}
-                </Td>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
     </div>
-  );
-}
-
-function Th({ children }: { children: React.ReactNode }) {
-  return
-    <th
-      style={{
-        textAlign: "left",
-        padding: "6px 8px",
-        borderBottom: "1px solid #e5e7eb",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {children}
-    </th>;
-}
-
-function Td({ children }: { children: React.ReactNode }) {
-  return (
-    <td
-      style={{
-        padding: "6px 8px",
-        borderBottom: "1px solid #f3f4f6",
-        verticalAlign: "top",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {children}
-    </td>
   );
 }
