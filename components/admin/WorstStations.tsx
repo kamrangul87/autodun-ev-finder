@@ -67,12 +67,14 @@ export default function WorstStations({ rows }: Props) {
       }
     }
 
-    const out: Aggregated[] = [];
-    for (const agg of byStation.values()) {
-      if (agg.count === 0) continue;
+      const out: Aggregated[] = [];
+    byStation.forEach((agg) => {
+      if (agg.count === 0) return;
       agg.avgScorePct = agg.avgScorePct / agg.count;
       agg.badPct = agg.badCount > 0 ? (agg.badCount / agg.count) * 100 : 0;
       out.push({ ...agg });
+    });
+
     }
 
     // worst first (lowest average score)
