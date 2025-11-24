@@ -1,4 +1,5 @@
 "use client";
+
 import React, { useMemo } from "react";
 
 type Row = {
@@ -22,13 +23,13 @@ type Aggregated = {
   count: number;
   badCount: number;
   avgScorePct: number; // 0–100
-  badPct: number;      // 0–100
+  badPct: number; // 0–100
   lastTs: string | null;
   lastSource: string | null;
 };
 
 export default function WorstStations({ rows }: Props) {
-  const items = useMemo<Aggregated[]>(() => {
+  const items = useMemo(() => {
     const byStation = new Map<string, Aggregated>();
 
     for (const r of rows) {
@@ -37,6 +38,7 @@ export default function WorstStations({ rows }: Props) {
         typeof r.mlScore === "number" && Number.isFinite(r.mlScore)
           ? r.mlScore
           : null;
+
       if (!id || score == null) continue;
 
       let agg = byStation.get(id);
@@ -56,7 +58,7 @@ export default function WorstStations({ rows }: Props) {
       agg.count += 1;
       agg.avgScorePct += score * 100;
 
-      // yahan simple rule: score < 0.5 => “bad”
+      // simple rule: score < 0.5 => “bad”
       if (score < 0.5) {
         agg.badCount += 1;
       }
@@ -67,15 +69,13 @@ export default function WorstStations({ rows }: Props) {
       }
     }
 
-      const out: Aggregated[] = [];
+    const out: Aggregated[] = [];
     byStation.forEach((agg) => {
       if (agg.count === 0) return;
       agg.avgScorePct = agg.avgScorePct / agg.count;
       agg.badPct = agg.badCount > 0 ? (agg.badCount / agg.count) * 100 : 0;
       out.push({ ...agg });
     });
-
-    }
 
     // worst first (lowest average score)
     out.sort((a, b) => a.avgScorePct - b.avgScorePct);
@@ -140,7 +140,7 @@ export default function WorstStations({ rows }: Props) {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return (
+  return
     <th
       style={{
         textAlign: "left",
@@ -150,8 +150,7 @@ function Th({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
-    </th>
-  );
+    </th>;
 }
 
 function Td({ children }: { children: React.ReactNode }) {
