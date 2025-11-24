@@ -101,7 +101,7 @@ export default async function handler(req, res) {
       vote: normVote,
       type: type || (normVote ? "vote" : "council"),
       text: cleanStr(text || comment || "", 800),
-      source: cleanStr(source || "unknown", 40),
+      source: cleanStr(source || "", 40),
       lat: normLat,
       lng: normLng,
       zoom: normZoom,
