@@ -1555,7 +1555,7 @@ const thSticky: React.CSSProperties = {
 
 const miniBtn: React.CSSProperties = {
   padding: "6px 8px",
-  border: "1px solid "#e5e7eb",
+  border: "1px solid #e5e7eb",
   background: "#fff",
   borderRadius: 8,
   fontWeight: 700,
