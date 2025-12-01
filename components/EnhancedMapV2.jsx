@@ -8,7 +8,7 @@ import { LocateMeButton } from './LocateMeButton.tsx';
 import { getCached, setCache } from '../lib/api-cache';
 import { telemetry } from '../utils/telemetry.ts';
 import { findNearestStation } from '../utils/haversine.ts';
-
+import { debugLog } from "../utils/debug";
 /* ──────────────────────────────────────────────────────────────
    OCM connector normalization
    ────────────────────────────────────────────────────────────── */
@@ -587,7 +587,7 @@ export default function EnhancedMap({
         mapRef.current.setView([location.lat, location.lng], 14);
         const nearest = findNearestStation(location, stationsNormalized);
         if (nearest) {
-          import { debugLog } from "../utils/debug"; // adjust path if needed
+           // adjust path if needed
 
 debugLog("[Location] Nearest station:", station);
         }
