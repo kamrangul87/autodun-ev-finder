@@ -587,7 +587,9 @@ export default function EnhancedMap({
         mapRef.current.setView([location.lat, location.lng], 14);
         const nearest = findNearestStation(location, stationsNormalized);
         if (nearest) {
-          console.log(`[Location] Nearest station: ${nearest.station.name} (${nearest.distance.toFixed(2)} km)`);
+          import { debugLog } from "../utils/debug"; // adjust path if needed
+
+debugLog("[Location] Nearest station:", station);
         }
       }
     },
