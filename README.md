@@ -1,4 +1,5 @@
 # Autodun EV Finder
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Autodun EV Finder is a lightweight EV charging analytics dashboard for **UK councils and transport teams**.
 
