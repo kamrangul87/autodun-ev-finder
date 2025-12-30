@@ -50,6 +50,9 @@ export default function Home() {
   const [initialDataReady, setInitialDataReady] = useState(false);
   const hasLoadedRef = useRef(false);
 
+  // ✅ NEW: prevent double auto-run from URL
+  const didAutoSearchRef = useRef(false);
+
   // hydrate existing UI flags from URL via your helper
   useEffect(() => {
     setState(getInitialState());
@@ -166,6 +169,48 @@ export default function Home() {
       setSearching(false);
     }
   };
+
+  // ✅ NEW: deep-link support (?postcode=SW1A 1AA)
+  // - Prefills the input
+  // - Auto-runs search ONCE
+  // - Does NOT break your existing getInitialState/updateURL flow
+  useEffect(() => {
+    if (didAutoSearchRef.current) return;
+
+    let postcode = null;
+    try {
+      const p = new URLSearchParams(window.location.search);
+      postcode = p.get('postcode');
+    } catch {}
+
+    if (!postcode) return;
+
+    const cleaned = String(postcode).trim();
+    if (!cleaned) return;
+
+    didAutoSearchRef.current = true;
+
+    // set query first
+    setState((s) => ({ ...s, query: cleaned }));
+
+    // then trigger search after state updates
+    setTimeout(() => {
+      try {
+        // Use the same handler as the "Go" button
+        // but ensure query is present
+        if (cleaned) {
+          setSearching(true);
+          searchLocation(cleaned)
+            .then((result) => {
+              setSearchResult(result);
+              if (result?.regionName) setRegionName(result.regionName);
+            })
+            .catch((err) => showToast(err?.message || 'Search failed'))
+            .finally(() => setSearching(false));
+        }
+      } catch {}
+    }, 0);
+  }, []);
 
   const handleZoomToData = () => {
     setShouldZoomToData((prev) => !prev);
