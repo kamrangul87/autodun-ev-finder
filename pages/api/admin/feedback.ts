@@ -6,7 +6,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 // ──────────────────────────────────────────────────────────────
 let supabase: any = null;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line
   const { createClient } = require("@supabase/supabase-js");
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
