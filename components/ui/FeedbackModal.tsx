@@ -86,9 +86,7 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Topic
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Topic</label>
                 <select
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
@@ -104,9 +102,7 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Message *
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Message *</label>
                 <textarea
                   value={message}
                   onChange={(e) => setMessage(e.target.value.slice(0, maxChars))}
@@ -125,9 +121,7 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Email (optional)
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email (optional)</label>
                 <input
                   type="email"
                   value={email}

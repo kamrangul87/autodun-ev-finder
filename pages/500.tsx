@@ -1,9 +1,13 @@
-// pages/500.tsx
-export default function ServerError() {
+import Link from "next/link";
+
+export default function Custom500() {
   return (
-    <main style={{ maxWidth: 720, margin: '60px auto', padding: '0 16px' }}>
-      <h1>Something went wrong</h1>
-      <p>Please try again in a moment. <a href="/">Go home</a>.</p>
+    <main style={{ padding: 24 }}>
+      <h1>500 - Server Error</h1>
+      <p>Something went wrong.</p>
+      <p>
+        <Link href="/">Go back home</Link>
+      </p>
     </main>
   );
 }
