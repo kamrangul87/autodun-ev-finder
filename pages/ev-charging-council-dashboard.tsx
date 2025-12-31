@@ -218,12 +218,12 @@ export default function EvChargingCouncilDashboardPage() {
             >
               Request council demo
             </a>
-            <a href="/" style={secondaryBtn}>
+            <Link href="/" style={secondaryBtn}>
               View map demo
-            </a>
-            <a href="/ml-status" style={secondaryBtn}>
+            </Link>
+            <Link href="/ml-status" style={secondaryBtn}>
               View ML model status
-            </a>
+            </Link>
           </div>
 
           <div style={tagRow}>

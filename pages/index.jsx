@@ -420,13 +420,13 @@ export default function Home() {
             Data © Open Charge Map
           </a>{' '}
           •{' '}
-          <a href="/about-ai" style={{ color: '#374151', textDecoration: 'underline' }}>
+          <Link href="/about-ai" style={{ color: '#374151', textDecoration: 'underline' }}>
             About AI
-          </a>{' '}
+          </Link>{' '}
           •{' '}
-          <a href="/privacy" style={{ color: '#374151', textDecoration: 'underline' }}>
+          <Link href="/privacy" style={{ color: '#374151', textDecoration: 'underline' }}>
             Privacy
-          </a>
+          </Link>
         </div>
 
         {error && (
