@@ -1,11 +1,10 @@
 // lib/supabaseAdmin.ts
+import { createClient } from "@supabase/supabase-js";
+
 let supabase: any = null;
 
 try {
-  // lazy require so build doesn’t fail if package/env missing
-  // eslint-disable-next-line
- import { createClient } from "@supabase/supabase-js";
-
+  // Keep same behavior: create admin client only if env vars exist
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -17,6 +16,7 @@ try {
     console.warn("[supabaseAdmin] Missing env; running in no-op mode.");
   }
 } catch (e) {
+  // If the package/env is missing at runtime, keep no-op mode
   console.warn("[supabaseAdmin] Package not installed; running in no-op mode.");
 }
 
