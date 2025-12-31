@@ -1,10 +1,13 @@
 // lib/supabaseAdmin.ts
-import { createClient } from "@supabase/supabase-js";
+// Server-only Supabase Admin client (Service Role). Safe fallback to null.
 
 let supabase: any = null;
 
 try {
-  // Keep same behavior: create admin client only if env vars exist
+  // Use require inside try/catch (allowed). `import` here breaks TypeScript build.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { createClient } = require("@supabase/supabase-js");
+
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -16,8 +19,7 @@ try {
     console.warn("[supabaseAdmin] Missing env; running in no-op mode.");
   }
 } catch (e) {
-  // If the package/env is missing at runtime, keep no-op mode
-  console.warn("[supabaseAdmin] Package not installed; running in no-op mode.");
+  console.warn("[supabaseAdmin] Package missing; running in no-op mode.");
 }
 
 export default supabase;
