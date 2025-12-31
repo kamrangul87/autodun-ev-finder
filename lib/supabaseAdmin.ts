@@ -4,7 +4,7 @@ let supabase: any = null;
 try {
   // lazy require so build doesn’t fail if package/env missing
   // eslint-disable-next-line
-  const { createClient } = require("@supabase/supabase-js");
+ import { createClient } from "@supabase/supabase-js";
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
