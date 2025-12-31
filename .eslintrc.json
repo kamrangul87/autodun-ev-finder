@@ -1,9 +1,4 @@
 {
   "root": true,
-  "extends": ["next/core-web-vitals"],
-  "parser": "@typescript-eslint/parser",
-  "plugins": ["@typescript-eslint"],
-  "rules": {
-    "@next/next/no-html-link-for-pages": "off"
-  }
+  "extends": ["next/core-web-vitals"]
 }
