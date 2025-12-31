@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, FormEvent } from 'react';
+import Link from 'next/link';
 
 interface FeedbackModalProps {
   isOpen: boolean;
@@ -114,7 +115,11 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
                   placeholder="Tell us what's on your mind..."
                   required
                 />
-                <div className={`text-xs mt-1 ${remaining < 50 ? 'text-orange-600' : 'text-gray-500'}`}>
+                <div
+                  className={`text-xs mt-1 ${
+                    remaining < 50 ? 'text-orange-600' : 'text-gray-500'
+                  }`}
+                >
                   {remaining} characters remaining
                 </div>
               </div>
@@ -133,8 +138,10 @@ export default function FeedbackModal({ isOpen, onClose, mapContext }: FeedbackM
               </div>
 
               <div className="text-xs text-gray-500">
-                <a href="/privacy" className="underline hover:text-gray-700">Privacy note</a>: 
-                We collect map position and device info to help debug issues.
+                <Link href="/privacy" className="underline hover:text-gray-700">
+                  Privacy note
+                </Link>
+                : We collect map position and device info to help debug issues.
               </div>
 
               <div className="flex gap-3">
