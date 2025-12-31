@@ -5,10 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { telemetry, scoreRequested, scoreReturned } from "../utils/telemetry";
 import type { Station, Connector } from "../types/stations";
-import {
-  aggregateToCanonical,
-  CONNECTOR_COLORS,
-} from "../lib/connectorCatalog";
+import { aggregateToCanonical, CONNECTOR_COLORS } from "../lib/connectorCatalog";
 // ❌ removed: CouncilBadge import
 
 /* ─────────────── UX helpers ─────────────── */
@@ -736,6 +733,20 @@ export default function StationDrawer({
               style={secondaryBtn}
             >
               Copy
+            </button>
+
+            {/* ✅ AI Assistant deep-link button (Option B) */}
+            <button
+              onClick={() => {
+                const url =
+                  `https://autodun.com/ai-assistant?intent=ev` +
+                  (postcode ? `&postcode=${encodeURIComponent(postcode)}` : "") +
+                  (title ? `&station=${encodeURIComponent(title)}` : "");
+                window.open(url, "_blank", "noreferrer");
+              }}
+              style={secondaryBtn}
+            >
+              AI Assistant
             </button>
           </div>
 
