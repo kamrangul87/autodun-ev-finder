@@ -735,14 +735,14 @@ export default function StationDrawer({
               Copy
             </button>
 
-            {/* ✅ AI Assistant deep-link button (Option B) */}
+            {/* ✅ AI Assistant deep-link button (FIXED DOMAIN) */}
             <button
               onClick={() => {
                 const url =
-                  `https://autodun.com/ai-assistant?intent=ev` +
+                  `https://ai.autodun.com/ai-assistant?intent=ev` +
                   (postcode ? `&postcode=${encodeURIComponent(postcode)}` : "") +
                   (title ? `&station=${encodeURIComponent(title)}` : "");
-                window.open(url, "_blank", "noreferrer");
+                window.open(url, "_blank", "noopener,noreferrer");
               }}
               style={secondaryBtn}
             >
@@ -981,3 +981,4 @@ const textarea: CSSProperties = {
   color: "#111827",
   background: "#fff",
 };
+
