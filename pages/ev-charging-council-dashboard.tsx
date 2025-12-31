@@ -1,3 +1,4 @@
+import Link from "next/link";
 // pages/ev-charging-council-dashboard.tsx
 import React from "react";
 

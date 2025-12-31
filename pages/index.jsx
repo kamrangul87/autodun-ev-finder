@@ -1,3 +1,4 @@
+import Link from "next/link";
 // pages/index.jsx - HOTFIX
 import { useState, useEffect, useCallback, useRef } from 'react';
 import dynamic from 'next/dynamic';
