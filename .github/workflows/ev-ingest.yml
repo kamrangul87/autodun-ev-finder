@@ -1,0 +1,21 @@
+name: Nightly EV Ingestion
+
+on:
+  schedule:
+    - cron: "30 2 * * *"  # 02:30 UTC
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: node scripts/ev-ingest.mjs
+        env:
+          EV_SUPABASE_URL: ${{ secrets.EV_SUPABASE_URL }}
+          EV_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.EV_SUPABASE_SERVICE_ROLE_KEY }}
+          EV_UPSTREAM_URL: ${{ secrets.EV_UPSTREAM_URL }}
