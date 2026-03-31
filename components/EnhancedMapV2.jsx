@@ -194,6 +194,7 @@ function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
       if (layerRef.current) map.removeLayer(layerRef.current);
       layerRef.current = L.geoJSON(gj, {
         style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
+        filter: (f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type),
         onEachFeature: (f, layer) => {
           const { name, code } = f.properties || {};
           // compute bbox from layer bounds (Leaflet returns [lat,lng])
