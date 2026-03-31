@@ -1,5 +1,5 @@
 // components/EnhancedMapV2.jsx
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
@@ -152,14 +152,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
   return null;
 }
 
-function StationMarker({ station, onClick }) {
+const StationMarker = memo(function StationMarker({ station, onClick }) {
   return (
     <Marker
       position={[station.lat, station.lng]}
       eventHandlers={{ click: () => onClick(station) }}
     />
   );
-}
+});
 
 /* ──────────────────────────────────────────────────────────────
    NEW: Council polygons overlay with click → set code & bbox
@@ -195,6 +195,7 @@ function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
       layerRef.current = L.geoJSON(gj, {
         style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
         filter: (f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type),
+        coordsToLatLng: (coords) => L.latLng(coords[0], coords[1]),
         onEachFeature: (f, layer) => {
           const { name, code } = f.properties || {};
           // compute bbox from layer bounds (Leaflet returns [lat,lng])
@@ -691,7 +692,7 @@ debugLog("[Location] Nearest station:", station);
         {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
 
         {showMarkers && (
-          <MarkerClusterGroup chunkedLoading>
+          <MarkerClusterGroup chunkedLoading maxClusterRadius={60} disableClusteringAtZoom={16}>
             {stationsNormalized.map((station) => (
               <StationMarker key={station.id} station={station} onClick={handleStationClick} />
             ))}

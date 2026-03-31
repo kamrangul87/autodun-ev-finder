@@ -661,36 +661,42 @@ export default function StationDrawer({
                 ))}
               </ul>
             ) : showUnknownBreakdown ? (
-              <ul
-                style={{
-                  margin: "6px 0 0 0",
-                  padding: 0,
-                  listStyle: "none",
-                }}
-              >
-                <li
+              isCouncil ? (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                  Connector details not available for council feed data
+                </div>
+              ) : (
+                <ul
                   style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 12,
-                    color: "#374151",
+                    margin: "6px 0 0 0",
+                    padding: 0,
+                    listStyle: "none",
                   }}
                 >
-                  <span
-                    aria-hidden
+                  <li
                     style={{
-                      width: 10,
-                      height: 10,
-                      borderRadius: 999,
-                      background: "#9ca3af",
-                      display: "inline-block",
-                      flex: "0 0 10px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      fontSize: 12,
+                      color: "#374151",
                     }}
-                  />
-                  <span>Unknown × {totalLabel}</span>
-                </li>
-              </ul>
+                  >
+                    <span
+                      aria-hidden
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background: "#9ca3af",
+                        display: "inline-block",
+                        flex: "0 0 10px",
+                      }}
+                    />
+                    <span>Unknown × {totalLabel}</span>
+                  </li>
+                </ul>
+              )
             ) : (
               <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                 Connector types not specified.
