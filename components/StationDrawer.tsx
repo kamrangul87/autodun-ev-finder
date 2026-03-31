@@ -816,8 +816,9 @@ export default function StationDrawer({
               <button
                 style={{
                   ...voteBtn,
-                  borderColor: vote === "up" ? "#22c55e" : "#e5e7eb",
-                  background: vote === "up" ? "#dcfce7" : "#fff",
+                  borderColor: vote === "up" ? "#00e5a0" : "rgba(255,255,255,0.12)",
+                  background: vote === "up" ? "rgba(0,229,160,0.15)" : "rgba(255,255,255,0.07)",
+                  color: vote === "up" ? "#00e5a0" : "#d1d5db",
                 }}
                 onClick={() => setVote("up")}
               >
@@ -826,8 +827,9 @@ export default function StationDrawer({
               <button
                 style={{
                   ...voteBtn,
-                  borderColor: vote === "down" ? "#f59e0b" : "#e5e7eb",
-                  background: vote === "down" ? "#fffbeb" : "#fff",
+                  borderColor: vote === "down" ? "#ef4444" : "rgba(255,255,255,0.12)",
+                  background: vote === "down" ? "rgba(239,68,68,0.15)" : "rgba(255,255,255,0.07)",
+                  color: vote === "down" ? "#ef4444" : "#d1d5db",
                 }}
                 onClick={() => setVote("down")}
               >

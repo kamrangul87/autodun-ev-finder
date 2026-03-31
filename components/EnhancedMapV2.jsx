@@ -162,104 +162,89 @@ function StationMarker({ station, onClick }) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   NEW: Council polygons overlay with click → set code & bbox
+   Council polygons — authoritative martinjc UK Local Authority GeoJSON
+   Fetched once (England + Scotland + Wales), cached in memory.
+   No viewport re-fetching, no internal API calls.
    ────────────────────────────────────────────────────────────── */
+const UK_LAD_SOURCES = [
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/eng/lad.json',
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/sco/lad.json',
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/wal/lad.json',
+];
+const UK_COUNCIL_CACHE_KEY = 'uk_council_geojson_v1';
+
+async function fetchAllUKCouncils() {
+  const cached = getCached(UK_COUNCIL_CACHE_KEY);
+  if (cached?.geojson) return cached.geojson;
+  const results = await Promise.all(UK_LAD_SOURCES.map((url) => fetch(url).then((r) => r.json())));
+  const merged = {
+    type: 'FeatureCollection',
+    features: results.flatMap((fc) =>
+      (fc.features || [])
+        .filter((f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type))
+        .map((f) => ({
+          ...f,
+          properties: {
+            ...f.properties,
+            name: f.properties?.LAD13NM || f.properties?.LAD23NM || 'Unknown',
+            code: f.properties?.LAD13CD || f.properties?.LAD23CD || '',
+          },
+        }))
+    ),
+  };
+  setCache(UK_COUNCIL_CACHE_KEY, { geojson: merged });
+  return merged;
+}
+
 function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
   const map = useMap();
   const layerRef = useRef(null);
-  const lastBboxRef = useRef(null);
-  const fetchTimeoutRef = useRef(null);
+  const loadingRef = useRef(false);
 
-  const fetchPolys = useCallback(async () => {
+  useEffect(() => {
     if (!showCouncil) {
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
-      lastBboxRef.current = null;
       return;
     }
-
-    const b = map.getBounds();
-    const sw = b.getSouthWest();
-    const ne = b.getNorthEast();
-    const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-
-    if (lastBboxRef.current === bboxStr) return;
-
-    const cacheKey = `council_poly_${bboxStr}`;
-    const cached = getCached(cacheKey);
-
-    // Parse geometry if Supabase returns it as a JSON string
-    const parseGeom = (geom) => {
-      if (!geom) return null;
-      if (typeof geom === 'string') { try { return JSON.parse(geom); } catch { return null; } }
-      return geom;
-    };
-
-    const addLayer = (gj) => {
-      if (layerRef.current) map.removeLayer(layerRef.current);
-      const safeFeatures = (gj.features || []).map((f) => ({ ...f, geometry: parseGeom(f.geometry) }));
-      const safeGj = { ...gj, features: safeFeatures };
-      layerRef.current = L.geoJSON(safeGj, {
-        style: { color: '#0066ff', weight: 2, fillColor: '#0066ff', fillOpacity: 0.1 },
-        filter: (f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type),
-        onEachFeature: (f, layer) => {
-          const { name, code } = f.properties || {};
-          // compute bbox from layer bounds (Leaflet returns [lat,lng])
-          const ll = layer;
-          if (ll && 'getBounds' in ll) {
-            const lb = ll.getBounds();
-            const bb = [lb.getWest(), lb.getSouth(), lb.getEast(), lb.getNorth()];
-            (f.properties ||= {}).bbox = bb;
-          }
-          layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
-          layer.on('click', () => {
-            const bb = f?.properties?.bbox;
-            if (bb && Array.isArray(bb) && bb.length === 4) {
-              onBBox?.(bb);
-              map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]], { padding: [18, 18] });
+    if (layerRef.current || loadingRef.current) return;
+    loadingRef.current = true;
+    fetchAllUKCouncils()
+      .then((gj) => {
+        if (!showCouncil) return; // toggled off while loading
+        layerRef.current = L.geoJSON(gj, {
+          style: { color: '#0066ff', weight: 2, fillColor: '#0066ff', fillOpacity: 0.08 },
+          onEachFeature: (f, layer) => {
+            const { name, code } = f.properties || {};
+            if (layer && 'getBounds' in layer) {
+              const lb = layer.getBounds();
+              const bb = [lb.getWest(), lb.getSouth(), lb.getEast(), lb.getNorth()];
+              (f.properties ||= {}).bbox = bb;
             }
-            onSelect?.(code || null);
-          });
-        },
-      }).addTo(map);
-      lastBboxRef.current = bboxStr;
-    };
+            layer.bindPopup(`<strong>${name || 'Council'}</strong><br/>${code || ''}`);
+            layer.on('click', () => {
+              const bb = f?.properties?.bbox;
+              if (bb?.length === 4) {
+                onBBox?.(bb);
+                map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]], { padding: [18, 18] });
+              }
+              onSelect?.(code || null);
+            });
+          },
+        }).addTo(map);
+      })
+      .catch((e) => console.error('[CouncilBoundaryLayer]', e))
+      .finally(() => { loadingRef.current = false; });
 
-    if (cached?.geojson) {
-      addLayer(cached.geojson);
-      return;
-    }
-
-    try {
-      // API accepts mode=bbox (it may ignore bbox filter; harmless)
-      const res = await fetch(`/api/council?mode=bbox&bbox=${bboxStr}`, { cache: 'no-store' });
-      const gj = await res.json();
-      addLayer(gj);
-      setCache(cacheKey, { geojson: gj });
-    } catch (e) {
-      console.error('[CouncilBoundaryLayer] fetch error:', e);
-    }
-  }, [map, showCouncil, onBBox, onSelect]);
-
-  useMapEvents({
-    moveend: () => {
-      if (!showCouncil) return;
-      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(fetchPolys, 300);
-    },
-  });
-
-  useEffect(() => {
-    fetchPolys();
     return () => {
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
     };
-  }, [fetchPolys]);
+  }, [showCouncil, map, onSelect, onBBox]);
 
   return null;
 }
