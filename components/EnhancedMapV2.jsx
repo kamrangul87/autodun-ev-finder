@@ -676,12 +676,7 @@ debugLog("[Location] Nearest station:", station);
           </MarkerClusterGroup>
         )}
 
-        {/* NEW: council polygons overlay (click → code+bbox) */}
-        <CouncilBoundaryLayer
-          showCouncil={showCouncil}
-          onSelect={onCouncilSelect}
-          onBBox={onCouncilBBox}
-        />
+        {/* Council boundary polygons removed — markers only */}
 
         {/* Existing: council “station-like” markers */}
         <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} />
