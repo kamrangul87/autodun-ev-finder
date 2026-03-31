@@ -272,6 +272,35 @@ function buildScoreFeatures(
   return { power_kw, n_connectors, has_fast_dc, rating, usage_score, has_geo };
 }
 
+/* ─────────────── Score ring ─────────────── */
+
+function ScoreRing({ score, label }: { score: number; label: string }) {
+  const size = 72;
+  const sw = 7;
+  const r = (size - sw) / 2;
+  const circ = 2 * Math.PI * r;
+  const offset = circ - score * circ;
+  const color = score >= 0.75 ? "#00e5a0" : score >= 0.5 ? "#f59e0b" : "#ef4444";
+  return (
+    <div style={{ position: "relative", width: size, height: size, flexShrink: 0 }}>
+      <svg width={size} height={size} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={sw} />
+        <circle
+          cx={size / 2} cy={size / 2} r={r} fill="none"
+          stroke={color} strokeWidth={sw}
+          strokeDasharray={circ} strokeDashoffset={offset}
+          strokeLinecap="round"
+          style={{ transition: "stroke-dashoffset 0.5s ease" }}
+        />
+      </svg>
+      <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 1 }}>
+        <span style={{ fontSize: 14, fontWeight: 800, color, lineHeight: 1 }}>{(score * 100).toFixed(0)}%</span>
+        <span style={{ fontSize: 9, color: "rgba(255,255,255,0.45)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────── Component ─────────────── */
 
 type Props = {
@@ -557,7 +586,7 @@ export default function StationDrawer({
                   fontSize: 15,
                   fontWeight: 800,
                   margin: 0,
-                  color: "#111827",
+                  color: "#ffffff",
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -586,7 +615,7 @@ export default function StationDrawer({
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <path
                 d="M6 6l12 12M18 6L6 18"
-                stroke="#6b7280"
+                stroke="#9ca3af"
                 strokeWidth="2"
                 strokeLinecap="round"
               />
@@ -619,7 +648,7 @@ export default function StationDrawer({
 
           {/* Connectors */}
           <div style={cardRow}>
-            <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
+            <div style={{ fontWeight: 800, color: "#ffffff", fontSize: 13 }}>
               Connectors: {totalLabel}
             </div>
 
@@ -639,7 +668,7 @@ export default function StationDrawer({
                       alignItems: "center",
                       gap: 8,
                       fontSize: 12,
-                      color: "#374151",
+                      color: "#d1d5db",
                       marginBottom: 4,
                     }}
                   >
@@ -752,76 +781,35 @@ export default function StationDrawer({
 
           {/* AI Suitability */}
           <div style={cardRow}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div style={{ fontWeight: 800, color: "#111827", fontSize: 13 }}>
-                AI Suitability
+            <div style={{ fontWeight: 800, color: "#ffffff", fontSize: 13, marginBottom: 8 }}>
+              AI Suitability
+            </div>
+
+            {aiScore !== null ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                <ScoreRing score={aiScore} label={scoreLabel} />
+                <div style={{ fontSize: 11.5, color: "#9ca3af", lineHeight: 1.4 }}>
+                  Combines power, connectors, DC fast, rating &amp; geo to estimate suitability.
+                </div>
               </div>
-              {aiScore !== null && (
-                <span
-                  title="Model estimate: higher is better (0–100%)"
-                  style={{
-                    marginLeft: "auto",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    background:
-                      aiScore >= 0.75
-                        ? "#dcfce7"
-                        : aiScore >= 0.5
-                        ? "#fef9c3"
-                        : "#fee2e2",
-                    color:
-                      aiScore >= 0.75
-                        ? "#166534"
-                        : aiScore >= 0.5
-                        ? "#854d0e"
-                        : "#991b1b",
-                    padding: "3px 8px",
-                    borderRadius: 999,
-                  }}
-                >
-                  {(aiScore * 100).toFixed(0)}% · {scoreLabel}
-                </span>
-              )}
-            </div>
-
-            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-              <button
-                onClick={fetchAiScore}
-                disabled={aiLoading}
-                style={primaryBtn}
-              >
-                {aiLoading ? "Scoring..." : "Get AI Score"}
-              </button>
-            </div>
-
-            {aiError && (
-              <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 12,
-                  color: "#991b1b",
-                }}
-              >
-                {aiError}
+            ) : (
+              <div style={{ fontSize: 11.5, color: "#6b7280", lineHeight: 1.35, marginBottom: 8 }}>
+                Combines power, number of connectors, presence of DC fast, rating, and geo to estimate overall suitability (0–100%).
               </div>
             )}
 
-            <div
-              style={{
-                marginTop: 6,
-                fontSize: 11.5,
-                color: "#6b7280",
-                lineHeight: 1.35,
-              }}
-            >
-              Combines power, number of connectors, presence of DC fast,
-              rating, and geo to estimate overall suitability (0–100%).
-            </div>
+            <button onClick={fetchAiScore} disabled={aiLoading} style={primaryBtn}>
+              {aiLoading ? "Scoring…" : "Get AI Score"}
+            </button>
+
+            {aiError && (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#ef4444" }}>{aiError}</div>
+            )}
           </div>
 
           {/* Feedback */}
           <div style={{ display: "grid", gap: 8 }}>
-            <div style={{ fontSize: 12, color: "#374151" }}>
+            <div style={{ fontSize: 12, color: "#9ca3af" }}>
               Rate this location
             </div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -879,35 +867,36 @@ export default function StationDrawer({
 const drawerStyle: CSSProperties = {
   position: "fixed",
   right: 12,
-  top: 84, // below the app bar
+  top: 84,
   zIndex: 10001,
-  width: "min(286px, 92vw)",
+  width: "min(292px, 92vw)",
   maxHeight: "calc(100vh - 96px)",
-  background: "#fff",
-  border: "1px solid #eaeaea",
+  background: "#0d1f38",
+  border: "1px solid rgba(255,255,255,0.1)",
   borderRadius: 14,
-  boxShadow: "0 20px 40px rgba(0,0,0,0.14), 0 6px 18px rgba(0,0,0,0.08)",
+  boxShadow: "0 24px 48px rgba(0,0,0,0.5), 0 8px 20px rgba(0,0,0,0.3)",
   padding: 10,
   display: "flex",
   flexDirection: "column",
+  color: "#e5e7eb",
 };
 
 const cardRow: CSSProperties = {
   padding: "8px 10px",
-  border: "1px solid #efefef",
+  border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: 10,
-  background: "#fafafa",
+  background: "rgba(255,255,255,0.04)",
 };
 
 const rowLabel: CSSProperties = {
   fontWeight: 700,
-  color: "#374151",
+  color: "#9ca3af",
   fontSize: 12,
   marginBottom: 4,
 };
 
 const rowValue: CSSProperties = {
-  color: "#111827",
+  color: "#e5e7eb",
   fontSize: 12,
   whiteSpace: "nowrap",
   overflow: "hidden",
@@ -928,8 +917,9 @@ const iconBtn: CSSProperties = {
 
 const chipBtn: CSSProperties = {
   appearance: "none",
-  border: "1px solid #e5e7eb",
-  background: "#fff",
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#d1d5db",
   padding: "6px 9px",
   borderRadius: 8,
   fontSize: 12,
@@ -944,22 +934,21 @@ const primaryBtn: CSSProperties = {
   appearance: "none",
   textDecoration: "none",
   border: 0,
-  background: "#2563eb",
-  color: "#fff",
+  background: "#00e5a0",
+  color: "#0a1628",
   padding: "10px 12px",
   borderRadius: 10,
   fontWeight: 700,
   width: "100%",
   cursor: "pointer",
-  boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
   fontSize: 13,
 };
 
 const secondaryBtn: CSSProperties = {
   ...primaryBtn,
-  background: "#fff",
-  color: "#111827",
-  border: "1px solid #e5e7eb",
+  background: "rgba(255,255,255,0.07)",
+  color: "#d1d5db",
+  border: "1px solid rgba(255,255,255,0.12)",
 };
 
 const voteBtn: CSSProperties = {
@@ -976,9 +965,9 @@ const textarea: CSSProperties = {
   fontSize: 12,
   padding: "8px 10px",
   borderRadius: 10,
-  border: "1px solid #e5e7eb",
+  border: "1px solid rgba(255,255,255,0.1)",
   outline: "none",
-  color: "#111827",
-  background: "#fff",
+  color: "#e5e7eb",
+  background: "rgba(255,255,255,0.05)",
 };
 

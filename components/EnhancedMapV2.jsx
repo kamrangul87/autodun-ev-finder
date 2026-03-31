@@ -190,10 +190,20 @@ function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
     const cacheKey = `council_poly_${bboxStr}`;
     const cached = getCached(cacheKey);
 
+    // Parse geometry if Supabase returns it as a JSON string
+    const parseGeom = (geom) => {
+      if (!geom) return null;
+      if (typeof geom === 'string') { try { return JSON.parse(geom); } catch { return null; } }
+      return geom;
+    };
+
     const addLayer = (gj) => {
       if (layerRef.current) map.removeLayer(layerRef.current);
-      layerRef.current = L.geoJSON(gj, {
-        style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
+      const safeFeatures = (gj.features || []).map((f) => ({ ...f, geometry: parseGeom(f.geometry) }));
+      const safeGj = { ...gj, features: safeFeatures };
+      layerRef.current = L.geoJSON(safeGj, {
+        style: { color: '#0066ff', weight: 2, fillColor: '#0066ff', fillOpacity: 0.1 },
+        filter: (f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type),
         onEachFeature: (f, layer) => {
           const { name, code } = f.properties || {};
           // compute bbox from layer bounds (Leaflet returns [lat,lng])
@@ -607,57 +617,41 @@ debugLog("[Location] Nearest station:", station);
         <div
           role="status"
           aria-live="polite"
-          style={{
-            position: 'absolute',
-            bottom: '10px',
-            left: '10px',
-            zIndex: 1000,
-            background: 'white',
-            padding: '6px 10px',
-            borderRadius: '20px',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}
+          style={{ position: 'absolute', bottom: '14px', left: '14px', zIndex: 1000, background: 'rgba(10,22,40,0.9)', border: '1px solid rgba(0,229,160,0.2)', padding: '5px 10px', borderRadius: '20px', display: 'flex', alignItems: 'center', gap: '7px', backdropFilter: 'blur(4px)' }}
         >
-          <div
-            style={{
-              width: '14px',
-              height: '14px',
-              border: '2px solid #3b82f6',
-              borderTopColor: 'transparent',
-              borderRadius: '50%',
-              animation: 'spin 0.6s linear infinite'
-            }}
-          />
-          <span style={{ fontSize: '11px', fontWeight: '500', color: '#374151' }}>Loading…</span>
+          <div style={{ width: '12px', height: '12px', border: '2px solid rgba(0,229,160,0.3)', borderTopColor: '#00e5a0', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#00e5a0' }}>Loading…</span>
         </div>
       )}
 
       <div
         role="group"
         aria-label="Legend"
-        style={{
-          position: 'absolute',
-          bottom: '10px',
-          right: '10px',
-          zIndex: 1000,
-          background: 'white',
-          padding: '8px',
-          borderRadius: '6px',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-          fontSize: '11px'
-        }}
+        style={{ position: 'absolute', bottom: '14px', right: '14px', zIndex: 1000, background: 'rgba(10,22,40,0.92)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', borderRadius: '10px', fontSize: '11px', color: '#d1d5db', backdropFilter: 'blur(4px)', minWidth: 148 }}
       >
-        <div style={{ fontWeight: '600', marginBottom: '6px', color: '#1f2937' }}>Legend</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#3b82f6', borderRadius: '50%' }} />
+        <div style={{ fontWeight: 700, marginBottom: '8px', color: '#ffffff', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Legend</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px' }}>
+          <div style={{ width: '10px', height: '10px', background: '#3b82f6', borderRadius: '50%', flexShrink: 0 }} />
           <span>Charging stations</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#9333ea', transform: 'rotate(45deg)', border: '1px solid white' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+          <div style={{ width: '10px', height: '10px', background: '#9333ea', transform: 'rotate(45deg)', flexShrink: 0 }} />
           <span>Council markers</span>
+        </div>
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '7px', marginBottom: '4px' }}>
+          <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '5px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>AI Suitability</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#00e5a0', flexShrink: 0 }} />
+            <span>High (&ge;75%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+            <span>Medium (50–74%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
+            <span>Low (&lt;50%)</span>
+          </div>
         </div>
       </div>
 
