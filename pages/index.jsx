@@ -239,7 +239,7 @@ export default function Home() {
 
   const heatCount = state.heat ? stations.length : 0;
   const markerCount = state.markers ? stations.length : 0;
-  const councilCount = state.council ? '∞' : 0;
+  const councilCount = state.council ? stations.length : 0;
 
   return (
     <>
