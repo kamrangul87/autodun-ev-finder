@@ -1,5 +1,5 @@
 // components/EnhancedMapV2.jsx
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMap, useMapEvents } from 'react-leaflet';
 import MarkerClusterGroup from 'react-leaflet-cluster';
 import L from 'leaflet';
@@ -152,14 +152,14 @@ function HeatmapLayer({ stations, intensity = 1 }) {
   return null;
 }
 
-function StationMarker({ station, onClick }) {
+const StationMarker = memo(function StationMarker({ station, onClick }) {
   return (
     <Marker
       position={[station.lat, station.lng]}
       eventHandlers={{ click: () => onClick(station) }}
     />
   );
-}
+});
 
 /* ──────────────────────────────────────────────────────────────
    Council polygons — authoritative martinjc UK Local Authority GeoJSON
@@ -669,7 +669,7 @@ debugLog("[Location] Nearest station:", station);
         {showHeatmap && <HeatmapLayer stations={stationsNormalized} />}
 
         {showMarkers && (
-          <MarkerClusterGroup chunkedLoading>
+          <MarkerClusterGroup chunkedLoading maxClusterRadius={60} disableClusteringAtZoom={16}>
             {stationsNormalized.map((station) => (
               <StationMarker key={station.id} station={station} onClick={handleStationClick} />
             ))}
