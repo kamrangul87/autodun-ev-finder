@@ -162,96 +162,89 @@ const StationMarker = memo(function StationMarker({ station, onClick }) {
 });
 
 /* ──────────────────────────────────────────────────────────────
-   NEW: Council polygons overlay with click → set code & bbox
+   Council polygons — authoritative martinjc UK Local Authority GeoJSON
+   Fetched once (England + Scotland + Wales), cached in memory.
+   No viewport re-fetching, no internal API calls.
    ────────────────────────────────────────────────────────────── */
+const UK_LAD_SOURCES = [
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/eng/lad.json',
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/sco/lad.json',
+  'https://raw.githubusercontent.com/martinjc/UK-GeoJSON/master/json/administrative/wal/lad.json',
+];
+const UK_COUNCIL_CACHE_KEY = 'uk_council_geojson_v1';
+
+async function fetchAllUKCouncils() {
+  const cached = getCached(UK_COUNCIL_CACHE_KEY);
+  if (cached?.geojson) return cached.geojson;
+  const results = await Promise.all(UK_LAD_SOURCES.map((url) => fetch(url).then((r) => r.json())));
+  const merged = {
+    type: 'FeatureCollection',
+    features: results.flatMap((fc) =>
+      (fc.features || [])
+        .filter((f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type))
+        .map((f) => ({
+          ...f,
+          properties: {
+            ...f.properties,
+            name: f.properties?.LAD13NM || f.properties?.LAD23NM || 'Unknown',
+            code: f.properties?.LAD13CD || f.properties?.LAD23CD || '',
+          },
+        }))
+    ),
+  };
+  setCache(UK_COUNCIL_CACHE_KEY, { geojson: merged });
+  return merged;
+}
+
 function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
   const map = useMap();
   const layerRef = useRef(null);
-  const lastBboxRef = useRef(null);
-  const fetchTimeoutRef = useRef(null);
+  const loadingRef = useRef(false);
 
-  const fetchPolys = useCallback(async () => {
+  useEffect(() => {
     if (!showCouncil) {
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
-      lastBboxRef.current = null;
       return;
     }
-
-    const b = map.getBounds();
-    const sw = b.getSouthWest();
-    const ne = b.getNorthEast();
-    const bboxStr = `${sw.lng},${sw.lat},${ne.lng},${ne.lat}`;
-
-    if (lastBboxRef.current === bboxStr) return;
-
-    const cacheKey = `council_poly_${bboxStr}`;
-    const cached = getCached(cacheKey);
-
-    const addLayer = (gj) => {
-      if (layerRef.current) map.removeLayer(layerRef.current);
-      layerRef.current = L.geoJSON(gj, {
-        style: { color: '#2563eb', weight: 1, fillOpacity: 0.08 },
-        filter: (f) => f.geometry != null && ['Polygon', 'MultiPolygon'].includes(f.geometry.type),
-        coordsToLatLng: (coords) => L.latLng(coords[0], coords[1]),
-        onEachFeature: (f, layer) => {
-          const { name, code } = f.properties || {};
-          // compute bbox from layer bounds (Leaflet returns [lat,lng])
-          const ll = layer;
-          if (ll && 'getBounds' in ll) {
-            const lb = ll.getBounds();
-            const bb = [lb.getWest(), lb.getSouth(), lb.getEast(), lb.getNorth()];
-            (f.properties ||= {}).bbox = bb;
-          }
-          layer.bindPopup(`<strong>${name || 'Council'}</strong><br>${code || ''}`);
-          layer.on('click', () => {
-            const bb = f?.properties?.bbox;
-            if (bb && Array.isArray(bb) && bb.length === 4) {
-              onBBox?.(bb);
-              map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]], { padding: [18, 18] });
+    if (layerRef.current || loadingRef.current) return;
+    loadingRef.current = true;
+    fetchAllUKCouncils()
+      .then((gj) => {
+        if (!showCouncil) return; // toggled off while loading
+        layerRef.current = L.geoJSON(gj, {
+          style: { color: '#0066ff', weight: 2, fillColor: '#0066ff', fillOpacity: 0.08 },
+          onEachFeature: (f, layer) => {
+            const { name, code } = f.properties || {};
+            if (layer && 'getBounds' in layer) {
+              const lb = layer.getBounds();
+              const bb = [lb.getWest(), lb.getSouth(), lb.getEast(), lb.getNorth()];
+              (f.properties ||= {}).bbox = bb;
             }
-            onSelect?.(code || null);
-          });
-        },
-      }).addTo(map);
-      lastBboxRef.current = bboxStr;
-    };
+            layer.bindPopup(`<strong>${name || 'Council'}</strong><br/>${code || ''}`);
+            layer.on('click', () => {
+              const bb = f?.properties?.bbox;
+              if (bb?.length === 4) {
+                onBBox?.(bb);
+                map.fitBounds([[bb[1], bb[0]], [bb[3], bb[2]]], { padding: [18, 18] });
+              }
+              onSelect?.(code || null);
+            });
+          },
+        }).addTo(map);
+      })
+      .catch((e) => console.error('[CouncilBoundaryLayer]', e))
+      .finally(() => { loadingRef.current = false; });
 
-    if (cached?.geojson) {
-      addLayer(cached.geojson);
-      return;
-    }
-
-    try {
-      // API accepts mode=bbox (it may ignore bbox filter; harmless)
-      const res = await fetch(`/api/council?mode=bbox&bbox=${bboxStr}`, { cache: 'no-store' });
-      const gj = await res.json();
-      addLayer(gj);
-      setCache(cacheKey, { geojson: gj });
-    } catch (e) {
-      console.error('[CouncilBoundaryLayer] fetch error:', e);
-    }
-  }, [map, showCouncil, onBBox, onSelect]);
-
-  useMapEvents({
-    moveend: () => {
-      if (!showCouncil) return;
-      if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(fetchPolys, 300);
-    },
-  });
-
-  useEffect(() => {
-    fetchPolys();
     return () => {
       if (layerRef.current) {
         map.removeLayer(layerRef.current);
         layerRef.current = null;
       }
     };
-  }, [fetchPolys]);
+  }, [showCouncil, map, onSelect, onBBox]);
 
   return null;
 }
@@ -609,57 +602,41 @@ debugLog("[Location] Nearest station:", station);
         <div
           role="status"
           aria-live="polite"
-          style={{
-            position: 'absolute',
-            bottom: '10px',
-            left: '10px',
-            zIndex: 1000,
-            background: 'white',
-            padding: '6px 10px',
-            borderRadius: '20px',
-            boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}
+          style={{ position: 'absolute', bottom: '14px', left: '14px', zIndex: 1000, background: 'rgba(10,22,40,0.9)', border: '1px solid rgba(0,229,160,0.2)', padding: '5px 10px', borderRadius: '20px', display: 'flex', alignItems: 'center', gap: '7px', backdropFilter: 'blur(4px)' }}
         >
-          <div
-            style={{
-              width: '14px',
-              height: '14px',
-              border: '2px solid #3b82f6',
-              borderTopColor: 'transparent',
-              borderRadius: '50%',
-              animation: 'spin 0.6s linear infinite'
-            }}
-          />
-          <span style={{ fontSize: '11px', fontWeight: '500', color: '#374151' }}>Loading…</span>
+          <div style={{ width: '12px', height: '12px', border: '2px solid rgba(0,229,160,0.3)', borderTopColor: '#00e5a0', borderRadius: '50%', animation: 'spin 0.6s linear infinite' }} />
+          <span style={{ fontSize: '11px', fontWeight: 600, color: '#00e5a0' }}>Loading…</span>
         </div>
       )}
 
       <div
         role="group"
         aria-label="Legend"
-        style={{
-          position: 'absolute',
-          bottom: '10px',
-          right: '10px',
-          zIndex: 1000,
-          background: 'white',
-          padding: '8px',
-          borderRadius: '6px',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.15)',
-          fontSize: '11px'
-        }}
+        style={{ position: 'absolute', bottom: '14px', right: '14px', zIndex: 1000, background: 'rgba(10,22,40,0.92)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', borderRadius: '10px', fontSize: '11px', color: '#d1d5db', backdropFilter: 'blur(4px)', minWidth: 148 }}
       >
-        <div style={{ fontWeight: '600', marginBottom: '6px', color: '#1f2937' }}>Legend</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#3b82f6', borderRadius: '50%' }} />
+        <div style={{ fontWeight: 700, marginBottom: '8px', color: '#ffffff', fontSize: '10.5px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Legend</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '5px' }}>
+          <div style={{ width: '10px', height: '10px', background: '#3b82f6', borderRadius: '50%', flexShrink: 0 }} />
           <span>Charging stations</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <div style={{ width: '12px', height: '12px', background: '#9333ea', transform: 'rotate(45deg)', border: '1px solid white' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '8px' }}>
+          <div style={{ width: '10px', height: '10px', background: '#9333ea', transform: 'rotate(45deg)', flexShrink: 0 }} />
           <span>Council markers</span>
+        </div>
+        <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '7px', marginBottom: '4px' }}>
+          <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '5px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>AI Suitability</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#00e5a0', flexShrink: 0 }} />
+            <span>High (&ge;75%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '4px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+            <span>Medium (50–74%)</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444', flexShrink: 0 }} />
+            <span>Low (&lt;50%)</span>
+          </div>
         </div>
       </div>
 
