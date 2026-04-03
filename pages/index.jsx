@@ -34,6 +34,7 @@ export default function Home() {
 
   const [councilCode, setCouncilCode] = useState(null);
   const [councilBBox, setCouncilBBox] = useState(null);
+  const [councilMarkerCount, setCouncilMarkerCount] = useState(0);
 
   const [searchResult, setSearchResult] = useState(null);
   const [shouldZoomToData, setShouldZoomToData] = useState(false);
@@ -189,7 +190,7 @@ export default function Home() {
 
   const heatCount    = state.heat    ? stations.length : 0;
   const markerCount  = state.markers ? stations.length : 0;
-  const councilCount = state.council ? stations.length : 0;
+  const councilCount = state.council ? councilMarkerCount : 0;
 
   const sourceLabel = loading
     ? 'Loading stations…'
@@ -324,6 +325,7 @@ export default function Home() {
               onCouncilSelect={setCouncilCode}
               councilBBox={councilBBox}
               onCouncilBBox={setCouncilBBox}
+              onCouncilCount={setCouncilMarkerCount}
             />
           ) : (
             <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#0a1628', gap: '0.75rem' }}>

@@ -67,10 +67,10 @@ if (typeof window !== 'undefined') {
 
 const councilIcon = L.divIcon({
   html:
-    '<div style="background:#9333ea;width:14px;height:14px;transform:rotate(45deg);border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4)"></div>',
+    '<div style="width:22px;height:22px;display:flex;align-items:center;justify-content:center"><div style="background:#8b5cf6;width:13px;height:13px;transform:rotate(45deg);border:2px solid white;box-shadow:0 0 6px rgba(139,92,246,0.6)"></div></div>',
   className: '',
-  iconSize: [14, 14],
-  iconAnchor: [7, 7]
+  iconSize: [22, 22],
+  iconAnchor: [11, 11]
 });
 
 const userLocationIcon = L.divIcon({
@@ -250,7 +250,7 @@ function CouncilBoundaryLayer({ showCouncil, onSelect, onBBox }) {
 }
 
 /* Existing council markers (points), unchanged */
-function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
+function CouncilMarkerLayer({ showCouncil, onMarkerClick, onCountChange }) {
   const map = useMap();
   const [councilStations, setCouncilStations] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -260,6 +260,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
   const fetchCouncilData = useCallback(async () => {
     if (!showCouncil) {
       setCouncilStations([]);
+      onCountChange?.(0);
       return;
     }
 
@@ -274,6 +275,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
     const cached = getCached(cacheKey);
     if (cached) {
       setCouncilStations(cached.items || []);
+      onCountChange?.((cached.items || []).length);
       lastBboxRef.current = bboxStr;
       return;
     }
@@ -296,6 +298,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
         }));
 
         setCouncilStations(items);
+        onCountChange?.(items.length);
         setCache(cacheKey, { items, count: items.length });
         lastBboxRef.current = bboxStr;
 
@@ -310,8 +313,9 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
 
   useMapEvents({
     moveend: () => {
+      if (map.getZoom() < 10) return;
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 250);
+      fetchTimeoutRef.current = setTimeout(() => fetchCouncilData(), 800);
     }
   });
 
@@ -328,6 +332,7 @@ function CouncilMarkerLayer({ showCouncil, onMarkerClick }) {
           key={`council-${station.id}`}
           position={[station.lat, station.lng]}
           icon={councilIcon}
+          zIndexOffset={500}
           eventHandlers={{ click: () => onMarkerClick(station) }}
         />
       ))}
@@ -432,8 +437,9 @@ function ViewportFetcher({
   useMapEvents({
     moveend: () => {
       if (showCouncil && councilBBox) return; // locked to council bbox → ignore pan
+      if (map.getZoom() < 10) return; // skip fetch at overview zoom levels
       if (fetchTimeoutRef.current) clearTimeout(fetchTimeoutRef.current);
-      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 400);
+      fetchTimeoutRef.current = setTimeout(() => fetchForViewport(false), 800);
     }
   });
 
@@ -499,7 +505,8 @@ export default function EnhancedMap({
   councilCode = null,
   councilBBox = null,
   onCouncilSelect,
-  onCouncilBBox
+  onCouncilBBox,
+  onCouncilCount
 }) {
   const [activeStation, setActiveStation] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -679,7 +686,7 @@ debugLog("[Location] Nearest station:", station);
         {/* Council boundary polygons removed — markers only */}
 
         {/* Existing: council “station-like” markers */}
-        <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} />
+        <CouncilMarkerLayer showCouncil={showCouncil} onMarkerClick={handleStationClick} onCountChange={onCouncilCount} />
 
         <UserLocationMarker location={userLocation} accuracy={locationAccuracy} />
         <LocateMeControl onLocationChange={handleLocationChange} onError={handleLocationError} />
