@@ -84,7 +84,7 @@ export default function MlStatusPage() {
         Autodun EV Finder · Model status
       </h1>
 
-      <p style={{ maxWidth: 640, fontSize: 14, color: "#4b5563" }}>
+      <p style={{ maxWidth: 640, fontSize: 14, color: "#FFFFFF" }}>
         This page shows the current status of the machine learning model that
         scores EV charging feedback (good / bad / reliability). The model is
         retrained automatically from recent feedback data.
