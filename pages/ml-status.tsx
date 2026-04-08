@@ -78,22 +78,19 @@ export default function MlStatusPage() {
         margin: "0 auto",
         fontFamily:
           "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-        background: "#070f1a",
-        color: "#ffffff",
-        minHeight: "100vh",
       }}
     >
-      <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 8, color: "#ffffff" }}>
+      <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 8 }}>
         Autodun EV Finder · Model status
       </h1>
 
-      <p style={{ maxWidth: 640, fontSize: 14, color: "#ffffff" }}>
+      <p style={{ maxWidth: 640, fontSize: 14, color: "#1f2937" }}>
         This page shows the current status of the machine learning model that
         scores EV charging feedback (good / bad / reliability). The model is
         retrained automatically from recent feedback data.
       </p>
 
-      {loading && <p style={{ marginTop: 16, color: "#ffffff" }}>Loading model status…</p>}
+      {loading && <p style={{ marginTop: 16 }}>Loading model status…</p>}
       {error && (
         <p style={{ marginTop: 16, color: "#b91c1c", fontWeight: 600 }}>
           {error}
@@ -139,7 +136,7 @@ export default function MlStatusPage() {
               >
                 Notes
               </div>
-              <div style={{ color: "#1f2937" }}>{latest.notes}</div>
+              <div>{latest.notes}</div>
             </div>
           )}
 
@@ -157,7 +154,6 @@ export default function MlStatusPage() {
                 fontWeight: 800,
                 fontSize: 15,
                 marginBottom: 8,
-                color: "#111827",
               }}
             >
               Recent training runs
@@ -227,7 +223,7 @@ function KpiCard({ label, value }: { label: string; value: string }) {
       }}
     >
       <div style={{ fontSize: 12, color: "#374151" }}>{label}</div>
-      <div style={{ fontSize: 18, fontWeight: 800, color: "#ffffff" }}>{value}</div>
+      <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
     </div>
   );
 }
