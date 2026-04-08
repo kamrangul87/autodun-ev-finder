@@ -80,9 +80,9 @@ export default function MlStatusPage() {
           "Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
       }}
     >
-      <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 8 }}>
-        Autodun EV Finder · Model status
-      </h1>
+     <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 8, color: "#FFFFFF" }}>
+  Autodun EV Finder · Model status
+</h1>
 
       <p style={{ maxWidth: 640, fontSize: 14, color: "#FFFFFF" }}>
         This page shows the current status of the machine learning model that
