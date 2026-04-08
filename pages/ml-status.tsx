@@ -84,7 +84,7 @@ export default function MlStatusPage() {
         Autodun EV Finder · Model status
       </h1>
 
-      <p style={{ maxWidth: 640, fontSize: 14, color: "#4b5563" }}>
+      <p style={{ maxWidth: 640, fontSize: 14, color: "#1f2937" }}>
         This page shows the current status of the machine learning model that
         scores EV charging feedback (good / bad / reliability). The model is
         retrained automatically from recent feedback data.
@@ -132,7 +132,7 @@ export default function MlStatusPage() {
               }}
             >
               <div
-                style={{ fontSize: 12, color: "#6b7280", marginBottom: 4 }}
+                style={{ fontSize: 12, color: "#374151", marginBottom: 4 }}
               >
                 Notes
               </div>
@@ -222,7 +222,7 @@ function KpiCard({ label, value }: { label: string; value: string }) {
         background: "#fff",
       }}
     >
-      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
+      <div style={{ fontSize: 12, color: "#374151" }}>{label}</div>
       <div style={{ fontSize: 18, fontWeight: 800 }}>{value}</div>
     </div>
   );
@@ -235,7 +235,7 @@ function Th({ children }: { children: React.ReactNode }) {
         textAlign: "left",
         padding: "8px 6px",
         fontSize: 12,
-        color: "#6b7280",
+        color: "#374151",
         borderBottom: "1px solid #e5e7eb",
         background: "#f9fafb",
       }}
