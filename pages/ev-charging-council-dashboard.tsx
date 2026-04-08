@@ -32,7 +32,7 @@ const pill: React.CSSProperties = {
   borderRadius: 999,
   border: "1px solid #e5e7eb",
   background: "#ffffff",
-  color: "#1f2937",
+  color: "#4b5563",
 };
 
 const h1Style: React.CSSProperties = {
@@ -44,7 +44,7 @@ const h1Style: React.CSSProperties = {
 
 const heroText: React.CSSProperties = {
   fontSize: 15,
-  color: "#1f2937",
+  color: "#4b5563",
   maxWidth: 640,
 };
 
@@ -92,7 +92,7 @@ const tag: React.CSSProperties = {
   borderRadius: 999,
   border: "1px solid #e5e7eb",
   background: "#ffffff",
-  color: "#1f2937",
+  color: "#4b5563",
 };
 
 const section: React.CSSProperties = {
@@ -107,7 +107,7 @@ const sectionTitle: React.CSSProperties = {
 
 const sectionSub: React.CSSProperties = {
   fontSize: 14,
-  color: "#1f2937",
+  color: "#4b5563",
   marginBottom: 16,
 };
 
@@ -132,7 +132,7 @@ const cardTitle: React.CSSProperties = {
 
 const cardBody: React.CSSProperties = {
   fontSize: 13,
-  color: "#1f2937",
+  color: "#4b5563",
 };
 
 const stepsList: React.CSSProperties = {
@@ -169,7 +169,7 @@ const smallLabel: React.CSSProperties = {
   fontSize: 11,
   textTransform: "uppercase",
   letterSpacing: "0.08em",
-  color: "#4b5563",
+  color: "#9ca3af",
   marginBottom: 4,
 };
 
@@ -184,7 +184,7 @@ const footer: React.CSSProperties = {
   paddingTop: 16,
   borderTop: "1px solid #e5e7eb",
   fontSize: 12,
-  color: "#374151",
+  color: "#6b7280",
 };
 
 export default function EvChargingCouncilDashboardPage() {
