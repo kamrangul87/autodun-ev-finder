@@ -554,9 +554,9 @@ export default function AdminFeedback() {
         fontFamily: "Inter, system-ui, sans-serif",
       }}
     >
-      <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800 }}>
-        Autodun Admin · Feedback
-      </h1>
+     <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#FFFFFF" }}>
+  Autodun Admin · Feedback
+</h1>
 
       {/* KPIs */}
       <div
