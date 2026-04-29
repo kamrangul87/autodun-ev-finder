@@ -304,6 +304,6 @@ This project is licensed under the [MIT License](LICENSE).
 ---
 
 <p align="center">
-  Built by <strong><a href="https://autodun.com">Autodun</a></strong> · A product of <strong>MINSO LTD</strong><br/>
+  Built by <strong><a href="https://autodun.com">Autodun</a> </strong>
   <sub>Helping UK councils and drivers make smarter EV charging decisions</sub>
 </p>
