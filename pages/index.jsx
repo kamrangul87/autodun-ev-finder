@@ -227,11 +227,11 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Autodun EV Finder - Find EV Charging Stations UK</title>
+        <title>UK EV Charging Map - Find Charge Points Near You | Autodun</title>
         <meta name="description" content="Find EV charging stations across the UK. Browse 30,000+ charge points by location, connector type and AI suitability score. Free EV charging map." />
         <meta name="robots" content="index, follow" />
         <link rel="canonical" href="https://ev.autodun.com/" />
-        <meta property="og:title" content="Autodun EV Finder - Find EV Charging Stations UK" />
+        <meta property="og:title" content="UK EV Charging Map - Find Charge Points Near You | Autodun" />
         <meta property="og:description" content="Find EV charging stations across the UK. Browse 30,000+ charge points by location, connector type and AI suitability score. Free EV charging map." />
         <meta property="og:url" content="https://ev.autodun.com/" />
         <meta property="og:type" content="website" />
@@ -252,6 +252,18 @@ export default function Home() {
             <span style={{ color: loading ? '#f59e0b' : '#00e5a0', fontWeight: 600 }}>{loading ? 'Loading…' : 'Live'}</span>
           </div>
         </header>
+
+        {/* ── Intro ── */}
+        <div style={{ background: '#0a1628', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0.6rem 1.25rem', color: '#d1d5db', lineHeight: 1.5 }}>
+          <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#ffffff', letterSpacing: '-0.01em' }}>
+            UK EV Charging Map
+          </h1>
+          <p style={{ margin: '0.4rem 0 0', fontSize: '0.9rem', color: '#9ca3af' }}>
+            Find charge points near you anywhere in the UK. Filter by connector type and explore stations with our AI suitability score. Built by{' '}
+            <a href="https://autodun.com" style={{ color: '#00e5a0', textDecoration: 'none' }}>Autodun</a>. Also try our{' '}
+            <a href="https://autodun.com/mot" style={{ color: '#00e5a0', textDecoration: 'none' }}>MOT tools</a>.
+          </p>
+        </div>
 
         {/* ── Controls ── */}
         <div style={{ background: '#0f1f38', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0.55rem 1.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.45rem', alignItems: 'center', flexShrink: 0 }}>
